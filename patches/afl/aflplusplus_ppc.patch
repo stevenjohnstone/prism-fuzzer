@@ -1,0 +1,195 @@
+diff -u -r a/instrumentation/afl-compiler-rt.o.c b/instrumentation/afl-compiler-rt.o.c
+--- a/instrumentation/afl-compiler-rt.o.c	2026-11-20 18:55:50.684015004 +0000
++++ b/instrumentation/afl-compiler-rt.o.c	2026-11-20 18:55:50.696015004 +0000
+@@ -637,6 +637,23 @@
+ 
+ }
+ 
++
++#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++static inline u32 __afl_bswap32(u32 v) { return __builtin_bswap32(v); }
++static inline ssize_t __afl_fsrv_read32(int fd, void *buf, size_t n) {
++    ssize_t r = read(fd, buf, n);
++    if (r == 4 && n == 4) { u32 v; memcpy(&v, buf, 4); v = __afl_bswap32(v); memcpy(buf, &v, 4); }
++    return r;
++}
++static inline ssize_t __afl_fsrv_write32(int fd, const void *buf, size_t n) {
++    if (n == 4) { u32 v; memcpy(&v, buf, 4); v = __builtin_bswap32(v); return write(fd, &v, 4); }
++    return write(fd, buf, n);
++}
++#else
++#define __afl_fsrv_read32 read
++#define __afl_fsrv_write32 write
++#endif
++
+ /* Error reporting to forkserver controller */
+ 
+ static void send_forkserver_error(int error) {
+@@ -644,7 +661,7 @@
+   u32 status;
+   if (!error || error > 0xffff) return;
+   status = (FS_NEW_ERROR | error);
+-  if (write(FORKSRV_FD + 1, (char *)&status, 4) != 4) { return; }
++  if (__afl_fsrv_write32(FORKSRV_FD + 1, (char *)&status, 4) != 4) { return; }
+ 
+ }
+ 
+@@ -2000,7 +2017,7 @@
+      assume we're not running in forkserver mode and just execute program. */
+ 
+   // return because possible non-forkserver usage
+-  if (write(FORKSRV_FD + 1, msg, 4) != 4) {
++  if (__afl_fsrv_write32(FORKSRV_FD + 1, msg, 4) != 4) {
+ 
+     /* No forkserver parent. A tool that attached a shared map still watches
+        this run - afl-showmap on a single input and afl-cmin.bash through it
+@@ -2020,7 +2037,7 @@
+ 
+   if (!__afl_old_forkserver) {
+ 
+-    if (read(FORKSRV_FD, reply, 4) != 4) { _exit(1); }
++    if (__afl_fsrv_read32(FORKSRV_FD, reply, 4) != 4) { _exit(1); }
+     if (tmp != status2) {
+ 
+       write_error("wrong forkserver message from AFL++ tool");
+@@ -2043,6 +2060,9 @@
+     }
+ 
+ #endif
++    #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    __afl_child_sync = NULL;
++#endif
+     if (__afl_child_sync) { status |= FS_NEW_OPT_FUTEX; }
+     if (__afl_bug_mode & AFL_BUG_MODE_DERIVE) {
+ 
+@@ -2096,7 +2116,7 @@
+ 
+     }
+ 
+-    if (write(FORKSRV_FD + 1, msg, 4) != 4) {
++    if (__afl_fsrv_write32(FORKSRV_FD + 1, msg, 4) != 4) {
+ 
+       errno = 0;
+       _exit(1);
+@@ -2107,7 +2127,7 @@
+ 
+     // FS_NEW_OPT_MAPSIZE - we always send the map size
+     status = __afl_map_size;
+-    if (write(FORKSRV_FD + 1, msg, 4) != 4) { _exit(1); }
++    if (__afl_fsrv_write32(FORKSRV_FD + 1, msg, 4) != 4) { _exit(1); }
+ 
+     // FS_NEW_OPT_SHDMEM_FUZZ - no data
+ 
+@@ -2125,7 +2145,7 @@
+       // pass the dictionary through the forkserver FD
+       u32 len = __afl_dictionary_len, offset = 0;
+ 
+-      if (write(FORKSRV_FD + 1, &len, 4) != 4) {
++      if (__afl_fsrv_write32(FORKSRV_FD + 1, &len, 4) != 4) {
+ 
+         write(2, "Error: could not send dictionary len\n",
+               strlen("Error: could not send dictionary len\n"));
+@@ -2154,7 +2174,7 @@
+ 
+     // send welcome message as final message
+     status = version;
+-    if (write(FORKSRV_FD + 1, msg, 4) != 4) { _exit(1); }
++    if (__afl_fsrv_write32(FORKSRV_FD + 1, msg, 4) != 4) { _exit(1); }
+ 
+   }
+ 
+@@ -2176,7 +2196,7 @@
+ 
+     } else {
+ 
+-      if (unlikely(read(FORKSRV_FD, &was_killed, 4) != 4)) {
++      if (unlikely(__afl_fsrv_read32(FORKSRV_FD, &was_killed, 4) != 4)) {
+ 
+         write_error("read from AFL++ tool");
+         _exit(1);
+@@ -2294,7 +2314,7 @@
+ 
+     /* In parent process: write PID to pipe, then wait for child. */
+ 
+-    if (unlikely(write(FORKSRV_FD + 1, &child_pid, 4) != 4)) {
++    if (unlikely(__afl_fsrv_write32(FORKSRV_FD + 1, &child_pid, 4) != 4)) {
+ 
+       write_error("write to afl-fuzz");
+       _exit(1);
+@@ -2318,7 +2338,7 @@
+     /* Relay wait status to pipe BEFORE signaling via futex.  The fuzzer reads
+        the pipe immediately after waking on AFL_CHILD_EXITED; writing first
+        guarantees the data is already there and avoids a blocking pipe read. */
+-    if (unlikely(write(FORKSRV_FD + 1, &status, 4) != 4)) {
++    if (unlikely(__afl_fsrv_write32(FORKSRV_FD + 1, &status, 4) != 4)) {
+ 
+       write_error("writing to afl-fuzz");
+       _exit(1);
+@@ -4983,7 +5003,11 @@
+ 
+     uintptr_t base = (uintptr_t)__afl_fuzz_ptr;
+     uintptr_t addr = (uintptr_t)ptr;
++    #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    size_t    fuzz_len = __builtin_bswap32(*__afl_fuzz_len);
++#else
+     size_t    fuzz_len = *__afl_fuzz_len;
++#endif
+     if (addr >= base && addr - base <= fuzz_len) {
+ 
+       size_t offset = addr - base;
+@@ -5040,7 +5064,11 @@
+ 
+     uintptr_t base = (uintptr_t)__afl_fuzz_ptr;
+     uintptr_t addr = (uintptr_t)ptr;
++    #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++    size_t    fuzz_len = __builtin_bswap32(*__afl_fuzz_len);
++#else
+     size_t    fuzz_len = *__afl_fuzz_len;
++#endif
+     if (addr >= base && addr - base <= fuzz_len) {
+ 
+       cap = (u32)MIN((size_t)cap, fuzz_len - (addr - base));
+@@ -5791,7 +5815,12 @@
+ 
+   u32 var_id = (u32)(ijon_simple_hash((uint64_t)addr) % MAP_SIZE_IJON_ENTRIES);
+   // u32 var_id = (u32)(addr % MAP_SIZE_IJON_ENTRIES);
+ 
+-  if (__afl_ijon_bits[var_id] < val) { __afl_ijon_bits[var_id] = val; }
++#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++  u64 cur = __builtin_bswap64(__afl_ijon_bits[var_id]);
++  if (cur < val) { __afl_ijon_bits[var_id] = __builtin_bswap64(val); }
++#else
++  if (__afl_ijon_bits[var_id] < val) { __afl_ijon_bits[var_id] = val; }
++#endif
+ 
+ }
+diff -u -r a/utils/aflpp_driver/aflpp_driver.c b/utils/aflpp_driver/aflpp_driver.c
+--- a/utils/aflpp_driver/aflpp_driver.c	2026-11-20 18:55:50.686015004 +0000
++++ b/utils/aflpp_driver/aflpp_driver.c	2026-11-20 18:55:50.696015004 +0000
+@@ -447,7 +447,11 @@
+ 
+     while (__afl_persistent_loop(N)) {
+ 
++      #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++      size_t length = __builtin_bswap32(*__afl_fuzz_len);
++#else
+       size_t length = *__afl_fuzz_len;
++#endif
+ 
+       if (likely(length)) {
+ 
+@@ -480,7 +484,13 @@
+ 
+     while (__afl_persistent_loop(N)) {
+ 
+-      if (unlikely(callback(__afl_fuzz_ptr, *__afl_fuzz_len) == -1)) {
++      if (unlikely(callback(__afl_fuzz_ptr,
++#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
++                   __builtin_bswap32(*__afl_fuzz_len)
++#else
++                   *__afl_fuzz_len
++#endif
++      ) == -1)) {
+ 
+         memset_noasan(__afl_area_ptr, 0, __afl_map_size);
+         __afl_area_ptr[0] = 1;

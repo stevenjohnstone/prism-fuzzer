@@ -1,0 +1,942 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "topology.schema.json",
+  "title": "prism-fuzzer Topology IR v2",
+  "description": "Static intermediate representation schema describing concrete sources, generators, fuzzers, sync groups, and individual workers for a prism-fuzzer campaign.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "name",
+    "sources",
+    "fuzzers",
+    "sync_groups",
+    "workers"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace": {
+      "$ref": "#/$defs/workspace"
+    },
+    "lifecycle": {
+      "$ref": "#/$defs/lifecycle"
+    },
+    "defaults": {
+      "$ref": "#/$defs/defaults"
+    },
+    "sources": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "generators": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/generator"
+      }
+    },
+    "fuzzers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/fuzzer"
+      }
+    },
+    "sync_groups": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/sync_group"
+      }
+    },
+    "workers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/worker"
+      }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "workspace": {
+      "type": "object",
+      "required": [
+        "dir",
+        "build_dir"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "build_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "corpus_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "triage_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coverage_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "report_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "logs_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "reports_dir": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "duration_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "report": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "threads": { "type": "integer", "minimum": 1 },
+                "minimize": { "type": "boolean" },
+                "recount": { "type": "boolean" },
+                "live_scripts": { "type": "boolean" },
+                "flags": { "type": "string" },
+                "coverage_flags": { "type": "string" },
+                "top": { "type": "integer", "minimum": 1 }
+              }
+            }
+          ]
+        },
+        "publish": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "run_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "out_dir": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_input_size": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_allocated_mb": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "required": [
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/identifier"
+        },
+        "fuzzer": {
+          "$ref": "#/$defs/identifier"
+        },
+        "diff_fuzzer": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "source": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/source_prism"
+        },
+        {
+          "$ref": "#/$defs/source_ruby"
+        }
+      ]
+    },
+    "source_prism": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "dir"
+          ]
+        },
+        {
+          "required": [
+            "local_path"
+          ]
+        }
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "prism"
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "local_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "patches": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        },
+        "templates": {
+          "oneOf": [
+            {
+              "type": "string",
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ]
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    },
+    "source_ruby": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "ref"
+          ]
+        },
+        {
+          "required": [
+            "dir"
+          ]
+        },
+        {
+          "required": [
+            "local_path"
+          ]
+        }
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "ruby"
+        },
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "local_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "generator": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/generator_corpus"
+        },
+        {
+          "$ref": "#/$defs/generator_grammar"
+        }
+      ]
+    },
+    "generator_corpus": {
+      "type": "object",
+      "required": [
+        "kind",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "corpus"
+        },
+        "source": {
+          "$ref": "#/$defs/identifier"
+        },
+        "dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fuzzer": {
+          "$ref": "#/$defs/identifier"
+        },
+        "color": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "generator_grammar": {
+      "type": "object",
+      "required": [
+        "kind",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "grammar"
+        },
+        "source": {
+          "$ref": "#/$defs/identifier"
+        },
+        "fuzzer": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sync_group": {
+          "$ref": "#/$defs/identifier"
+        },
+        "seeds_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ulimit_v_kb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "color": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "sanitizer": {
+      "type": "string",
+      "enum": [
+        "asan",
+        "ubsan",
+        "msan",
+        "lsan"
+      ]
+    },
+    "afl_mode": {
+      "type": "string",
+      "enum": [
+        "lto",
+        "pcguard",
+        "sand",
+        "cmplog"
+      ]
+    },
+    "fuzzer": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/fuzzer_prism_parse"
+        },
+        {
+          "$ref": "#/$defs/fuzzer_prism_diff_ruby"
+        },
+        {
+          "$ref": "#/$defs/fuzzer_prism_diff_prism"
+        },
+        {
+          "$ref": "#/$defs/fuzzer_prism_cross_oracle"
+        }
+      ]
+    },
+    "fuzzer_prism_parse": {
+      "type": "object",
+      "required": [
+        "shape",
+        "source"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "const": "prism_parse"
+        },
+        "source": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sanitizer"
+          },
+          "uniqueItems": true
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "fast",
+            "slow"
+          ]
+        },
+        "afl": {
+          "$ref": "#/$defs/afl_mode"
+        },
+        "ijon": {
+          "type": "boolean"
+        },
+        "xallocator": {
+          "type": "boolean"
+        },
+        "document_ids": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cflags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "fuzzer_prism_diff_ruby": {
+      "type": "object",
+      "required": [
+        "shape",
+        "prism",
+        "ruby"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "const": "prism_diff_ruby"
+        },
+        "prism": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ruby": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sanitizer"
+          },
+          "uniqueItems": true
+        },
+        "afl": {
+          "$ref": "#/$defs/afl_mode"
+        },
+        "ijon": {
+          "type": "boolean"
+        },
+        "document_ids": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cflags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "fuzzer_prism_diff_prism": {
+      "type": "object",
+      "required": [
+        "shape",
+        "prism_a",
+        "prism_b"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "const": "prism_diff_prism"
+        },
+        "prism_a": {
+          "$ref": "#/$defs/identifier"
+        },
+        "prism_b": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sanitizer"
+          },
+          "uniqueItems": true
+        },
+        "afl": {
+          "$ref": "#/$defs/afl_mode"
+        },
+        "ijon": {
+          "type": "boolean"
+        },
+        "document_ids": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cflags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "fuzzer_prism_cross_oracle": {
+      "type": "object",
+      "required": [
+        "shape",
+        "source",
+        "arch"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "const": "prism_cross_oracle"
+        },
+        "source": {
+          "$ref": "#/$defs/identifier"
+        },
+        "arch": {
+          "type": "string",
+          "enum": [
+            "arm32",
+            "ppc"
+          ]
+        },
+        "mutator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "repro": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sanitizer"
+          },
+          "uniqueItems": true
+        },
+        "afl": {
+          "$ref": "#/$defs/afl_mode"
+        },
+        "ijon": {
+          "type": "boolean"
+        },
+        "document_ids": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cflags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "sync_group": {
+      "type": "object",
+      "required": [
+        "dir"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "primary": {
+          "type": "boolean"
+        }
+      }
+    },
+    "seeds": {
+      "type": "object",
+      "required": [
+        "from"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/identifier"
+        },
+        "filter": {
+          "type": "string",
+          "enum": [
+            "none",
+            "self_pass"
+          ]
+        },
+        "cache_key": {
+          "type": "string",
+          "minLength": 1
+        },
+        "shard_group": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "peer_import": {
+      "type": "object",
+      "required": [
+        "group",
+        "worker",
+        "alias"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "group": {
+          "$ref": "#/$defs/identifier"
+        },
+        "worker": {
+          "$ref": "#/$defs/identifier"
+        },
+        "alias": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "worker": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/worker_afl"
+        },
+        {
+          "$ref": "#/$defs/worker_generator"
+        }
+      ]
+    },
+    "worker_afl": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "fuzzer",
+        "sync_group"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "kind": {
+          "type": "string",
+          "const": "afl"
+        },
+        "fuzzer": {
+          "$ref": "#/$defs/identifier"
+        },
+        "aux_fuzzer": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sync_group": {
+          "$ref": "#/$defs/identifier"
+        },
+        "afl_role": {
+          "type": "string",
+          "enum": [
+            "main",
+            "secondary"
+          ]
+        },
+        "schedule": {
+          "type": "string",
+          "minLength": 1
+        },
+        "afl_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cmplog": {
+          "$ref": "#/$defs/identifier"
+        },
+        "loopcount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "no_trim": {
+          "type": "boolean"
+        },
+        "mem_limit": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "string",
+              "const": "none"
+            }
+          ]
+        },
+        "ulimit_v_kb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "seeds": {
+          "$ref": "#/$defs/seeds"
+        },
+        "foreign_sync": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "peer_imports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/peer_import"
+          }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        },
+        "keep_open_on_exit": {
+          "type": "boolean"
+        },
+        "color": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "worker_generator": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "generator"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "kind": {
+          "type": "string",
+          "const": "generator"
+        },
+        "generator": {
+          "$ref": "#/$defs/identifier"
+        },
+        "ulimit_v_kb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "color": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

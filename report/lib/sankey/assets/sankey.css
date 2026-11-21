@@ -1,0 +1,102 @@
+.sankey-root .kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.sankey-root .kpi-card, .sankey-root .panel-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.sankey-root .panel-card { margin-bottom: 20px; }
+.sankey-root .kpi-label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.sankey-root .kpi-value { font-size: 1.45rem; font-weight: 700; margin: 3px 0; font-variant-numeric: tabular-nums; }
+.sankey-root .kpi-sub { color: var(--muted); font-size: 0.78rem; }
+.sankey-root .controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 20px;
+  align-items: center;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.sankey-root .ctrl-group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sankey-root .ctrl-label { font-size: 0.76rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; margin-right: 4px; }
+.sankey-root .ctrl-btn {
+  background: #0b0f19;
+  color: var(--muted);
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+.sankey-root .ctrl-btn:hover { color: var(--text); border-color: #374151; }
+.sankey-root .ctrl-btn.active { background: rgba(96, 165, 250, 0.16); color: #93c5fd; border-color: #3b82f6; font-weight: 600; }
+.sankey-root .sankey-view { display: none; }
+.sankey-root .sankey-view.active { display: block; }
+.sankey-root .sankey-svg { display: block; user-select: none; }
+.sankey-root .sk-link { transition: fill-opacity 0.12s ease; cursor: pointer; }
+.sankey-root .sk-node { cursor: pointer; transition: opacity 0.12s ease; }
+.sankey-root .sk-label { pointer-events: none; transition: opacity 0.12s ease; }
+.sankey-root .sk-dim { opacity: 0.16 !important; fill-opacity: 0.06 !important; }
+.sankey-root .sk-hi { fill-opacity: 0.78 !important; }
+.sankey-root .sk-pin { stroke: #f8fafc !important; stroke-width: 2px !important; }
+#sk-tooltip {
+  position: fixed;
+  display: none;
+  pointer-events: none;
+  z-index: 99;
+  max-width: 440px;
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 9px 12px;
+  font-size: 0.8rem;
+  color: var(--text);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.5);
+}
+.sankey-root .status-strip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.sankey-root .hop-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 7px;
+  margin: 1px 2px;
+  border-radius: 999px;
+  background: #0b0f19;
+  border: 1px solid var(--panel-border);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+.sankey-root .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.sankey-root .badge-flaw, .sankey-root .badge-diff, .sankey-root .badge-pdiff, .sankey-root .badge-cruby {
+  display: inline-block;
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.sankey-root .badge-flaw { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
+.sankey-root .badge-diff { background: rgba(249, 115, 22, 0.18); color: #fdba74; }
+.sankey-root .badge-pdiff { background: rgba(250, 204, 21, 0.18); color: #fde047; }
+.sankey-root .badge-cruby { background: rgba(167, 139, 250, 0.2); color: #c4b5fd; }
+.sankey-root .cov-link { color: #93c5fd; text-decoration: none; font-size: 0.76rem; }
+.sankey-root .cov-link:hover { text-decoration: underline; }
+.sankey-root table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+.sankey-root th, .sankey-root td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--panel-border); vertical-align: top; }
+.sankey-root th { color: var(--muted); font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.sankey-root th.num, .sankey-root td.num { text-align: right; font-variant-numeric: tabular-nums; }

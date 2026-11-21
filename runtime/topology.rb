@@ -1,0 +1,25 @@
+# frozen_string_literal: true
+
+require "digest"
+require "etc"
+require "fileutils"
+require "json"
+require "open3"
+require "pathname"
+require "rbconfig"
+require "set"
+require "shellwords"
+
+require_relative "common"
+require_relative "json_schema"
+require_relative "campaign_dsl"
+require_relative "progress"
+
+require_relative "lib/topology/constants"
+require_relative "lib/topology/paths"
+require_relative "lib/topology/compiler"
+require_relative "lib/topology/sync"
+require_relative "lib/topology/builder"
+require_relative "lib/topology/launch_planner"
+require_relative "lib/topology/launch_stager"
+require_relative "lib/topology/discovery"

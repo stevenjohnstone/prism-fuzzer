@@ -1,0 +1,1717 @@
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "securerandom"
+
+module PrismFuzzer
+  # Grammar-based seed generator, AST/regexp/heredoc mutator, and crash-capturing
+  # worker supervisor for Prism fuzzing.
+  module Grammar
+    extend self
+
+    FUZZ_ROOT = File.expand_path("..", __dir__)
+
+    topology_lib = File.join(__dir__, "topology.rb")
+    require topology_lib if File.file?(topology_lib)
+
+    def configure_prism_load_paths!
+      cli_afl_dir = (__FILE__ == $PROGRAM_NAME && ARGV[0] && !ARGV[0].start_with?("-")) ? ARGV[0] : nil
+      topo = if defined?(PrismFuzzer::Topology)
+               PrismFuzzer::Topology.discover(afl_dir: cli_afl_dir, start_dir: FUZZ_ROOT)
+             end
+      topo_ws = topo ? PrismFuzzer::Topology.workspace_paths(topo, fuzz_root: FUZZ_ROOT) : nil
+      topo_grammar_lib = if topo
+                           src_id = topo.dig("generators", "grammar", "source") || topo.dig("coverage", "source")
+                           src_path = src_id && topo.dig("sources", src_id, "path")
+                           src_path ? File.join(src_path, "lib") : nil
+                         end
+
+      ws_lib = if ENV["FUZZ_RUBY_LIB_DIR"] && !ENV["FUZZ_RUBY_LIB_DIR"].empty?
+                 File.expand_path(ENV["FUZZ_RUBY_LIB_DIR"])
+               elsif ENV["PRISM_A_DIR"] && !ENV["PRISM_A_DIR"].empty?
+                 File.expand_path(File.join(ENV["PRISM_A_DIR"], "lib"))
+               elsif topo_grammar_lib && File.directory?(topo_grammar_lib)
+                 topo_grammar_lib
+               elsif topo_ws && File.directory?(File.join(topo_ws[:build_dir], "targets/prism_a/lib"))
+                 File.join(topo_ws[:build_dir], "targets/prism_a/lib")
+               elsif File.directory?(File.join(FUZZ_ROOT, "tmp/fuzz/build/targets/prism_a/lib"))
+                 File.join(FUZZ_ROOT, "tmp/fuzz/build/targets/prism_a/lib")
+               else
+                 File.expand_path("../lib", __dir__)
+               end
+      ws_ext = if ENV["FUZZ_RUBY_EXT_DIR"] && !ENV["FUZZ_RUBY_EXT_DIR"].empty?
+                 File.expand_path(ENV["FUZZ_RUBY_EXT_DIR"])
+               elsif topo_ws
+                 bin_ext = File.join(topo_ws[:bin_dir], "fuzz-ruby-ext")
+                 File.directory?(bin_ext) ? bin_ext : File.join(topo_ws[:build_dir], "fuzz-ruby-ext")
+               else
+                 File.expand_path("../tmp/fuzz/build/fuzz-ruby-ext", __dir__)
+               end
+      [ws_lib, ws_ext]
+    end
+
+    WORKSPACE_LIB, WORKSPACE_EXT = configure_prism_load_paths!
+    if File.exist?(File.join(WORKSPACE_EXT, "prism", "prism.so"))
+      $LOAD_PATH.unshift(WORKSPACE_EXT, WORKSPACE_LIB)
+    end
+    require "prism"
+    require "lrama/fuzz"
+
+    # 4-byte options header consumed by harness() in harnesses/prism/parse.c
+    def pack_seed_header(opt_flags: 0, cmd_flags: 0, version: 3, scopes_count: 0, forwarding: 0, start_line: 1)
+      b2 = (version & 0x03) | ((scopes_count & 0x03) << 2) | ((forwarding & 0x0f) << 4)
+      [opt_flags & 0xff, cmd_flags & 0xff, b2 & 0xff, start_line & 0xff].pack("C4")
+    end
+
+    DEFAULT_HEADER = "\x00\x00\x03\x01".b
+    ATTACH_COMMENTS_HEADER = "\x04\x00\x03\x01".b
+    MAIN_SCRIPT_COMMENTS_HEADER = "\x04\x40\x03\x01".b
+    FREEZE_COMMENTS_HEADER = pack_seed_header(opt_flags: 0x05)
+    ENCODING_LOCKED_COMMENTS_HEADER = pack_seed_header(opt_flags: 0x0c)
+    FSL_TRUE_COMMENTS_HEADER = pack_seed_header(opt_flags: 0x34)
+    STREAM_COMMENTS_HEADER = pack_seed_header(opt_flags: 0x44)
+    MAIN_SCRIPT_CMD_X_HEADER = pack_seed_header(opt_flags: 0x04, cmd_flags: 0x60)
+    MAIN_SCRIPT_STREAM_CMD_X_HEADER = pack_seed_header(opt_flags: 0x44, cmd_flags: 0x60)
+    MAIN_SCRIPT_SHEBANG_CB_HEADER = pack_seed_header(opt_flags: 0x84, cmd_flags: 0x40, start_line: 0x08)
+
+    # Curated valid pm_options_t headers covering all 15 harness() option features.
+    OPTION_SEED_HEADERS = [
+      pack_seed_header(opt_flags: 0x01),                                                      # freeze
+      FREEZE_COMMENTS_HEADER,                                                                 # freeze + attach_comments
+      pack_seed_header(opt_flags: 0x02),                                                      # partial_script
+      pack_seed_header(opt_flags: 0x08),                                                      # encoding_locked
+      pack_seed_header(opt_flags: 0x10),                                                      # frozen_string_literal=false
+      pack_seed_header(opt_flags: 0x30),                                                      # frozen_string_literal=true
+      FSL_TRUE_COMMENTS_HEADER,                                                               # frozen_string_literal=true + attach_comments
+      pack_seed_header(opt_flags: 0x40),                                                      # stream_mode
+      STREAM_COMMENTS_HEADER,                                                                 # stream_mode + attach_comments
+      pack_seed_header(opt_flags: 0x43, start_line: 0xfe),                                    # stream_mode + freeze + partial + start_line=-2
+      pack_seed_header(opt_flags: 0x80, start_line: 0x00),                                    # has_encoding_opts (UTF-8, filepath) + start_line=0
+      pack_seed_header(opt_flags: 0x84, start_line: 0x0c),                                    # has_encoding_opts (EUC-JP, shebang_cb) + attach_comments
+      pack_seed_header(opt_flags: 0x88, start_line: 0x03),                                    # has_encoding_opts (Windows-31J) + encoding_locked
+      pack_seed_header(opt_flags: 0x00, cmd_flags: 0x08),                                     # cmd_flags: -n
+      pack_seed_header(opt_flags: 0x00, cmd_flags: 0x1d),                                     # cmd_flags: -a -l -n -p
+      pack_seed_header(opt_flags: 0x04, cmd_flags: 0x20),                                     # cmd_flags: -x
+      MAIN_SCRIPT_COMMENTS_HEADER,                                                            # main_script + attach_comments
+      MAIN_SCRIPT_CMD_X_HEADER,                                                               # main_script + -x + attach_comments
+      pack_seed_header(opt_flags: 0x00, version: 0),                                          # Ruby 3.3
+      pack_seed_header(opt_flags: 0x00, version: 1),                                          # Ruby 3.4
+      pack_seed_header(opt_flags: 0x00, version: 2),                                          # Ruby 3.5
+      pack_seed_header(opt_flags: 0x00, scopes_count: 1, forwarding: 0x01),                   # scope forwarding *
+      pack_seed_header(opt_flags: 0x00, scopes_count: 2, forwarding: 0x06),                   # scope forwarding ** + &
+      pack_seed_header(opt_flags: 0x00, scopes_count: 2, forwarding: 0x08),                   # scope forwarding ...
+      pack_seed_header(opt_flags: 0x00, scopes_count: 3, forwarding: 0x0f),                   # 3 scopes, all forwarding
+      pack_seed_header(opt_flags: 0x80, scopes_count: 3, forwarding: 0x0f, start_line: 0x18), # has_encoding_opts + empty scope 0 + shebang_cb
+      pack_seed_header(opt_flags: 0x00, start_line: 0x00),                                    # start_line=0
+      pack_seed_header(opt_flags: 0x00, start_line: 0x7f),                                    # start_line=127
+      pack_seed_header(opt_flags: 0x00, start_line: 0x80),                                    # start_line=-128
+      pack_seed_header(opt_flags: 0x00, cmd_flags: 0x80, start_line: 0x01),                   # has_limit_opts: INT32_MAX, SIZE_MAX
+      pack_seed_header(opt_flags: 0x40, cmd_flags: 0x80, start_line: 0xa1),                   # stream_mode + has_limit_opts: INT32_MIN, budget=512
+      pack_seed_header(opt_flags: 0x00, cmd_flags: 0x80, start_line: 0xd1),                   # has_limit_opts: INT32_MAX-4, budget=4096
+      pack_seed_header(opt_flags: 0x00, cmd_flags: 0x80, start_line: 0x71)                    # has_limit_opts: line=0, budget=0
+    ].freeze
+    MAX_INPUT_SIZE = Integer(ENV.fetch("FUZZ_MAX_INPUT_SIZE", "1024"))
+    MAX_SEED_PAYLOAD_BYTES = [MAX_INPUT_SIZE - 4, 1].max
+    MAX_PENDING_SEEDS = Integer(ENV.fetch("FUZZ_GRAMMAR_MAX_PENDING", "50000"))
+    MAX_SEEN_DIGESTS = 500_000
+    PRUNE_INTERVAL_SEC = 10.0
+    GENERATIONS_PER_EPOCH = 50
+    POPULATION_SIZE = 50
+    STRING_FRAGMENTS = [
+      "hello", "world", "foo", "bar",
+      'line1\nline2', 'tab\there', 'utf8_\u{61}', 'hex_\x41',
+      'interp_#{["inner", "nested"].first}'
+    ].freeze
+
+    WORD_LIST_FRAGMENTS = %w[alpha beta gamma delta foo_bar item_1].freeze
+
+    # Valid Onigmo / Prism regexp fragments (balanced `{}` and no unescaped `/` or `"`
+    # so they are valid inside `/.../`, `%r"..."`, and `%r{...}`, and compatible
+    # with `/`, `/i`, `/m`, `/x`, `/o`, `/u`).
+    REGEXP_VALID_FRAGMENTS = [
+      # Named captures (<name> and 'name'), backrefs, and subexp calls
+      '(?<foo>\w+)(?:\s+(?\'bar\'\d+))?\k<foo>',
+      '(?<tok>[a-z]+)|\g<tok>',
+      # Groups: non-capturing, lookahead, lookbehind, atomic, absence, conditional
+      '(?:foo|bar)+(?=baz)(?!qux)',
+      '(?<=^|\s)(?>\w+)(?<!_)(?~end)',
+      '(a)(?(1)b|c)',
+      '(?<k>x)(?(<k>)y|z)',
+      # Inline group option toggles (both standalone `(?imx)`/`(?x-i)`/`(?i-x)` and scoped `(?imx:...)`)
+      "(?x-i)foo # ext comment\n(?i-x)bar",
+      "(?iix:foo # scoped ext\n)+(?imxdau-imx:bar)+",
+      '(?-x:a b c)',
+      # Inline comments (including escaped `\)` paren and UTF-8 multibyte text) and extended `#` comments
+      '(?#simple comment)foo(?#escaped \) paren)bar',
+      '(?#コメント)abc',
+      "foo # comment with newline\nbar",
+      'foo # trailing comment without newline',
+      # Range quantifiers `{n}`, `{n,}`, `{n,m}`, `{,m}` (single & multi-digit) + backtracked `{...}` forms
+      'a{12}b{10,}c{2,15}d{,12}',
+      'a{foo}b{2x}c{,x}d{2,3x}e{2,x}',
+      # POSIX bracket classes, negated POSIX classes, nested character set intersections, backtracked `[[:`
+      '[[:alpha:]][[:digit:]][[:xdigit:]][[:^space:]][[:^cntrl:]]',
+      '[a-z&&[^aeiou]][[a-f][0-9]]',
+      '[[:unclosed_posix]]',
+      # All 3 Onigmo property escape tiers: POSIX, Script, and Unicode-only + non-brace `\p`
+      '\p{Alpha}\p{ASCII}\p{Blank}\p{Cntrl}\p{Print}\p{Punct}\p{Upper}\p{Word}\p{XDigit}\P{Space}\p{^Digit}',
+      '\p{Han}\p{Greek}\p{Latin}\p{Hiragana}\p{^Katakana}\p{Cyrillic}',
+      '\p{Lu}\P{Nd}\p{^Assigned}\pa',
+      # Unicode escapes (`\uNNNN` and `\u{...}` >= 0x80 with whitespace), valid UTF-8 `\x` groups, ASCII control escapes
+      '\u3042\u00e9\u{ 3042 3044 0041 }',
+      '\xE3\x81\x82a\xC3\xA9',
+      '\C-a\cb\C-x\cx\c?\C-?',
+      # Non-ASCII UTF-8 literals (both outside and inside character sets)
+      '(?:あいう|λ)+[あ-ん]'
+    ].freeze
+
+    # Intentionally malformed / encoding-conflict regexp fragments sampled by the raw
+    # grammar evolver and post-pass mutator to cover diagnostic & recovery paths in src/regexp.c.
+    REGEXP_ERROR_FRAGMENTS = [
+      '(?<>empty_name)',
+      '[]empty_char_class',
+      '[[:unclosed_posix]',
+      '(?z:undef_opt)',
+      '(?-d:non_removable_opt)',
+      '(?-z:invalid_remove_opt)',
+      '(?i-i+i:re_add_removed)',
+      '(+repeat_target)',
+      ')unmatched_at_start',
+      'a)unmatched_close',
+      '(unmatched_open',
+      '(?#unclosed_comment',
+      '(?<unclosed_group',
+      '(?\'unclosed_sq_group',
+      '(?(unclosed_cond',
+      '(?i',
+      '(?-x',
+      '(?',
+      '\Ma\Cb',
+      '\M-a\C-b\cc\M-\C-d\C-\M-e\M-\cf\c\M-g',
+      '\uD800',
+      '\u{110000}',
+      '\u{1234567}',
+      '\u{1234',
+      '\u{}',
+      '\u{xyz}',
+      '\u12',
+      '\u',
+      '\xFF',
+      '\u{3042}\x80',
+      '\x80\u{3042}'
+    ].freeze
+
+    REGEXP_SAFE_MODIFIERS = ["", "i", "m", "x", "o", "u", "imx", "iu", "mx"].freeze
+    REGEXP_ALL_MODIFIERS = (REGEXP_SAFE_MODIFIERS + ["n", "e", "s", "ne", "nu"]).freeze
+    MAGIC_ENCODINGS = %w[us-ascii ascii-8bit euc-jp windows-31j iso-8859-1 utf-8].freeze
+
+    # Compact valid integer literals covering bases (2/8/10/16), prefixes, `_` separators,
+    # 32/64-bit inline boundaries, and 3+ word bignum thresholds in src/integer.c.
+    COMPACT_INTEGERS = [
+      "0", "0_0", "0b0", "0B0_0", "0o0", "0O0", "0_00", "0d0", "0D0", "0x0", "0X0_0",
+      "1", "42", "1_000_000",
+      "0b1010_1100_1111_0001", "0B1111_0000_1010_0101",
+      "0755", "0_755", "0o7_6_5_4_3_2_1", "0O123_456_70",
+      "0d123_456_789", "0D987_654_321",
+      "0xa1b2_c3d4", "0XFEDC_BA98_0123_4567",
+      "4294967295", "4294967296",
+      "18446744073709551615",
+      # Exact UINT64_MAX + 1 boundary (value == limit && digit > limit_digit) & > limit
+      "18446744073709551616",
+      "18446744073709551629",
+      "0d0000_18446744073709551616",
+      # Power-of-two bignums (> 64 bits -> pm_integer_parse_powof2, including cross-word 3-bit octal)
+      "0b1_10101101_01110011_11100001_00111100_10100101_11000011_11110000_10101011_1",
+      "0o7_6543210_76543210_76543210_765",
+      "0x1_0000_0000_0000_0000_0001",
+      "0xa1b2_c3d4_e5f6_7890_0123_4567_89ab_cdef_fedc_ba98",
+      # Schoolbook decimal bignums (both digits % 9 == 0 and != 0)
+      "999_999_999_999_999_999_999_999_999",
+      "12_345_678_901_234_567_890_123_456_789_012"
+    ].freeze
+
+    RATIONAL_LITERALS = [
+      "0r", "1r", "42r",
+      "0b1011_0101r", "0o755r", "0_755r", "0d123_456r",
+      "0xa1b2_c3d4_e5f6_7890_1234_5678r",
+      "18446744073709551616r",
+      # Float rationals (pm_integer_parse_rational): zero, trailing zeros, powof5[13],
+      # bignum denominator (remaining_fives >= 13), bignum numerator, and bignum->inline shrink
+      "0.0r", "0.00_0r", "1.5r", "12.345_00r", "0.125r",
+      "0.0000000000001220703125r",
+      "0.0001220703125r",
+      "0.0000000000000003r",
+      "1.0000000000000000000000000007r",
+      "1234567890123456789012344.125r",
+      "1234567890123456789012345.000000000000000000000003r",
+      "5000000000000000000.5r"
+    ].freeze
+
+    IMAGINARY_LITERALS = [
+      "0i", "42i", "0b1010_1100i", "0o755i", "0d999i",
+      "0xa1b2_c3d4_e5f6_7890_1234i", "18446744073709551616i",
+      "0.0i", "1.5i", "1234567890123456789012345e-50i", "1e310i",
+      "42ri", "0xa1b2_c3d4_e5f6_7890_1234ri", "1.5ri", "5000000000000000000.5ri"
+    ].freeze
+
+    FLOAT_LITERALS = [
+      "0.0", "0.00_0", "0e0", "1_234.567_89",
+      # FLT_EVAL_METHOD fast paths (exponent in [-22, 0), [0, 22], (22, 37])
+      "123.456e-10", "123e15", "45e28",
+      # pm_double_exact (digits <= 19 and > 19, positive & negative exponents, numerator_shift < 0)
+      "9007199254740993e30",
+      "9007199254740993e-30",
+      "1234567890123456789012345e50",
+      "1234567890123456789012345000000000000000e40",
+      "1234567890123456789012345e-50",
+      "1234567890123456789012345678901234567890e-5",
+      # Subnormals, rounding ties, DBL_MAX boundary, underflow, overflow, huge exponent cap
+      "5e-324", "2.4703282292062327e-324", "2.225073858507201e-308", "1e-320",
+      "1e-400", "1e-1000000000000000000",
+      "1.7976931348623157e308", "1.7976931348623159e308",
+      "1e310", "1e+1000000000000000000"
+    ].freeze
+
+    NUMERIC_ERROR_FRAGMENTS = %w[
+      0b 0b102 0b1__0 0b1_
+      0o 0o8 0_8 0o7__7
+      0d 0d1a 0d1__2
+      0x 0xg 0xa1b2__c3d4 0xa1b2_
+      1__2 1_ 1.2.3 1.2e 1.2e+ 1.2e1_ 1.2e__1
+    ].freeze
+
+    # Pre-built large bignum & long-mantissa float literals sized within MAX_SEED_PAYLOAD_BYTES
+    # while exercising (with -DPM_INTEGER_DIVIDE_THRESHOLD=8 in Makefile):
+    # - pm_integer_string_divide (> 48 binary words, including zero low-split words and
+    #   18x18 decimal-word schoolbook column overflow PM_BIGNUM_DECIMAL_PRODUCTS)
+    # - pm_integer_parse_decimal_divide (> 8 chunks = 72 digits; Karatsuba >= 24 words)
+    # - Binary & decimal Karatsuba in src/bignum.c (balanced, unbalanced splits, and
+    #   zero middle words / multi-word carry)
+    # - pm_double_exact truncation past PM_DOUBLE_DIGITS (768 digits)
+    LARGE_BIGNUM_LITERALS = [
+      "0x1" + ("89abcdef" * 52),
+      "0x1" + ("0" * 256) + ("fedcba98" * 32) + ("0" * 256),
+      ("987654321" * 18) + ("999999999" * 19),
+      ("999999999" * 34) + ("000000000" * 18) + ("123456789" * 18)
+    ].freeze
+
+    LONG_FLOAT_LITERAL = ("0." + ("123456789" * 87) + "e10").freeze
+
+    def sample_integer_literal(rng, allow_invalid: false)
+      return NUMERIC_ERROR_FRAGMENTS.sample(random: rng) if allow_invalid && rng.rand < 0.12
+
+      r = rng.rand
+      if r < 0.30
+        rng.rand(0..999).to_s
+      elsif r < 0.96
+        COMPACT_INTEGERS.sample(random: rng)
+      else
+        LARGE_BIGNUM_LITERALS.sample(random: rng)
+      end
+    end
+
+    def sample_float_literal(rng, allow_invalid: false)
+      return NUMERIC_ERROR_FRAGMENTS.sample(random: rng) if allow_invalid && rng.rand < 0.10
+      return LONG_FLOAT_LITERAL if rng.rand < 0.04
+
+      FLOAT_LITERALS.sample(random: rng)
+    end
+
+    def parse_kv_file(path)
+      return {} unless File.exist?(path)
+
+      out = {}
+      File.foreach(path) do |line|
+        k, v = line.split(":", 2)
+        out[k.strip] = v.strip if k && v
+      end
+      out
+    rescue Errno::ENOENT, Errno::ENOTDIR
+      {}
+    rescue IOError, SystemCallError => e
+      warn "[lrama-fuzz] failed to read #{path}: #{e.class}: #{e.message}"
+      {}
+    end
+
+    def write_atomic_seed(queue_dir, staging_dir, header, payload, seen_digests, max_seen_digests: MAX_SEEN_DIGESTS)
+      payload_bytes = payload.b
+      sha1 = Digest::SHA1.new
+      sha1.update(header)
+      sha1.update(payload_bytes)
+      raw_digest = sha1.digest
+
+      return false if seen_digests&.key?(raw_digest)
+
+      if seen_digests
+        seen_digests.clear if seen_digests.size >= max_seen_digests
+        seen_digests[raw_digest] = true
+      end
+
+      final_name = raw_digest.unpack1("H*")
+      final_path = File.join(queue_dir, final_name)
+      return false if File.exist?(final_path)
+
+      tmp_path = File.join(staging_dir, ".tmp_#{Process.pid}_#{SecureRandom.hex(6)}")
+
+      begin
+        File.binwrite(tmp_path, header + payload_bytes)
+        File.rename(tmp_path, final_path)
+      ensure
+        begin
+          File.unlink(tmp_path) if File.exist?(tmp_path)
+        rescue Errno::ENOENT
+          # already moved or removed
+        end
+      end
+
+      true
+    end
+
+    # On tmpfs (relatime), newly created seed files have st.atime == st.mtime until
+    # AFL++'s read_foreign_testcases() opens and mmaps them (setting st.atime > st.mtime)
+    # and advances foreign_syncs[0].mtime to the max whole-second st_mtime it scanned.
+    # Unread seeds created later within that same whole second would otherwise stay at
+    # st_mtime <= foreign_syncs[0].mtime and never be revisited; instead of deleting
+    # them, bump their mtime forward (with sentinel atime=1 so relatime updates atime
+    # immediately upon read) unless pending files exceed MAX_PENDING_SEEDS.
+    @max_synced_mtime = nil
+
+    def reset_max_synced_mtime!
+      Grammar.instance_variable_set(:@max_synced_mtime, nil)
+    end
+
+    def seed_was_read?(st)
+      st.atime.to_i > 1 && st.atime != st.mtime
+    end
+
+    def prune_synced_seeds(queue_dir, max_pending: MAX_PENDING_SEEDS)
+      now = Time.now
+      entries = []
+      max_mtime = Grammar.instance_variable_get(:@max_synced_mtime)
+
+      Dir.children(queue_dir).each do |fname|
+        next if fname.start_with?(".")
+
+        path = File.join(queue_dir, fname)
+        st = begin
+          File.stat(path)
+        rescue Errno::ENOENT
+          next
+        rescue SystemCallError => e
+          warn "[lrama-fuzz] stat failed for #{path}: #{e.class}: #{e.message}"
+          next
+        end
+        was_read = seed_was_read?(st)
+        mtime_i = st.mtime.to_i
+        if was_read && (max_mtime.nil? || mtime_i > max_mtime)
+          max_mtime = mtime_i
+          Grammar.instance_variable_set(:@max_synced_mtime, max_mtime)
+        end
+        entries << [path, was_read, st.mtime]
+      end
+
+      pruned = 0
+      stranded_unread = []
+
+      entries.each do |path, was_read, mtime|
+        if was_read && (now - mtime) >= 2.0
+          begin
+            File.unlink(path)
+            pruned += 1
+          rescue Errno::ENOENT
+            # already removed by consumer
+          end
+        elsif !was_read && max_mtime && mtime.to_i <= max_mtime && (now - mtime) >= 2.0
+          stranded_unread << [path, mtime]
+        end
+      end
+
+      remaining = entries.size - pruned
+      if remaining > max_pending && stranded_unread.any?
+        excess = remaining - max_pending
+        stranded_unread.sort_by! { |_, mtime| mtime }
+        stranded_unread.shift(excess).each do |path, _|
+          begin
+            File.unlink(path)
+            pruned += 1
+          rescue Errno::ENOENT
+            # already removed by consumer
+          end
+        end
+      end
+
+      if stranded_unread.any?
+        bump_mtime = Time.at([now.to_i, (max_mtime || 0) + 1].max)
+        read_sentinel_atime = Time.at(1)
+        stranded_unread.each do |path, _|
+          begin
+            File.utime(read_sentinel_atime, bump_mtime, path)
+          rescue Errno::ENOENT
+            # already removed by consumer
+          rescue SystemCallError => e
+            warn "[lrama-fuzz] utime failed for #{path}: #{e.class}: #{e.message}"
+          end
+        end
+      end
+
+      [entries.size - pruned, pruned]
+    rescue Errno::ENOENT, Errno::ENOTDIR
+      [0, 0]
+    rescue SystemCallError, IOError => e
+      warn "[lrama-fuzz] prune_synced_seeds failed for #{queue_dir}: #{e.class}: #{e.message}"
+      [0, 0]
+    end
+
+    # Nudge the foreign-sync intake master via SIGUSR2 (AFL++'s handle_syncreq ->
+    # sync_requested = 1). In topology-planned runs, FUZZ_INTAKE_STATS_PATH points to
+    # the exact foreign_sync consumer's fuzzer_stats (or "" when none is wired);
+    # standalone runs fall back to the legacy ijon/main locations.
+    def notify_intake_sync(afl_dir)
+      candidates = if ENV.key?("FUZZ_INTAKE_STATS_PATH")
+                     explicit = ENV["FUZZ_INTAKE_STATS_PATH"]
+                     return if explicit.empty?
+
+                     [explicit]
+                   else
+                     [
+                       File.join("#{afl_dir}-ijon", "ijon", "fuzzer_stats"),
+                       File.join(afl_dir, "main", "fuzzer_stats")
+                     ]
+                   end
+
+      candidates.each do |stats_path|
+        next unless File.exist?(stats_path)
+
+        pid = parse_kv_file(stats_path)["fuzzer_pid"].to_i
+        next unless pid > 0
+
+        Process.kill("USR2", pid)
+        return
+      rescue Errno::ESRCH, Errno::ENOENT
+        next
+      rescue Errno::EPERM => e
+        warn "[lrama-fuzz] cannot signal intake pid #{pid}: #{e.message}"
+        next
+      end
+    end
+
+    # Iterative AST node count to avoid SystemStackError on deeply nested trees.
+    def count_prism_nodes(root)
+      count = 0
+      stack = [root]
+      while (node = stack.pop)
+        count += 1
+        node.child_nodes.each { |child| stack << child if child }
+      end
+      count
+    end
+
+    def build_guarded_evaluators(in_flight_io)
+      with_breadcrumb = lambda do |code, &blk|
+        payload = DEFAULT_HEADER + code.b
+        in_flight_io.rewind
+        in_flight_io.write(payload)
+        in_flight_io.flush
+        in_flight_io.truncate(payload.bytesize)
+        begin
+          blk.call
+        ensure
+          in_flight_io.truncate(0)
+        end
+      end
+
+      parse_fn = lambda do |code|
+        with_breadcrumb.call(code) do
+          ::Prism.parse(code)
+        rescue EncodingError, ArgumentError, SystemStackError, NoMemoryError
+          nil
+        rescue StandardError => e
+          warn "[lrama-fuzz] Prism.parse raised #{e.class}: #{e.message}"
+          nil
+        end
+      end
+
+      validator = lambda do |code|
+        with_breadcrumb.call(code) do
+          ::Prism.parse_success?(code)
+        rescue EncodingError, ArgumentError, SystemStackError, NoMemoryError
+          false
+        rescue StandardError => e
+          warn "[lrama-fuzz] Prism.parse_success? raised #{e.class}: #{e.message}"
+          false
+        end
+      end
+
+      fitness = lambda do |code|
+        result = parse_fn.call(code)
+        next 0.0 unless result
+
+        if result.success?
+          node_count = count_prism_nodes(result.value)
+          score = 1.0 + Math.log(node_count + 1) * 0.1
+          # Preserve `>= 1.0` validity signal while penalizing bloat past AFL++'s seed size cap.
+          code.bytesize > MAX_SEED_PAYLOAD_BYTES ? [1.0, score * (MAX_SEED_PAYLOAD_BYTES.to_f / code.bytesize)].max : score
+        else
+          error_count = result.errors.size
+          [0.0, 0.5 - error_count * 0.05].max
+        end
+      rescue SystemStackError, NoMemoryError
+        0.0
+      end
+
+      [fitness, validator, parse_fn]
+    end
+
+    # Build terminal generators with matching string/regexp delimiters, unary +/-
+    # operators (`+` / `-` rather than method names `+@` / `-@`), and a delimiter stack
+    # so `tSTRING_CONTENT` emits regexp syntax inside regexps, clean words inside
+    # `%w`/`%i` word lists, and string fragments inside strings.
+    # Note: in CRuby's parse.y, tQWORDS_BEG/tQSYMBOLS_BEG are the non-interpolating
+    # %w/%i forms, while tWORDS_BEG/tSYMBOLS_BEG are the interpolating %W/%I forms.
+    def build_ruby_terminals(rng, allow_invalid: false)
+      delim_stack = []
+      reset_delims = -> { delim_stack.clear }
+
+      terminals = Lrama::Fuzz::RubyTerminals.build(random: rng)
+      terminals["tSTRING_BEG"] = -> { delim_stack << [:string, '"']; '"' }
+      terminals["tXSTRING_BEG"] = -> { delim_stack << [:string, '"']; '%x"' }
+      terminals["tWORDS_BEG"] = -> { delim_stack << [:words, '"']; '%W"' }
+      terminals["tQWORDS_BEG"] = -> { delim_stack << [:words, '"']; '%w"' }
+      terminals["tSYMBOLS_BEG"] = -> { delim_stack << [:words, '"']; '%I"' }
+      terminals["tQSYMBOLS_BEG"] = -> { delim_stack << [:words, '"']; '%i"' }
+      terminals["tSTRING_END"] = lambda do
+        top_kind = delim_stack.last&.first
+        delim_stack.pop if top_kind == :string || top_kind == :words
+        '"'
+      end
+      terminals["tSTRING_DBEG"] = -> { delim_stack << [:interp, "}"]; '#{' }
+      terminals["tSTRING_DEND"] = lambda do
+        delim_stack.pop if delim_stack.last&.first == :interp
+        "}"
+      end
+      terminals["tREGEXP_BEG"] = lambda do
+        if rng.rand < 0.85
+          delim_stack << [:regexp, "/"]
+          "/"
+        else
+          delim_stack << [:regexp, '"']
+          '%r"'
+        end
+      end
+      terminals["tREGEXP_END"] = lambda do
+        idx = delim_stack.rindex { |k, _| k == :regexp }
+        close_delim = if idx
+                        _, d = delim_stack[idx]
+                        delim_stack.slice!(idx..-1)
+                        d
+                      else
+                        "/"
+                      end
+        mods = (allow_invalid && rng.rand < 0.25) ? REGEXP_ALL_MODIFIERS : REGEXP_SAFE_MODIFIERS
+        "#{close_delim}#{mods.sample(random: rng)}"
+      end
+      terminals["tUPLUS"] = "+"
+      terminals["tUMINUS"] = "-"
+      terminals["tINTEGER"] = -> { sample_integer_literal(rng, allow_invalid: allow_invalid) }
+      terminals["tFLOAT"] = -> { sample_float_literal(rng, allow_invalid: allow_invalid) }
+      terminals["tRATIONAL"] = -> { RATIONAL_LITERALS.sample(random: rng) }
+      terminals["tIMAGINARY"] = -> { IMAGINARY_LITERALS.sample(random: rng) }
+      terminals["tSTRING_CONTENT"] = lambda do
+        case delim_stack.last&.first
+        when :regexp
+          if allow_invalid && rng.rand < 0.18
+            REGEXP_ERROR_FRAGMENTS.sample(random: rng)
+          else
+            REGEXP_VALID_FRAGMENTS.sample(random: rng)
+          end
+        when :words
+          WORD_LIST_FRAGMENTS.sample(random: rng)
+        else
+          STRING_FRAGMENTS.sample(random: rng)
+        end
+      end
+      [terminals, reset_delims]
+    end
+
+    # Extend lrama-fuzz's Ruby::Composer so composed programs also exercise regexp
+    # literals (including inside `case ... in /.../` and `case ... when /.../`),
+    # `=~` / `!~` calls, LHS named-capture `MatchWriteNode` variable introduction,
+    # multi-base/bignum numeric literals, and structural/embdoc/heredoc comments.
+    class PrismComposer < Lrama::Fuzz::Ruby::Composer
+      PRISM_TEMPLATES = (Lrama::Fuzz::Ruby::Composer::TEMPLATES + %i[regexp_match commented_block]).freeze
+      PRISM_NESTED_TEMPLATES = (Lrama::Fuzz::Ruby::Composer::NESTED_TEMPLATES + %i[regexp_match commented_block]).freeze
+
+      private
+
+      def pick_template(pool = PRISM_TEMPLATES)
+        pool = PRISM_NESTED_TEMPLATES if pool.equal?(Lrama::Fuzz::Ruby::Composer::NESTED_TEMPLATES)
+        super(pool)
+      end
+
+      def nested_fragment
+        @nesting += 1
+        send(PRISM_NESTED_TEMPLATES.sample(random: @random))
+      ensure
+        @nesting -= 1
+      end
+
+      def literal_expr
+        r = @random.rand
+        if r < 0.20
+          regexp_literal
+        elsif r < 0.38
+          num = case @random.rand(4)
+                when 0 then Grammar.sample_integer_literal(@random, allow_invalid: false)
+                when 1 then Grammar.sample_float_literal(@random, allow_invalid: false)
+                when 2 then RATIONAL_LITERALS.sample(random: @random)
+                else        IMAGINARY_LITERALS.sample(random: @random)
+                end
+          @random.rand < 0.25 ? "-#{num}" : num
+        else
+          super
+        end
+      end
+
+      # Also emit multi-key static-literal `=>` hashes (including equal & distinct
+      # bignums, negative bignums, rationals, imaginaries, floats, and `__LINE__`)
+      # so `pm_integer_compare`, `pm_bignum_compare`, `integer_hash`, and table
+      # resizing in `src/static_literals.c` are exercised.
+      STATIC_COLLISION_KEYS = [
+        "0", "-0", "1", "__LINE__", "__FILE__",
+        "0x1_0000_0000_0000_0000_0001", "18446744073709551617",
+        "-0x1_0000_0000_0000_0000_0001", "-18446744073709551617",
+        "0x1_0000_0000_0000_0000_0002", "0x1_0000_0000_0000_0000_0000_0000_0001",
+        "1.5r", "1.50r", "2.5r", "1.25r",
+        "1234567890123456789012344.125r", "1234567890123456789012345.125r",
+        "42i", "42.0i", "1.5ri", "1.50ri", "0.0", "-0.0"
+      ].freeze
+
+      def hash_literal(&value_gen)
+        return super(&value_gen) if block_given? || @random.rand < 0.55
+
+        count = @random.rand < 0.5 ? @random.rand(2..4) : @random.rand(6..9)
+        pairs = count.times.map do
+          key = STATIC_COLLISION_KEYS.sample(random: @random)
+          "#{key} => #{simple_expr}"
+        end
+        "{ #{pairs.join(', ')} }"
+      end
+
+      def rich_expr
+        r = @random.rand
+        if r < 0.12
+          regexp_match
+        elsif r < 0.20
+          op = @random.rand < 0.5 ? "=~" : "!~"
+          "#{simple_expr} #{op} #{regexp_literal}"
+        else
+          super
+        end
+      end
+
+      def regexp_literal
+        body = REGEXP_VALID_FRAGMENTS.sample(random: @random)
+        flags = REGEXP_SAFE_MODIFIERS.sample(random: @random)
+        r = @random.rand
+        if r < 0.70
+          "/#{body}/#{flags}"
+        elsif r < 0.85
+          "%r\"#{body}\"#{flags}"
+        else
+          "%r{#{body}}#{flags}"
+        end
+      end
+
+      def regexp_match
+        rhs = @defined_vars.empty? ? %("#{WORDS.sample(random: @random)}") : known_var
+        if @random.rand < 0.55
+          cap1 = define_var
+          cap2 = define_var
+          inner = REGEXP_VALID_FRAGMENTS.sample(random: @random)
+          flags = REGEXP_SAFE_MODIFIERS.sample(random: @random)
+          "/(?<#{cap1}>[[:alpha:]]+)(?'#{cap2}'\\d*)#{inner}/#{flags} =~ #{rhs}"
+        else
+          interp_expr = @defined_vars.empty? ? literal_expr : known_var
+          cap1 = define_var
+          cap2 = define_var
+          flags = %w[x ix mx u].sample(random: @random)
+          "/(?<#{cap1}>\\p{Alpha}+)\#{#{interp_expr}}(?'#{cap2}'[0-9]{1,3}) # ext\n/#{flags} =~ #{rhs}"
+        end
+      end
+
+      # Structural comment & embdoc patterns exercising `src/comments.c`:
+      # - leading/trailing body comments (`pm_comments_blank_before` / `pm_comments_blank_after`)
+      # - column-0 `=begin ... =end` embdocs adjacent to `StatementsNode` (when `@nesting == 0`)
+      # - same-line trailing comments and distance tie-breaking
+      # - chained `rescue` trailing comments (`while (rescue->subsequent != NULL)`)
+      # - out-of-order comment offsets via heredoc interpolation + opener-line comment (`pm_comments_sort`)
+      # - wide (> 64 child) node stacks (`pm_comments_push` stack growth)
+      def commented_block
+        case @random.rand(@nesting == 0 ? 4 : 3)
+        when 0
+          v1 = define_var
+          v2 = define_var
+          <<~RUBY.chomp
+            # leading block comment
+            begin
+              # leading body comment
+              #{v1} = #{simple_expr} # inline statement comment
+              #{v2} = #{simple_expr}
+              # trailing body comment
+            rescue RuntimeError
+              #{v1} = 1
+            rescue ArgumentError
+              #{v2} = 2
+              # trailing chained-rescue comment
+            ensure
+              # ensure body comment
+              #{v1}
+            end # trailing end comment
+          RUBY
+        when 1
+          v = define_var
+          inner = simple_expr
+          <<~RUBY.chomp
+            #{v} = <<~HC + "" # opener-line comment after heredoc
+              \#{#{inner} # comment inside heredoc interpolation
+              }
+            HC
+          RUBY
+        when 2
+          v = define_var
+          items = Array.new(66) { |i| i.even? ? "#{i}" : "\"w#{i}\"" }.join(", ")
+          "# before wide array\n#{v} = [#{items}] # after wide array"
+        else
+          m = IDENTIFIERS.sample(random: @random)
+          v = define_var
+          "# top comment\ndef #{m}\n=begin\nembdoc before statements\n=end\n  #{v} = #{simple_expr} # inline\n=begin\nembdoc after statements\n=end\nend # after def"
+        end
+      end
+    end
+
+    VALID_MAGIC_COMMENT_PREAMBLES = [
+      "# frozen_string_literal: true\n",
+      "# frozen_string_literal: false\n",
+      "# frozen_string_literal: invalid_bool\n",
+      "# warn_indent: true\n",
+      "# warn_indent: false\n",
+      "# warn_indent: invalid_bool\n",
+      "# shareable_constant_value: none\n",
+      "# shareable_constant_value: literal\n",
+      "# shareable_constant_value: experimental_everything\n",
+      "# shareable_constant_value: experimental_copy\n",
+      "# shareable_constant_value: invalid_mode\n",
+      "# -*- coding: utf-8; frozen-string-literal: \"true\"; warn-indent: true -*-\n",
+      "# -*- encoding: ascii-8bit; shareable_constant_value: none -*-\n",
+      "# -*- unclosed emacs marker: true\n",
+      "# vim: set fileencoding=utf-8 :\n",
+      "# custom header coding = utf-8\n",
+      "#!/usr/bin/env ruby\n# coding: utf-8\n",
+      "#!/usr/bin/env ruby\r\n# frozen_string_literal: true\n",
+      "#!/bin/sh\necho wrapper\n#!/usr/bin/env ruby\n# warn_indent: true\n"
+    ].freeze
+
+    ERROR_MAGIC_COMMENT_PREAMBLES = [
+      "# custom header coding: unknown_encoding_xyz\n"
+    ].freeze
+
+    VALID_COMMENT_SUFFIXES = [
+      "\n# trailing comment with newline\n",
+      "\n# trailing EOF comment without newline",
+      "\n# frozen_string_literal: true\n",
+      "\n_scv = 1 # shareable_constant_value: literal\n",
+      "\n=begin\nembedded doc line 1\n=endnot_end_yet\n=end\n",
+      "\n=begin label\nembedded doc with trailing =end text\n=end extra info\n",
+      "\n=begin\nembedded doc at EOF without newline\n=end"
+    ].freeze
+
+    ERROR_COMMENT_SUFFIXES = [
+      "\n=begin\nunterminated embdoc for error recovery\n",
+      "\n=begin"
+    ].freeze
+
+    ENCODING_PROFILES = {
+      "euc-jp" => [
+        "/abc\xA4\xA2/e".b,
+        "/(?#\xA4\xA2\\)ok)[\xA4\xA2]/e".b,
+        "/\\p{Alpha}\\p{Hiragana}/e".b,
+        "".b
+      ].freeze,
+      "windows-31j" => [
+        "/abc\x82\xA0/s".b,
+        "/(?#\x82\xA0\\)ok)[\x82\xA0]/s".b,
+        "/\\p{Alpha}\\p{Hiragana}/s".b,
+        "".b
+      ].freeze,
+      "utf-8" => [
+        "/abc\xE3\x81\x82/u".b,
+        "/(?#\xE3\x81\x82\\)ok)[\xE3\x81\x82]/u".b,
+        "/\\p{Hiragana}\\p{Lu}/u".b,
+        "/\\u{3042}\\xE3\\x81\\x82/u".b,
+        "".b
+      ].freeze,
+      "ascii-8bit" => [
+        "/abc\xFF/n".b,
+        "/(?#\xFF\\)ok)[\xFF]/n".b,
+        "/\\p{Alpha}\\M-a\\xFE/n".b,
+        "".b
+      ].freeze,
+      "iso-8859-1" => [
+        "/abc\xE9/".b,
+        "/\\p{Alpha}/".b,
+        "".b
+      ].freeze,
+      "us-ascii" => [
+        "/\\p{ASCII}\\C-a\\cb/".b,
+        "/[[:alpha:]]+/".b,
+        "".b
+      ].freeze
+    }.freeze
+
+    def code_requires_utf8?(raw_code)
+      return true unless raw_code.ascii_only?
+
+      raw_code.scan(/\\u(?:([0-9a-fA-F]{4})|\{([^}]+)\})/).any? do |single, braced|
+        tokens = braced ? braced.split : [single]
+        tokens.any? { |hex| hex.to_i(16) > 0x7f }
+      end
+    end
+
+    # Prepend magic/shebang comments and append inline/embdoc/EOF comments.
+    # Keeps ~90% valid comment combinations while preserving ~10% error recovery.
+    # Returns [mutated_code, main_script_flag].
+    def inject_comments_variant(code, rng)
+      raw = code.b
+      preamble = if rng.rand < 0.05
+                   ERROR_MAGIC_COMMENT_PREAMBLES.sample(random: rng)
+                 elsif code_requires_utf8?(raw)
+                   VALID_MAGIC_COMMENT_PREAMBLES.reject { |p| p.include?("ascii-8bit") }.sample(random: rng)
+                 else
+                   VALID_MAGIC_COMMENT_PREAMBLES.sample(random: rng)
+                 end
+      suffix = if rng.rand < 0.05
+                 ERROR_COMMENT_SUFFIXES.sample(random: rng)
+               else
+                 VALID_COMMENT_SUFFIXES.sample(random: rng)
+               end
+      has_shebang = preamble.start_with?("#!")
+      out = preamble.b + raw + suffix.b
+      [out, has_shebang]
+    end
+
+    # Emit an encoding / multibyte regexp variant to exercise parser->encoding_changed
+    # paths in src/regexp.c (US-ASCII, ASCII-8BIT, EUC-JP, Windows-31J, ISO-8859-1, UTF-8).
+    # Matches the payload/regexp modifiers to the source encoding ~90% of the time and
+    # reserves ~10% for intentional tier/encoding/syntax error recovery cases.
+    def inject_encoding_variant(code, rng)
+      raw = code.b
+      if rng.rand < 0.10
+        enc = MAGIC_ENCODINGS.sample(random: rng)
+        extra = case rng.rand(3)
+                when 0
+                  prop = %w[\p{Hiragana} \p{Lu} \p{^Katakana}].sample(random: rng)
+                  mod = %w[n e s].sample(random: rng)
+                  "/#{prop}/#{mod}".b
+                when 1
+                  seq = ['\u{3042}\x80', '\x80\u{3042}', '\xFE'].sample(random: rng)
+                  mod = ["", "u"].sample(random: rng)
+                  "/#{seq}/#{mod}".b
+                else
+                  "/#{REGEXP_ERROR_FRAGMENTS.sample(random: rng)}/".b
+                end
+      else
+        enc = code_requires_utf8?(raw) ? "utf-8" : MAGIC_ENCODINGS.sample(random: rng)
+        extra = ENCODING_PROFILES.fetch(enc).sample(random: rng)
+      end
+
+      prefix = "# encoding: #{enc}\n".b
+      extra.empty? ? (prefix + raw) : (prefix + raw + "\n".b + extra + "\n".b)
+    end
+
+    # Collect double-quoted string rewrite candidates and existing heredocs from a
+    # Prism AST in a single iterative walk.
+    def collect_heredoc_targets(root, src)
+      candidates = []
+      heredocs_by_line = Hash.new { |h, k| h[k] = [] }
+      used_tags = Set.new
+      stack = [[root, false]]
+
+      while (entry = stack.pop)
+        node, in_concat = entry
+        is_concat = node.is_a?(::Prism::InterpolatedStringNode) && node.opening_loc.nil?
+
+        if node.respond_to?(:opening_loc) && node.opening_loc && node.closing_loc
+          open_slice = node.opening_loc.slice
+          if open_slice.start_with?("<<")
+            used_tags << open_slice.delete_prefix("<<").delete_prefix("-").delete_prefix("~").gsub(/\A["'`]|["'`]\z/, "")
+            close_end = node.closing_loc.end_offset
+            body_end_nl = (src.byteindex("\n", close_end) || (src.bytesize - 1)) + 1
+            heredocs_by_line[node.opening_loc.start_line] << {
+              opener_start: node.opening_loc.start_offset,
+              body_end_nl: body_end_nl
+            }
+          elsif !in_concat &&
+                (node.is_a?(::Prism::StringNode) || node.is_a?(::Prism::InterpolatedStringNode)) &&
+                open_slice == '"' && node.closing_loc.slice == '"'
+            candidates << node
+          end
+        end
+
+        node.child_nodes.each { |child| stack << [child, is_concat] if child }
+      end
+
+      heredocs_by_line.each_value { |list| list.sort_by! { |h| h[:opener_start] } }
+      candidates.sort_by! { |n| n.location.start_offset }
+      [candidates, heredocs_by_line, used_tags]
+    end
+
+    # Rewrite 1..3 non-overlapping double-quoted string literals into heredocs on a
+    # single pass (`<<H`, `<<-H`, `<<~H`, `<<"H"`, `<<'H'`, or `<<\`H\``), splicing
+    # each heredoc body + terminator immediately after the physical line's `\n` (or
+    # after the closing line of any preceding heredoc opened earlier on that line).
+    # Running a second pass produces nested heredocs inside `#{...}` interpolations.
+    def rewrite_heredocs_pass(code, rng, parse_fn, id_offset = 0)
+      src = code.b
+      src = "#{src}\n".b unless src.end_with?("\n".b)
+      result = parse_fn.call(src)
+      return nil unless result&.value
+
+      all_strings, heredocs_by_line, used_tags = collect_heredoc_targets(result.value, src)
+      return nil if all_strings.empty?
+
+      # Skip multi-line strings whose replacement would merge physical lines containing existing heredocs
+      all_strings.select! do |node|
+        s_line = node.location.start_line
+        e_line = node.location.end_line
+        s_line == e_line || ((s_line + 1)..e_line).none? { |ln| heredocs_by_line.key?(ln) }
+      end
+      return nil if all_strings.empty?
+
+      # Pick up to 3 disjoint string spans (preferring shuffled variety, then sorted by offset)
+      chosen = []
+      all_strings.shuffle(random: rng).each do |node|
+        s = node.location.start_offset
+        e = node.location.end_offset
+        next if chosen.any? { |c| s < c.location.end_offset && e > c.location.start_offset }
+
+        chosen << node
+        break if chosen.size >= 3
+      end
+      return nil if chosen.empty?
+
+      chosen.sort_by! { |n| n.location.start_offset }
+
+      inline_replacements = []
+      line_insertions = Hash.new { |h, k| h[k] = +"".b }
+      next_tag_id = id_offset
+
+      chosen.each do |node|
+        while used_tags.include?("H#{next_tag_id}")
+          next_tag_id += 1
+        end
+        tag = "H#{next_tag_id}"
+        used_tags << tag
+        next_tag_id += 1
+
+        open_start = node.location.start_offset
+        close_end = node.location.end_offset
+        inner = src.byteslice(node.opening_loc.end_offset...node.closing_loc.start_offset)
+        plain_string = node.is_a?(::Prism::StringNode) && !inner.include?("\\")
+
+        opener, indent_body, indent_term =
+          case rng.rand(plain_string ? 6 : 5)
+          when 0 then ["<<#{tag}", "", ""]
+          when 1 then ["<<-#{tag}", "  ", "  "]
+          when 2 then ["<<~#{tag}", "  ", "  "]
+          when 3 then ["<<\"#{tag}\"", "", ""]
+          when 4 then ["<<`#{tag}`", "", ""]
+          else        ["<<'#{tag}'", "", ""]
+          end
+
+        line_nl = (src.byteindex("\n", close_end) || (src.bytesize - 1)) + 1
+        same_line_heredocs = heredocs_by_line[node.location.start_line]
+        preceding = same_line_heredocs.select { |h| h[:opener_start] < open_start }
+        insert_pos = preceding.empty? ? line_nl : preceding.last[:body_end_nl]
+
+        body_line = inner.empty? ? "" : "#{indent_body}#{inner}\n"
+        heredoc_block = "#{body_line}#{indent_term}#{tag}\n".b
+
+        inline_replacements << [open_start, close_end, opener.b]
+        line_insertions[insert_pos] << heredoc_block
+      end
+
+      # Apply inline string->opener replacements and after-newline body insertions
+      # in a single left-to-right pass over byte offsets.
+      out = +"".b
+      cursor = 0
+      events = []
+      inline_replacements.each { |s, e, rep| events << [s, :replace, e, rep] }
+      line_insertions.each { |pos, blk| events << [pos, :insert, pos, blk] }
+      # Process replacements before insertions at the same offset
+      events.sort_by! { |pos, kind, _, _| [pos, kind == :replace ? 0 : 1] }
+
+      events.each do |pos, _kind, end_pos, text|
+        out << src.byteslice(cursor...pos) if pos > cursor
+        out << text
+        cursor = end_pos
+      end
+      out << src.byteslice(cursor..(-1)) if cursor < src.bytesize
+      out
+    rescue EncodingError, ArgumentError, IndexError => e
+      warn "[lrama-fuzz] rewrite_heredocs_pass error: #{e.class}: #{e.message}"
+      nil
+    end
+
+    def inject_heredocs(code, rng, parse_fn)
+      pass1 = rewrite_heredocs_pass(code, rng, parse_fn, 0)
+      return nil unless pass1
+
+      if rng.rand < 0.4
+        pass2 = rewrite_heredocs_pass(pass1, rng, parse_fn, 10)
+        return pass2 if pass2
+      end
+
+      pass1
+    end
+
+    def default_seed_header(rng)
+      r = rng.rand
+      if r < 0.35
+        DEFAULT_HEADER
+      elsif r < 0.65
+        ATTACH_COMMENTS_HEADER
+      else
+        OPTION_SEED_HEADERS.sample(random: rng)
+      end
+    end
+
+    def encoding_variant_header(rng)
+      case rng.rand(4)
+      when 0 then STREAM_COMMENTS_HEADER
+      when 1 then ENCODING_LOCKED_COMMENTS_HEADER
+      else ATTACH_COMMENTS_HEADER
+      end
+    end
+
+    def comment_variant_header(is_main_script, rng)
+      if is_main_script
+        case rng.rand(5)
+        when 0 then MAIN_SCRIPT_CMD_X_HEADER
+        when 1 then MAIN_SCRIPT_STREAM_CMD_X_HEADER
+        when 2 then MAIN_SCRIPT_SHEBANG_CB_HEADER
+        else MAIN_SCRIPT_COMMENTS_HEADER
+        end
+      else
+        case rng.rand(5)
+        when 0 then FREEZE_COMMENTS_HEADER
+        when 1 then STREAM_COMMENTS_HEADER
+        when 2 then FSL_TRUE_COMMENTS_HEADER
+        else ATTACH_COMMENTS_HEADER
+        end
+      end
+    end
+
+    # Expand a single evolved [code, is_valid] candidate into the exact
+    # [header, payload, valid, variant_kind] tuples emitted to the seed queue,
+    # skipping variants that would exceed AFL++'s max_length payload budget.
+    def expand_candidate_variants(code, is_valid, rng, validator, parse_fn, max_payload_bytes: MAX_SEED_PAYLOAD_BYTES)
+      return [] if code.bytesize > max_payload_bytes
+
+      variants = [[default_seed_header(rng), code, is_valid, :raw]]
+
+      # Rewrite double-quoted strings into heredocs (including multi-heredoc lines
+      # and nested heredocs in interpolation) on ~35% of string-bearing candidates.
+      if code.include?('"') && rng.rand < 0.35
+        heredoc_code = inject_heredocs(code, rng, parse_fn)
+        if heredoc_code && heredoc_code.bytesize <= max_payload_bytes
+          variants << [default_seed_header(rng), heredoc_code, validator.call(heredoc_code), :heredoc]
+        end
+      end
+
+      # Emit magic `# encoding:` + multibyte/modifier regexp variants on ~18% of candidates.
+      if rng.rand < 0.18
+        enc_code = inject_encoding_variant(code, rng)
+        if enc_code.bytesize <= max_payload_bytes
+          variants << [encoding_variant_header(rng), enc_code, validator.call(enc_code), :encoding]
+        end
+      end
+
+      # Emit magic/shebang/embdoc/inline comment variants with attach_comments enabled on ~25% of candidates.
+      if rng.rand < 0.25
+        comment_code, is_main_script = inject_comments_variant(code, rng)
+        if comment_code.bytesize <= max_payload_bytes
+          variants << [comment_variant_header(is_main_script, rng), comment_code, validator.call(comment_code), :comments]
+        end
+      end
+
+      variants
+    end
+
+    # Patch a Lrama::Fuzz::Generator instance so every derivation:
+    # - clears the terminal delimiter stack before expanding
+    # - filters avoided symbols upfront in both pick_rule and pick_min_cost_rule
+    # - balances valid-coverage exploration against unsatisfiable rules (35% cap)
+    # - caches top-level leads_to_uncovered? DFS per coverage size so valid tracking
+    #   has negligible overhead
+    # - records valid feedback during generate_valid retries
+    def configure_generator!(gen, reset_delims)
+      gen.singleton_class.prepend(Module.new do
+        define_method(:generate) { |**kwargs| reset_delims.call; super(**kwargs) }
+        define_method(:generate_from) { |*args| reset_delims.call; super(*args) }
+        define_method(:generate_targeted) { reset_delims.call; super() }
+
+        define_method(:generate_valid) do |max_retries: 100, &validator|
+          raise ArgumentError, "a validator block is required" unless validator
+
+          max_retries.times do
+            code = generate
+            valid = validator.call(code)
+            record_result(valid: valid)
+            return code if valid
+          end
+          nil
+        end
+
+        def cached_safe_rules(rules)
+          (@safe_rules_cache ||= {})[rules.object_id] ||= filter_avoided(rules)
+        end
+
+        def sync_coverage_caches!
+          cov_sz = @coverage.used_rule_ids.size
+          if @cov_epoch_sz != cov_sz
+            @cov_epoch_sz = cov_sz
+            @uncovered_by_rules = {}
+            @promising_by_rules = {}
+            @uncovered_within_cache = {}
+            @cached_explore_rate = @coverage.ratio * 0.3
+          end
+
+          valid_sz = @coverage.valid_rule_ids.size
+          if @valid_epoch_sz != valid_sz
+            @valid_epoch_sz = valid_sz
+            @not_valid_by_rules = {}
+          end
+        end
+
+        def pick_rule(rules)
+          sync_coverage_caches!
+          rid = rules.object_id
+          safe = cached_safe_rules(rules)
+
+          uncovered = (@uncovered_by_rules[rid] ||= safe.reject { |r| @coverage.covered?(r) })
+          return uncovered.sample(random: @random) unless uncovered.empty?
+
+          not_valid = (@not_valid_by_rules[rid] ||= safe.reject { |r| @coverage.valid_covered?(r) })
+          return not_valid.sample(random: @random) if !not_valid.empty? && @random.rand < 0.35
+
+          return safe.sample(random: @random) if @random.rand < @cached_explore_rate
+
+          promising = (@promising_by_rules[rid] ||= safe.select { |r| leads_to_uncovered?(r, 3) })
+          pool = promising.empty? ? safe : promising
+          pool.sample(random: @random)
+        end
+
+        def pick_min_cost_rule(symbol)
+          @safe_min_cost_cache ||= {}
+          candidates = @safe_min_cost_cache[symbol.number] ||= begin
+            min_rules = filter_avoided(@cost.min_cost_rules(symbol))
+            if min_rules.any? { |r| contains_avoided?(r) }
+              safe_all = filter_avoided(@grammar.find_rules_by_symbol!(symbol))
+              unless safe_all.all? { |r| contains_avoided?(r) }
+                min_safe_cost = safe_all.map { |r| @cost.rule_cost(r) }.min
+                min_rules = safe_all.select { |r| @cost.rule_cost(r) == min_safe_cost }
+              end
+            end
+            min_rules
+          end
+
+          uncovered = candidates.reject { |r| @coverage.covered?(r) }
+          (uncovered.empty? ? candidates : uncovered).sample(random: @random)
+        end
+
+        def leads_to_uncovered?(rule, depth)
+          visited = (@dfs_visited ||= Set.new)
+          rule.rhs.any? do |sym|
+            next false if sym.term? || sym.midrule?
+
+            visited.clear
+            has_uncovered_within?(sym, depth, visited)
+          end
+        end
+
+        def has_uncovered_within?(symbol, depth, visited)
+          top_level = visited.empty?
+          if top_level
+            sync_coverage_caches!
+            return @uncovered_within_cache[symbol.number] if @uncovered_within_cache.key?(symbol.number)
+          end
+
+          return false if depth <= 0 || visited.include?(symbol.number)
+
+          visited.add(symbol.number)
+          sub_rules = filter_avoided(@grammar.find_rules_by_symbol(symbol) || [])
+          result = sub_rules.any? { |r| !@coverage.covered?(r) } ||
+            (depth > 1 && sub_rules.any? do |r|
+              r.rhs.any? do |rhs_sym|
+                next false if rhs_sym.term? || rhs_sym.midrule?
+
+                has_uncovered_within?(rhs_sym, depth - 1, visited)
+              end
+            end)
+          visited.delete(symbol.number)
+          @uncovered_within_cache[symbol.number] = result if top_level
+          result
+        end
+      end)
+      gen
+    end
+
+    # Subclass Evolver so its internal @generator is configured before seed_population
+    # runs, and so seed generations record validity feedback and reset delimiter state.
+    class GuidedGrammarEvolver < Lrama::Fuzz::Evolver
+      def initialize(*args, reset_delims:, validator:, **kwargs)
+        @reset_delims = reset_delims
+        @seed_validator = validator
+        super(*args, **kwargs)
+      end
+
+      def generate_from_genome(genome)
+        @reset_delims.call
+        super(genome)
+      end
+
+      private
+
+      def seed_population(size)
+        Grammar.configure_generator!(@generator, @reset_delims)
+        super
+      end
+
+      def generate_seed_genome
+        @reset_delims.call
+        res = super
+        if res && @seed_validator
+          @generator.record_result(valid: @seed_validator.call(res[1]))
+        end
+        res
+      end
+    end
+
+    def build_evolvers(grammar, rng, fitness, validator)
+      classifier = Lrama::Fuzz::Ruby.method(:classifier)
+      # Also avoid dsym (tSYMBEG string_contents tSTRING_END emits `:..."` without an
+      # opening quote because tSYMBEG is `:`) and END_OF_INPUT (string_dend -> END_OF_INPUT
+      # omits the closing `}` on `#{...}`).
+      avoid = Lrama::Fuzz::Ruby::AVOID_SYMBOLS + Set["dsym", "END_OF_INPUT"]
+
+      comp_rng = Random.new(rng.rand(2**32))
+      comp_terminals, comp_reset_delims = build_ruby_terminals(comp_rng, allow_invalid: false)
+      comp_gen = configure_generator!(
+        Lrama::Fuzz::Generator.new(
+          grammar,
+          terminals: comp_terminals,
+          classifier: classifier,
+          avoid_symbols: avoid,
+          max_depth: rng.rand(8..12),
+          random: comp_rng
+        ),
+        comp_reset_delims
+      )
+      composed_evolver = Lrama::Fuzz::ComposedEvolver.new(
+        comp_gen,
+        fitness: fitness,
+        composer_class: PrismComposer,
+        validator: validator,
+        population_size: POPULATION_SIZE,
+        genome_length: 300,
+        mutation_rate: 0.05 + rng.rand * 0.07,
+        random: Random.new(rng.rand(2**32))
+      )
+
+      gram_rng = Random.new(rng.rand(2**32))
+      gram_terminals, gram_reset_delims = build_ruby_terminals(gram_rng, allow_invalid: true)
+      grammar_evolver = GuidedGrammarEvolver.new(
+        grammar,
+        terminals: gram_terminals,
+        fitness: fitness,
+        classifier: classifier,
+        avoid_symbols: avoid,
+        max_depth: rng.rand(7..10),
+        population_size: POPULATION_SIZE,
+        genome_length: 220,
+        mutation_rate: 0.05 + rng.rand * 0.10,
+        random: gram_rng,
+        reset_delims: gram_reset_delims,
+        validator: validator
+      )
+
+      [composed_evolver, grammar_evolver]
+    end
+
+    def last_plot_relative_time(plot_path)
+      return 0 unless File.exist?(plot_path)
+
+      last_rel = 0
+      File.foreach(plot_path) do |line|
+        s = line.strip
+        next if s.empty? || s.start_with?("#")
+
+        rel = s.split(",", 2).first.to_i
+        last_rel = rel if rel > last_rel
+      end
+      last_rel
+    rescue Errno::ENOENT
+      0
+    rescue SystemCallError, IOError => e
+      warn "[lrama-fuzz] failed to read plot_data #{plot_path}: #{e.class}: #{e.message}"
+      0
+    end
+
+    def run_worker(grammar:, supervisor_pid:, start_time:, prior_elapsed:, saved_crashes:, afl_dir:, queue_dir:, staging_dir:, in_flight_path:, stats_path:, stats_tmp_path:, plot_path:)
+      prev_stats = parse_kv_file(stats_path)
+      start_ts = start_time.to_i
+
+      seen_digests = {}
+      existing_files = Dir.children(queue_dir).reject { |f| f.start_with?(".") }
+      existing_files.each do |fname|
+        seen_digests[[fname].pack("H*")] = true if fname.length == 40
+      end
+
+      has_prev = prev_stats.key?("files_created")
+      same_supervisor = prev_stats["start_time"].to_i == start_ts
+      files_created = has_prev ? [prev_stats["files_created"].to_i, existing_files.size].max : existing_files.size
+      files_pruned = has_prev ? prev_stats["files_pruned"].to_i : 0
+      files_valid = has_prev ? prev_stats["files_valid"].to_i : 0
+      files_invalid = has_prev ? prev_stats["files_invalid"].to_i : 0
+      duplicates_skipped = has_prev ? prev_stats["duplicates_skipped"].to_i : 0
+      attempts_done = has_prev ? [prev_stats["attempts_done"].to_i, files_created].max : existing_files.size
+      last_find_ts = has_prev && prev_stats["last_find"].to_i > 0 ? prev_stats["last_find"].to_i : start_ts
+      pending_files = existing_files.size
+
+      now_f = Time.now.to_f
+      last_stats_flush = now_f
+      last_plot_flush = now_f
+      last_prune_time = now_f
+      prev_stats_files = files_created
+      prev_plot_files = files_created
+      inst_rate = 0.0
+
+      in_flight_io = File.open(in_flight_path, File::RDWR | File::CREAT | File::BINARY, 0o600)
+      in_flight_io.sync = true
+      fitness, validator, parse_fn = build_guarded_evaluators(in_flight_io)
+
+      shutdown_requested = false
+      flush_telemetry = lambda do |force_plot: false|
+        now = Time.now.to_f
+        now_i = now.to_i
+        total_elapsed = prior_elapsed + [now - start_time, 0.001].max
+        dt_stats = now - last_stats_flush
+        if dt_stats >= 0.25
+          inst_rate = (files_created - prev_stats_files) / dt_stats
+          prev_stats_files = files_created
+          last_stats_flush = now
+        end
+        avg_rate = files_created / total_elapsed
+        total_run_time = prior_elapsed + [now_i - start_ts, 0].max
+
+        stats_content = <<~STATS
+          start_time        : #{start_ts}
+          last_update       : #{now_i}
+          run_time          : #{total_run_time}
+          fuzzer_pid        : #{supervisor_pid}
+          fuzzer_role       : generator
+          power_mode        : evolve
+          afl_banner        : lrama-fuzz
+          command_line      : ruby ./runtime/grammar.rb #{afl_dir} #{queue_dir}
+          corpus_count      : #{files_created}
+          files_created     : #{files_created}
+          pending_files     : #{pending_files}
+          max_pending_files : #{MAX_PENDING_SEEDS}
+          files_pruned      : #{files_pruned}
+          files_valid       : #{files_valid}
+          files_invalid     : #{files_invalid}
+          duplicates_skipped: #{duplicates_skipped}
+          attempts_done     : #{attempts_done}
+          execs_done        : #{attempts_done}
+          execs_per_sec     : #{format("%.2f", avg_rate)}
+          files_per_sec     : #{format("%.2f", inst_rate > 0 ? inst_rate : avg_rate)}
+          avg_files_per_sec : #{format("%.2f", avg_rate)}
+          saved_crashes     : #{saved_crashes}
+          saved_hangs       : 0
+          last_find         : #{last_find_ts}
+        STATS
+
+        File.write(stats_tmp_path, stats_content)
+        File.rename(stats_tmp_path, stats_path)
+
+        dt_plot = now - last_plot_flush
+        if force_plot || dt_plot >= 5.0
+          plot_rate = dt_plot >= 0.25 ? (files_created - prev_plot_files) / dt_plot : avg_rate
+          rel_time = total_run_time
+          File.open(plot_path, "a") do |f|
+            f.puts("#{rel_time}, #{files_created}, #{format('%.2f', plot_rate)}, #{format('%.2f', avg_rate)}, #{attempts_done}, #{files_valid}, #{files_invalid}")
+          end
+          prev_plot_files = files_created
+          last_plot_flush = now
+        end
+
+        $stdout.write(
+          format(
+            "\r[lrama-fuzz] created: %d (valid: %d, invalid: %d, pending: %d, crashes: %d) | rate: %.1f/s (avg: %.1f/s)   ",
+            files_created, files_valid, files_invalid, pending_files, saved_crashes,
+            inst_rate > 0 ? inst_rate : avg_rate, avg_rate
+          )
+        )
+        $stdout.flush
+      rescue SystemCallError, IOError => e
+        warn "[lrama-fuzz] telemetry flush error: #{e.class}: #{e.message}" unless shutdown_requested
+      end
+
+      Signal.trap("INT") { shutdown_requested = true }
+      Signal.trap("TERM") { shutdown_requested = true }
+
+      flush_telemetry.call(force_plot: !same_supervisor)
+
+      # Optional fault-injection hook for testing supervisor crash capture:
+      if (fault_sig = ENV["FUZZ_GRAMMAR_TEST_CRASH_SIG"]) && !same_supervisor
+        in_flight_io.rewind
+        in_flight_io.write(DEFAULT_HEADER + "def crash_test; end\n".b)
+        in_flight_io.truncate(24)
+        Process.kill(fault_sig, Process.pid)
+      end
+
+      master_rng = Random.new
+      initial_sync_notified = false
+
+      emit_candidate = lambda do |code, is_valid, header: nil|
+        return if shutdown_requested
+
+        while pending_files >= MAX_PENDING_SEEDS
+          break if shutdown_requested
+
+          notify_intake_sync(afl_dir)
+          pending_files, newly_pruned = prune_synced_seeds(queue_dir)
+          files_pruned += newly_pruned
+          last_prune_time = Time.now.to_f
+          flush_telemetry.call
+          break if pending_files < MAX_PENDING_SEEDS
+
+          5.times do
+            break if shutdown_requested
+
+            sleep(0.1)
+          end
+        end
+        return if shutdown_requested
+
+        seed_header = header || default_seed_header(master_rng)
+        attempts_done += 1
+        if write_atomic_seed(queue_dir, staging_dir, seed_header, code, seen_digests)
+          files_created += 1
+          pending_files += 1
+          if is_valid
+            files_valid += 1
+          else
+            files_invalid += 1
+          end
+          last_find_ts = Time.now.to_i
+          if !initial_sync_notified && pending_files >= 200
+            notify_intake_sync(afl_dir)
+            initial_sync_notified = true
+          end
+        else
+          duplicates_skipped += 1
+        end
+
+        now = Time.now.to_f
+        if (now - last_prune_time) >= PRUNE_INTERVAL_SEC
+          pending_files, newly_pruned = prune_synced_seeds(queue_dir)
+          files_pruned += newly_pruned
+          notify_intake_sync(afl_dir) if pending_files > 0
+          last_prune_time = now
+        end
+
+        if (now - last_stats_flush) >= 1.0
+          flush_telemetry.call
+        end
+      end
+
+      record_batch = lambda do |batch|
+        batch.each do |code, fitness_score|
+          break if shutdown_requested
+
+          expand_candidate_variants(code, fitness_score >= 1.0, master_rng, validator, parse_fn).each do |hdr, payload, valid, _kind|
+            break if shutdown_requested
+
+            emit_candidate.call(payload, valid, header: hdr)
+          end
+        end
+      end
+
+      loop do
+        break if shutdown_requested
+
+        composed_evolver, grammar_evolver = build_evolvers(grammar, master_rng, fitness, validator)
+        GENERATIONS_PER_EPOCH.times do
+          break if shutdown_requested
+
+          record_batch.call(composed_evolver.evolve)
+          break if shutdown_requested
+
+          record_batch.call(grammar_evolver.evolve)
+        end
+        break if shutdown_requested
+      end
+    ensure
+      flush_telemetry.call(force_plot: true) if shutdown_requested
+      begin
+        in_flight_io&.close unless in_flight_io&.closed?
+      rescue IOError, SystemCallError => e
+        warn "[lrama-fuzz] failed to close #{in_flight_path}: #{e.class}: #{e.message}"
+      end
+    end
+
+    def run_grammar_supervisor(argv = ARGV)
+      afl_arg = (argv[0] && !argv[0].start_with?("-")) ? argv[0] : nil
+      default_ws = if defined?(PrismFuzzer::Topology)
+                     dt = PrismFuzzer::Topology.discover(afl_dir: afl_arg, start_dir: FUZZ_ROOT)
+                     PrismFuzzer::Topology.workspace_paths(dt, fuzz_root: FUZZ_ROOT) if dt
+                   end
+      afl_dir = afl_arg || (default_ws ? default_ws[:afl_dir] : "./tmp/fuzz/afl")
+      queue_dir = argv[1] || "/tmp/afl-tmpdir/grammar/seeds"
+      work_dir = File.dirname(queue_dir)
+      staging_dir = File.join(work_dir, "staging")
+      in_flight_path = File.join(work_dir, "in_flight")
+
+      worker_id = ENV["FUZZ_GRAMMAR_WORKER_ID"]
+      worker_id = "grammar" if worker_id.nil? || worker_id.empty?
+      bin_name = ENV["FUZZ_GRAMMAR_BIN"]
+      bin_name = "fuzz.native" if bin_name.nil? || bin_name.empty?
+
+      stats_dir = File.join(afl_dir, worker_id)
+      crashes_dir = File.join(stats_dir, "crashes")
+      cmdline_path = File.join(stats_dir, "cmdline")
+      stats_path = File.join(stats_dir, "fuzzer_stats")
+      stats_tmp_path = File.join(stats_dir, ".fuzzer_stats.tmp")
+      plot_path = File.join(stats_dir, "plot_data")
+
+      FileUtils.mkdir_p(queue_dir)
+      FileUtils.mkdir_p(staging_dir)
+      FileUtils.mkdir_p(crashes_dir)
+
+      # Allow triage to classify any crashes caught directly inside grammar.rb
+      bin_dir = if ENV["FUZZ_BIN_DIR"] && !ENV["FUZZ_BIN_DIR"].empty?
+                  ENV["FUZZ_BIN_DIR"]
+                elsif (sibling_bin = File.join(File.dirname(afl_dir), "bin")) && File.directory?(sibling_bin)
+                  sibling_bin
+                elsif default_ws && (!argv[0] || File.expand_path(afl_dir) == File.expand_path(default_ws[:afl_dir]))
+                  File.executable?(File.join(default_ws[:bin_dir], bin_name)) ? default_ws[:bin_dir] : default_ws[:build_dir]
+                else
+                  "./tmp/fuzz/build"
+                end
+      File.write(cmdline_path, "#{File.join(bin_dir, bin_name)}\n")
+
+      # Parse CRuby's parse.y once in the supervisor before forking so respawned
+      # workers inherit the prepared grammar via copy-on-write without re-parsing.
+      ruby_src_dir = ENV.fetch("RUBY_SRC_DIR") { ENV.fetch("RUBY_ORACLE_DIR", "/opt/ruby") }
+      grammar = Lrama::Fuzz.parse_ruby(
+        parse_y_path: File.join(ruby_src_dir, "parse.y"),
+        id_def_path: File.join(ruby_src_dir, "defs", "id.def")
+      )
+
+      initial_prev_stats = parse_kv_file(stats_path)
+      prior_elapsed = if File.exist?(stats_path) && File.exist?(plot_path)
+                        [initial_prev_stats["run_time"].to_i, last_plot_relative_time(plot_path)].max
+                      else
+                        File.write(plot_path, "# relative_time, files_created, files_per_sec, avg_files_per_sec, attempts_done, files_valid, files_invalid\n")
+                        0
+                      end
+      File.unlink(in_flight_path) if File.exist?(in_flight_path)
+
+      supervisor_pid = Process.pid
+      start_time = Time.now.to_f
+      saved_crashes = Dir.glob(File.join(crashes_dir, "id:*")).size
+      stopping = false
+      child_pid = nil
+
+      stop_supervisor = lambda do |sig|
+        stopping = true
+        if child_pid
+          begin
+            Process.kill(sig, child_pid)
+          rescue Errno::ESRCH
+            # already exited
+          end
+        end
+      end
+
+      Signal.trap("INT") { stop_supervisor.call("INT") }
+      Signal.trap("TERM") { stop_supervisor.call("TERM") }
+
+      until stopping
+        child_pid = Process.fork do
+          run_worker(
+            grammar: grammar,
+            supervisor_pid: supervisor_pid,
+            start_time: start_time,
+            prior_elapsed: prior_elapsed,
+            saved_crashes: saved_crashes,
+            afl_dir: afl_dir,
+            queue_dir: queue_dir,
+            staging_dir: staging_dir,
+            in_flight_path: in_flight_path,
+            stats_path: stats_path,
+            stats_tmp_path: stats_tmp_path,
+            plot_path: plot_path
+          )
+        end
+
+        _, status = Process.wait2(child_pid)
+        child_pid = nil
+        break if stopping
+
+        if status.signaled? && ![Signal.list["INT"], Signal.list["TERM"]].include?(status.termsig)
+          sig = status.termsig
+          if File.exist?(in_flight_path) && File.size(in_flight_path) > 0
+            raw = File.binread(in_flight_path)
+            begin
+              File.unlink(in_flight_path)
+            rescue Errno::ENOENT
+              # already removed
+            rescue SystemCallError => e
+              warn "[lrama-fuzz] failed to unlink #{in_flight_path}: #{e.class}: #{e.message}"
+            end
+
+            rel_ms = ((Time.now.to_f - start_time) * 1000).round
+            crash_name = format("id:%06d,sig:%02d,src:lrama-fuzz,time:%d", saved_crashes, sig, rel_ms)
+            crash_file = File.join(crashes_dir, crash_name)
+            File.binwrite(crash_file, raw)
+            saved_crashes += 1
+
+            # Also drop into queue_dir so main tests it under ASAN/UBSAN as well
+            if raw.bytesize >= 4
+              begin
+                write_atomic_seed(queue_dir, staging_dir, raw.byteslice(0, 4), raw.byteslice(4..), nil)
+              rescue SystemCallError, IOError => e
+                warn "[lrama-fuzz] failed to forward crash seed to #{queue_dir}: #{e.class}: #{e.message}"
+              end
+            end
+
+            warn "\n[lrama-fuzz] Caught worker signal #{sig}! Saved crashing input to #{crash_file} and restarting worker..."
+          else
+            warn "\n[lrama-fuzz] Worker exited on signal #{sig} (no in-flight input); restarting in 1s..."
+            sleep(1.0)
+          end
+        elsif !status.success?
+          warn "\n[lrama-fuzz] Worker exited with status #{status.exitstatus}; restarting in 1s..."
+          sleep(1.0)
+        else
+          break
+        end
+      end
+    end
+  end
+end
+
+PrismFuzzer::Grammar.run_grammar_supervisor(ARGV) if __FILE__ == $PROGRAM_NAME

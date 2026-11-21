@@ -1,0 +1,20 @@
+From 9e43aada498f101ab2d93d2d16d8830136e21897 Mon Sep 17 00:00:00 2001
+From: Steven Johnstone <steven.james.johnstone@gmail.com>
+Date: Fri, 6 Nov 2026 16:39:49 +0000
+Subject: [PATCH] Improve integer and bignum coverage during fuzzing
+
+
+diff --git a/src/integer.c b/src/integer.c
+index a5fbb280d..554a52aba 100644
+--- a/src/integer.c
++++ b/src/integer.c
+@@ -27,7 +27,9 @@
+  * once it gets really long because we start to see the impact of an O(n^1.58)
+  * vs an O(n^2) algorithm.
+  */
++#ifndef PM_INTEGER_DIVIDE_THRESHOLD
+ #define PM_INTEGER_DIVIDE_THRESHOLD 224
++#endif
+ 
+ /**
+  * When printing integers of many words, we switch to a divide-and-conquer

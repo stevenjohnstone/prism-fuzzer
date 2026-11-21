@@ -1,0 +1,38 @@
+From bef24318a650232c8d791e34d3b59d15f353cd8b Mon Sep 17 00:00:00 2001
+From: Steven Johnstone <steven.james.johnstone@gmail.com>
+Date: Fri, 20 Nov 2026 17:21:18 +0000
+Subject: [PATCH] Fix 32-bit alignment of pm_arena_block_t data for 8-byte
+ aligned allocations
+
+
+diff --git a/include/prism/internal/arena.h b/include/prism/internal/arena.h
+index e20048c1d..fe7180613 100644
+--- a/include/prism/internal/arena.h
++++ b/include/prism/internal/arena.h
+@@ -14,6 +14,17 @@
+ #include <stdint.h>
+ #include <string.h>
+ 
++/*
++ * Union representing the maximum scalar/pointer alignment required for standard
++ * PM_ARENA_ALLOC objects (void *, uint64_t, double), ensuring 8-byte alignment
++ * of block->data even on 32-bit targets where header fields sum to 12 bytes.
++ */
++typedef union {
++    void *ptr;
++    uint64_t u64;
++    double d;
++} pm_arena_align_t;
++
+ /*
+  * A single block of memory in the arena. Blocks are linked via prev pointers so
+  * they can be freed by walking the chain.
+@@ -29,7 +40,7 @@ typedef struct pm_arena_block {
+     size_t used;
+ 
+     /* The block's data. */
+-    char data[PM_FLEX_ARRAY_LENGTH];
++    PRISM_ALIGNAS(PRISM_ALIGNOF(pm_arena_align_t)) char data[PM_FLEX_ARRAY_LENGTH];
+ } pm_arena_block_t;
+ 
+ /*
