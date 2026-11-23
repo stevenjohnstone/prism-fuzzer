@@ -229,6 +229,27 @@ module FuzzTriage
       PrismFuzzer::Topology.fuzzer_spec(topo, executable.to_s)
     end
 
+    def fuzzer_allows_stream_with_ijon?(fspec)
+      return false unless fspec.is_a?(Hash)
+
+      defs = fspec["defines"]
+      if defs.is_a?(Hash)
+        val = defs["PRISM_FUZZ_ALLOW_STREAM_WITH_IJON"]
+        return true if val && val != false && val != 0 && val.to_s != "0"
+      end
+      Array(fspec["cflags"]).any? { |f| f.to_s.match?(/\A-DPRISM_FUZZ_ALLOW_STREAM_WITH_IJON(?:=(?!0\z).+)?\z/) }
+    end
+
+    def fuzzer_suppresses_stream?(fspec, executable: "")
+      if fspec
+        fspec["shape"].to_s == "prism_parse" &&
+          (fspec["ijon"] || fspec["afl"].to_s == "ijon") &&
+          !fuzzer_allows_stream_with_ijon?(fspec)
+      else
+        executable.to_s.end_with?("ijon")
+      end
+    end
+
     def resolve_ids_path(bin_path, env_ids_key)
       return ENV[env_ids_key] if ENV.key?(env_ids_key)
 

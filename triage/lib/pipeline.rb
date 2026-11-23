@@ -62,12 +62,7 @@ module FuzzTriage
       normalized_crash_file = nil
       begin
         fspec_norm = resolve_topology_fuzzer(executable: executable, triage_dir: testcases_dir)
-        suppresses_stream = if fspec_norm
-                              fspec_norm["shape"].to_s == "prism_parse" &&
-                                (fspec_norm["ijon"] || fspec_norm["afl"].to_s == "ijon")
-                            else
-                              executable.end_with?("ijon")
-                            end
+        suppresses_stream = fuzzer_suppresses_stream?(fspec_norm, executable: executable)
         normalized_bytes = suppresses_stream ? normalize_ijon_crash_bytes(raw_crash) : nil
         effective_raw_bytes = normalized_bytes || raw_crash
         occ_record = occurrence_overrides&.dig(crash_hash) || build_occurrence_record(crash_dir, crash, crash_hash)

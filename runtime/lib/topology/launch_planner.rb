@@ -271,7 +271,11 @@ module PrismFuzzer
         end
 
         out_dir = File.join(fuzz_dir, sync_groups.fetch(w.fetch("sync_group")).fetch("dir"))
-        sans = Array(fspec["sanitizers"]).map(&:to_s)
+        fspec_sans = Array(fspec["sanitizers"]).map(&:to_s)
+        aux_fspec = if w["aux_fuzzer"] && !w["aux_fuzzer"].to_s.empty?
+                      plan.dig("fuzzers", w["aux_fuzzer"].to_s)
+                    end
+        sans = aux_fspec ? (fspec_sans | Array(aux_fspec["sanitizers"]).map(&:to_s)) : fspec_sans
         lsan_opts = "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}"
 
         env_prefix = []
@@ -317,7 +321,8 @@ module PrismFuzzer
           }
         else
           env_prefix << "MSAN_OPTIONS=#{msan_opts}" if sans.include?("msan")
-          asan_eff = fspec["shape"] == "prism_diff_ruby" ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
+          is_diff_ruby = fspec["shape"] == "prism_diff_ruby" || aux_fspec&.dig("shape") == "prism_diff_ruby"
+          asan_eff = is_diff_ruby ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
           env_prefix << "LSAN_OPTIONS=#{lsan_opts}" if sans.include?("lsan")
           env_prefix << "ASAN_OPTIONS=#{asan_eff}" if sans.include?("asan")
           env_prefix << "UBSAN_OPTIONS=#{ubsan_opts}" if sans.include?("ubsan")
@@ -332,7 +337,6 @@ module PrismFuzzer
             afl_args_pre.push("-c", cmplog_bin)
           end
           if w["aux_fuzzer"] && !w["aux_fuzzer"].to_s.empty?
-            aux_fspec = plan.dig("fuzzers", w["aux_fuzzer"].to_s)
             aux_bin = File.join(bin_dir, File.basename(aux_fspec ? aux_fspec["binary"] : w["aux_fuzzer"].to_s))
             afl_args_pre.push("-w", aux_bin)
           end
@@ -352,10 +356,10 @@ module PrismFuzzer
           # so embedded runtimes like CRuby do not fail LSan or stall on exit during seed screening.
           self_pass_env = { "FUZZ_DIFF_BACKTRACE" => "0" }
           asan_eff = fspec["shape"] == "prism_diff_ruby" ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
-          self_pass_env["MSAN_OPTIONS"] = msan_opts if sans.include?("msan")
-          self_pass_env["LSAN_OPTIONS"] = lsan_opts if sans.include?("lsan")
-          self_pass_env["ASAN_OPTIONS"] = asan_eff if sans.include?("asan")
-          self_pass_env["UBSAN_OPTIONS"] = ubsan_opts if sans.include?("ubsan")
+          self_pass_env["MSAN_OPTIONS"] = msan_opts if fspec_sans.include?("msan")
+          self_pass_env["LSAN_OPTIONS"] = lsan_opts if fspec_sans.include?("lsan")
+          self_pass_env["ASAN_OPTIONS"] = asan_eff if fspec_sans.include?("asan")
+          self_pass_env["UBSAN_OPTIONS"] = ubsan_opts if fspec_sans.include?("ubsan")
           w["env"].each { |k, v| self_pass_env[k.to_s] = v.to_s } if w["env"].is_a?(Hash)
         end
 

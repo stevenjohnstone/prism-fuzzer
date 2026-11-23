@@ -120,11 +120,13 @@ docker-update:
 	$(ECHO) "resolving mainline CRuby HEAD from ruby/ruby"
 	$(Q) rev="$$(git ls-remote https://github.com/ruby/ruby.git refs/heads/master | awk 'NR==1 { print $$1 }')"; \
 		test -n "$$rev" || { echo "Failed to resolve ruby/ruby master SHA" >&2; exit 1; }; \
-		ruby -e 'df, tf, rev = ARGV; \
+		ruby -e 'df, rev, *tfs = ARGV; \
 			s = File.read(df); cur = s[/^ARG RUBY_GIT_REF=(.*)/, 1] or abort("ARG RUBY_GIT_REF not found in #{df}"); \
 			if cur.strip != rev then s.sub!(/^ARG RUBY_GIT_REF=.*/, "ARG RUBY_GIT_REF=#{rev}"); File.write(df, s); puts("Updated #{df} RUBY_GIT_REF: #{cur} -> #{rev}") else puts("#{df} already pinned to #{rev}") end; \
-			ts = File.read(tf); tcur = ts[/^DEFAULT_RUBY_REF = "([^"]+)"/, 1] or abort("DEFAULT_RUBY_REF not found in #{tf}"); \
-			if tcur != rev then ts.sub!(/^DEFAULT_RUBY_REF = "[^"]+"/, "DEFAULT_RUBY_REF = \"#{rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_RUBY_REF -> #{rev}") else puts("#{tf} already pinned to #{rev}") end' docker/Dockerfile campaigns/default.rb "$$rev" && \
+			tfs.each do |tf| \
+				ts = File.read(tf); tcur = ts[/^DEFAULT_RUBY_REF = "([^"]+)"/, 1] or next; \
+				if tcur != rev then ts.sub!(/^DEFAULT_RUBY_REF = "[^"]+"/, "DEFAULT_RUBY_REF = \"#{rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_RUBY_REF -> #{rev}") else puts("#{tf} already pinned to #{rev}") end; \
+			end' docker/Dockerfile "$$rev" campaigns/*.rb && \
 		$(MAKE) docker-build RUBY_GIT_REF="$$rev"
 
 targets-sync topology-sync:

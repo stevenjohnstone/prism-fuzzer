@@ -207,9 +207,13 @@ class TriageReproTest < Minitest::Test
       assert_raises(ArgumentError) { FuzzTriage.encode_fuzz_header(start_line: 200) }
       assert_raises(ArgumentError) { FuzzTriage.encode_fuzz_header(scopes_count: 4) }
 
-      # IJON stream-bit normalization
+      # IJON stream-bit normalization (suppressed unless PRISM_FUZZ_ALLOW_STREAM_WITH_IJON is active)
       assert_nil FuzzTriage.normalize_ijon_crash_bytes("\x2a\x11\x22\x33abc".b), "expected nil when stream bit unset"
       assert_equal "\x2a\x11\x22\x33abc".b, FuzzTriage.normalize_ijon_crash_bytes("\x6a\x11\x22\x33abc".b), "expected stream bit cleared"
+      assert FuzzTriage.fuzzer_suppresses_stream?({ "shape" => "prism_parse", "ijon" => true })
+      refute FuzzTriage.fuzzer_suppresses_stream?({ "shape" => "prism_parse", "ijon" => true, "defines" => { "PRISM_FUZZ_ALLOW_STREAM_WITH_IJON" => 1 } })
+      refute FuzzTriage.fuzzer_suppresses_stream?({ "shape" => "prism_parse", "ijon" => true, "cflags" => ["-DPRISM_FUZZ_ALLOW_STREAM_WITH_IJON"] })
+      refute FuzzTriage.fuzzer_suppresses_stream?({ "shape" => "prism_diff_ruby", "ijon" => true })
     end
   end
 

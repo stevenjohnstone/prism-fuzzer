@@ -800,6 +800,71 @@ class LaunchAndStatusTest < Minitest::Test
     end
   end
 
+  def test_aux_fuzzer_sanitizer_env_and_ijon_campaign_plan
+    with_tmpdir("t5-ijon-camp-") do |tmpdir|
+      upstream = PrismFuzzerTest::Fixtures.build_synthetic_upstream_prism(File.join(tmpdir, "upstream"))
+      ws = File.join(tmpdir, "sand_ws")
+      camp = File.join(tmpdir, "sand_camp.rb")
+
+      File.write(camp, <<~RUBY)
+        PrismFuzzer.campaign "sand-aux-env-test" do
+          workspace #{ws.inspect}
+          prism :prism_a, repo: #{upstream[:repo].inspect}, ref: #{upstream[:v1].inspect}, dir: #{upstream[:repo].inspect}, patches: "none", templates: "never"
+          corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz.ijon"
+          fuzzer "fuzz.ijon", shape: :prism_parse, source: :prism_a, sanitizers: [], mode: :fast, afl: :lto, ijon: true, xallocator: true
+          fuzzer "fuzz.sand", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :sand
+          sync_group "afl-ijon", dir: "afl-ijon", primary: true
+          worker :"ijon-scout", fuzzer: "fuzz.ijon", aux_fuzzer: "fuzz.sand", sync_group: "afl-ijon", afl_role: :main do
+            seeds from: :corpus, filter: :self_pass, cache_key: "ijon_sp"
+            mem_limit :none
+          end
+        end
+      RUBY
+
+      ir, = PrismFuzzer::Topology.load_ir(camp, fuzz_root: root_dir)
+      plan = PrismFuzzer::Topology.compile_plan(ir, fuzz_root: root_dir, build_dir: File.join(ws, "build"))
+      lp = PrismFuzzer::Topology.plan_launch(plan, fuzz_root: root_dir, fuzz_dir: ws)
+      scout = lp["workers"].find { |w| w["id"] == "ijon-scout" }
+      refute_nil scout
+
+      env_prefix = scout.dig("afl_launch", "env_prefix").join(" ")
+      assert_includes env_prefix, "ASAN_OPTIONS=abort_on_error=1"
+      assert_includes env_prefix, "detect_leaks=0"
+      assert_includes env_prefix, "UBSAN_OPTIONS=abort_on_error=1"
+
+      # self_pass screens only the primary uninstrumented fuzzer, not aux_fuzzer.
+      sp_env = scout.dig("seeds", "self_pass_env")
+      refute sp_env.key?("ASAN_OPTIONS")
+      refute sp_env.key?("UBSAN_OPTIONS")
+    end
+
+    ijon_camp = repo_path("campaigns/ijon.rb")
+    ir_def, = PrismFuzzer::Topology.load_ir(ijon_camp, fuzz_root: root_dir)
+    plan_def = PrismFuzzer::Topology.compile_plan(ir_def, fuzz_root: root_dir)
+    lp_def = PrismFuzzer::Topology.plan_launch(plan_def, fuzz_root: root_dir)
+
+    assert_equal "ijon-prism-fleet", plan_def["name"]
+    assert_equal File.join(root_dir, "tmp/fuzz-ijon/afl-ijon"), lp_def["primary_afl_dir"]
+    assert_equal 14, lp_def["worker_names"].size
+
+    scout_def = lp_def["workers"].find { |w| w["id"] == "ijon-scout" }
+    asan_def = lp_def["workers"].find { |w| w["id"] == "ijon-asan" }
+    assert_equal "fuzz.sand", scout_def.dig("afl_launch", "aux_name")
+    assert_nil scout_def.dig("afl_launch", "cmplog_name")
+    assert_equal "fuzz.cmplog", asan_def.dig("afl_launch", "cmplog_name")
+    assert_includes scout_def.dig("afl_launch", "env_prefix").join(" "), "ASAN_OPTIONS="
+    assert_equal 1, plan_def.dig("fuzzers", "fuzz.ijon.slow", "defines", "PRISM_FUZZ_ALLOW_STREAM_WITH_IJON")
+    assert_equal 1, plan_def.dig("fuzzers", "fuzz.ijon.msan", "defines", "PRISM_FUZZ_ALLOW_STREAM_WITH_IJON")
+    assert_equal ["prism_a__native"], PrismFuzzer::Topology.coverage_pairs(plan_def, fuzz_root: root_dir).map { |p| p["id"] }
+
+    with_env("PRISM_B_REF" => "a1d1d96c368d49b752d06e361823a098b54f9a9d") do
+      ir_b, = PrismFuzzer::Topology.load_ir(ijon_camp, fuzz_root: root_dir)
+      plan_b = PrismFuzzer::Topology.compile_plan(ir_b, fuzz_root: root_dir)
+      assert plan_b.dig("fuzzers", "fuzz.ijon.prism_diff", "ijon")
+      assert_equal 15, plan_b["workers"].size
+    end
+  end
+
   private
 
   def with_afl_tmpdirs(worker_ids)

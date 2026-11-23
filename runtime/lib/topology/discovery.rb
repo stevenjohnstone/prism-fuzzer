@@ -200,7 +200,10 @@ module PrismFuzzer
 
       if fspec["defines"].is_a?(Hash)
         fspec["defines"].each do |k, v|
-          define_tokens << (v == true ? "-D#{k}" : "-D#{k}=#{v}")
+          tok = v == true ? "-D#{k}" : "-D#{k}=#{v}"
+          next if COVERAGE_ORTHOGONAL_FLAG_PATTERNS.any? { |pat| pat.match?(tok) }
+
+          define_tokens << tok
         end
       end
 

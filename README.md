@@ -215,7 +215,8 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 │   ├── publish.rb                  packages report, coverage HTML, and triage artifacts into the gh-pages worktree (`reports/`)
 │   └── topology.rb                 CLI for validating, syncing, building, and planning topologies
 ├── campaigns
-│   └── default.rb                  default executable multi-fuzzer campaign script
+│   ├── default.rb                  default executable multi-fuzzer campaign script
+│   └── ijon.rb                     IJON-centric fleet campaign (sanitized, slow, MSan, and parse.y IJON hub)
 ├── dict
 │   └── prism.dict                  AFL++ / libFuzzer Ruby syntax & keyword dictionary
 ├── docker

@@ -84,11 +84,13 @@ jobs:
 
       - name: Validate campaign, example topologies, and clean library requires
         run: |
-          ruby bin/campaign.rb validate -c campaigns/default.rb
+          for camp in campaigns/*.rb; do
+            ruby bin/campaign.rb validate -c "$camp"
+            ruby bin/campaign.rb plan-launch --no-stage -c "$camp" >/dev/null
+          done
           for ex in examples/*.rb; do
             ruby bin/campaign.rb validate -c "$ex"
           done
-          ruby bin/campaign.rb plan-launch --no-stage -c campaigns/default.rb >/dev/null
           ruby -Ilib -ryaml -rdigest -rtempfile -rjson -e '
             # Pre-load stdlib helpers that add Kernel/Object methods (Digest, DelegateClass, to_yaml)
             # before checking that repository libraries define zero top-level methods/constants.
