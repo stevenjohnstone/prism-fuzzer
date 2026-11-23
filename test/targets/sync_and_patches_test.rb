@@ -32,7 +32,7 @@ class TargetsSyncAndPatchesTest < Minitest::Test
       assert_equal upstream[:v1], a["commit"]
 
       applied = Array(a.dig("resolved", "applied_patches"))
-      assert_equal 4, applied.size, "expected all 4 patches applied, got #{applied.inspect}"
+      assert_equal 5, applied.size, "expected all 5 patches applied, got #{applied.inspect}"
       assert_empty Array(a.dig("resolved", "skipped_patches"))
       assert a.dig("resolved", "templates_generated"), "expected templates_generated=true"
 
@@ -101,8 +101,8 @@ class TargetsSyncAndPatchesTest < Minitest::Test
 
       applied = Array(b.dig("resolved", "applied_patches"))
       skipped = Array(b.dig("resolved", "skipped_patches"))
-      assert_equal 3, applied.size,
-                   "expected 3 applied patches, got applied=#{applied.inspect} skipped=#{skipped.inspect}"
+      assert_equal 4, applied.size,
+                   "expected 4 applied patches, got applied=#{applied.inspect} skipped=#{skipped.inspect}"
       assert_equal 1, skipped.size,
                    "expected 1 skipped patch, got applied=#{applied.inspect} skipped=#{skipped.inspect}"
       assert_includes skipped[0]["patch"], "0002"

@@ -461,7 +461,7 @@ for pid in $PAIR_IDS; do
     clang -O0 "-I$P_PRISM_ROOT/include" "${gen_inc[@]}" -Iharnesses/prism -Iharnesses/prism/include -DSLOW -flto -ffunction-sections -fdata-sections "${P_FLAGS[@]}" -Wl,--gc-sections \
       "${src_files[@]}" harnesses/prism/coverage.c harnesses/prism/parse.c -o "$reach_bin"
 
-    llvm-nm --defined-only "$reach_bin" | grep " [Tt] " | grep -Ev '[Tt] (main|run_file|run_stdin|setup_signal_handlers|handle_crash_signal|handle_stop_signal|harness|harness_parse|check_node_location|fuzz_.*|pm_node_type|pm_diagnostic_type|pm_diagnostic_id_name)$' | awk '{print $3}' | sed 's/^/fun:/' > "$keeplist"
+    llvm-nm --defined-only "$reach_bin" | grep " [Tt] " | grep -Ev '[Tt] (main|run_file|run_stdin|setup_signal_handlers|handle_crash_signal|handle_stop_signal|harness|harness_parse|check_node_location|fuzz_.*|pm_fuzz_.*|pm_node_type|pm_diagnostic_type|pm_diagnostic_id_name)$' | awk '{print $3}' | sed 's/^/fun:/' > "$keeplist"
     rm -f "$reach_bin"
 
     echo "Building coverage binary for ${P_LABEL} (${COVERAGE_BIN})..."

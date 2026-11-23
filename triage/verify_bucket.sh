@@ -386,6 +386,7 @@ build_verify_runner() {
       "-I$FUZZ_ROOT/harnesses/prism"
       "-DPM_INTEGER_DIVIDE_THRESHOLD=8"
       "-DPRISM_DEPTH_MAXIMUM=128"
+      "-DPRISM_FUZZ_INLINE_ASSERTS"
       "-DFUZZ_MAX_INPUT_SIZE=$max_input"
       "-DFUZZ_MAX_ALLOCATED=$max_alloc"
       "-DFUZZ_HARD_RSS_LIMIT=$hard_rss"

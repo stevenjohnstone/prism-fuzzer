@@ -131,9 +131,14 @@ module FuzzSankey
             when /\AINVARIANT\[([^\]]+)\]:\s*(.+)/
               ns = Regexp.last_match(1)
               rest = Regexp.last_match(2)
-              type_m = rest[/\btype=([A-Z0-9_]+)/, 1]
+              type_m = rest[/\btype=([A-Za-z0-9_]+)/, 1]
+              site_m = rest[/\bsite=([A-Za-z0-9_]+)/, 1]
               kind_m = rest[/\bkind=([A-Za-z0-9_]+)/, 1]
-              detail = type_m || kind_m || rest[0, 32]
+              site_label = if site_m
+                             inferred = site_m[/\Apm_([a-z0-9_]+?)_node_(?:[a-z0-9_]+_)?(?:create|new)\z/, 1]
+                             inferred ? inferred.upcase : site_m
+                           end
+              detail = type_m || site_label || kind_m || rest[0, 32]
               "#{ns}: #{detail.delete_prefix('PM_').delete_suffix('_NODE')}"
             when /\ASUMMARY:\s*\w+Sanitizer:\s*([^(\n]+)/
               Regexp.last_match(1).strip[0, 34]

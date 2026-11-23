@@ -150,6 +150,43 @@ class TriageClusterTest < Minitest::Test
     assert_equal [["ABRT/u1"], ["ABRT/u2"], ["SEGV/s1", "use-of-uninitialized-value/s2"]], no_cov_groups
   end
 
+  def test_inline_span_assert_frames_strip_pm_fuzz_boilerplate_and_split_distinct_sites
+    corpus = build_corpus(
+      extra_functions: {
+        "90" => "pm_fuzz_span_fail",
+        "91" => "pm_embedded_statements_node_create",
+        "92" => "parse_pattern_primitive"
+      },
+      extra_df: { "90" => 0, "91" => 5, "92" => 5 }
+    )
+    emb_frames = [
+      { "depth" => 0, "func" => "abort", "scope" => "external" },
+      { "depth" => 1, "func" => "pm_fuzz_span_fail", "file" => "templates/src/node.c.erb", "line" => 18, "scope" => "prism" },
+      { "depth" => 2, "func" => "pm_fuzz_tokens_length", "file" => "src/prism.c", "line" => 149, "scope" => "prism" },
+      { "depth" => 3, "func" => "pm_embedded_statements_node_create", "file" => "src/prism.c", "line" => 4090, "scope" => "prism" },
+      { "depth" => 4, "func" => "parse_string_part", "file" => "src/prism.c", "line" => 17120, "scope" => "prism" }
+    ]
+    pat_frames = [
+      { "depth" => 0, "func" => "abort", "scope" => "external" },
+      { "depth" => 1, "func" => "pm_fuzz_span_fail", "file" => "templates/src/node.c.erb", "line" => 18, "scope" => "prism" },
+      { "depth" => 2, "func" => "pm_fuzz_node_length_set", "file" => "src/prism.c", "line" => 162, "scope" => "prism" },
+      { "depth" => 3, "func" => "parse_pattern_primitive", "file" => "src/prism.c", "line" => 17606, "scope" => "prism" },
+      { "depth" => 4, "func" => "parse_pattern", "file" => "src/prism.c", "line" => 17960, "scope" => "prism" }
+    ]
+
+    fvec, _norm2, top = FuzzClustering::Features.extract_frame_vector(emb_frames)
+    assert_equal "pm_embedded_statements_node_create@src/prism.c:4090", top
+    assert_in_delta 1.0, fvec["pm_embedded_statements_node_create@src/prism.c"], 1e-9
+    assert_in_delta 0.5, fvec["parse_string_part@src/prism.c"], 1e-9
+    refute fvec.keys.any? { |k| k.start_with?("pm_fuzz_") }
+
+    b_emb = make_bucket(id: "ABRT/inline_emb", reason: "ABRT", occ: 2, edges: { "1" => 1, "90" => 1, "91" => 1 }, frames: emb_frames)
+    b_pat = make_bucket(id: "ABRT/inline_pat", reason: "ABRT", occ: 2, edges: { "1" => 1, "90" => 1, "92" => 1 }, frames: pat_frames)
+    rep = FuzzClustering.cluster_metadata({ "schema_version" => 1, "corpus" => corpus, "buckets" => [b_emb, b_pat] })
+    assert_equal 2, rep.dig("summary", "cluster_count"),
+                 "distinct inline assertion parser sites must not merge via pm_fuzz_span_fail: #{rep['clusters'].inspect}"
+  end
+
   def test_prefix_boilerplate_filtering_and_dispatcher_edge_cap
     # Regression 1: prefix boilerplate filtering (fuzz_*, check_*, pm_visit_*) applies in both IDF and frames
     pfx_corpus = build_corpus(

@@ -114,8 +114,11 @@ class BuildAndCrossTest < Minitest::Test
 
       assert_includes by_out["f_xalloc"], "-DPM_ARENA_INITIAL_SIZE=0"
       assert_includes by_out["f_xalloc"], "-DPRISM_XALLOCATOR"
+      assert_includes by_out["f_xalloc"], "-DPRISM_FUZZ_INLINE_ASSERTS"
       refute_includes by_out["f_plain"], "-DPM_ARENA_INITIAL_SIZE=0"
+      assert_includes by_out["f_plain"], "-DPRISM_FUZZ_INLINE_ASSERTS"
       assert_includes by_out["f_san"], "-DPM_ARENA_INITIAL_SIZE=0"
+      assert_includes by_out["f_san"], "-DPRISM_FUZZ_INLINE_ASSERTS"
       assert_includes by_out["f_override"], "-DPM_ARENA_INITIAL_SIZE=64"
       refute_includes by_out["f_override"], "-DPM_ARENA_INITIAL_SIZE=0"
     end

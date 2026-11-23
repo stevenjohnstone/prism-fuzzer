@@ -28,7 +28,7 @@ module FuzzSankey
       "#f97316"
     when "stream_diff"
       "#a78bfa"
-    when "node_location", "diagnostic", "node_relation"
+    when "node_location", "node_sub_location", "diagnostic", "node_relation"
       "#34d399"
     when "recursion_depth"
       "#f472b6"

@@ -47,6 +47,7 @@ module FuzzClustering
     fuzz_
     check_
     pm_visit_
+    pm_fuzz_
   ].freeze
 
   BOILERPLATE_FUNCTIONS = (%w[

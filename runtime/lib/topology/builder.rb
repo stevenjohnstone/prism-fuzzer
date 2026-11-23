@@ -222,6 +222,9 @@ module PrismFuzzer
       flags.concat(source_provenance_flags(src))
       inc_dirs.each { |d| flags << "-I#{d}" }
       flags << "-DPRISM_FUZZ_IJON" if ijon_enabled
+      if afl_mode != "cmplog" && !override_macros.include?("PRISM_FUZZ_INLINE_ASSERTS") && !override_macros.include?("PRISM_NO_INLINE_ASSERTS")
+        flags << "-DPRISM_FUZZ_INLINE_ASSERTS"
+      end
       flags << "-DPRISM_XALLOCATOR" if fspec["xallocator"]
       flags << "-Dpm_strncasecmp=strncasecmp" if afl_mode == "cmplog"
       flags.concat(override_flags)

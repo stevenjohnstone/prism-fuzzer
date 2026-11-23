@@ -10,7 +10,7 @@ module PrismFuzzerTest
 
     # Creates a 3-commit synthetic upstream Prism git repository matching the
     # patch context expected by patches/prism/*:
-    #   v1: unpatched upstream (all 4 repo patches apply cleanly)
+    #   v1: unpatched upstream (all 5 repo patches apply cleanly)
     #   v2: v1 with 0002-accel-swar-backend-define.patch already upstream
     #   v3: v2 with a third source change in src/integer.c
     # Returns { repo:, v1:, v2:, v3: }.
@@ -57,7 +57,10 @@ module PrismFuzzerTest
             lines[after_idx] = "#endif"
           end
         end
-        lines << "typedef int pm_fixture_tu_#{File.basename(rel_path, '.c')}_t;"
+        if rel_path.end_with?(".c")
+          tu_decl = "typedef int pm_fixture_tu_#{File.basename(rel_path, '.c')}_t;"
+          lines << tu_decl unless lines.include?(tu_decl)
+        end
         File.write(full, "#{lines.join("\n")}\n")
       end
     end
@@ -200,6 +203,11 @@ module PrismFuzzerTest
         dir,
         File.join(root_dir, "patches/prism/0004-ijon-source-guidance.patch"),
         line_shifts: { "src/integer.c" => [[32, -2]] }
+      )
+      populate_patch_preimage!(
+        dir,
+        File.join(root_dir, "patches/prism/0005-inline-span-assertions.patch"),
+        line_shifts: { "src/prism.c" => [[95, -1]] }
       )
 
       git.call("add", "-A")

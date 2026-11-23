@@ -127,6 +127,14 @@ class SankeyTest < Minitest::Test
   end
 
   def test_sankey_empty_triage_handling
+    assert_equal "cluster-01 · node_location: CASE_MATCH",
+                 FuzzSankey.concise_cluster_title({
+                   "cluster_id" => "cluster-01",
+                   "representative" => {
+                     "headline" => "INVARIANT[node_location]: site=pm_case_match_node_create op=tokens_length kind=length_underflow [detail: length=4294967292]"
+                   }
+                 })
+    assert_equal "#34d399", FuzzSankey.color_for("node_sub_location", layer_kind: :category)
     with_tmpdir("sankey-test-") do |workdir|
       empty_dir = File.join(workdir, "empty_triage")
       FileUtils.mkdir_p(empty_dir)

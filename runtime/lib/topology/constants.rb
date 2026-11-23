@@ -112,7 +112,7 @@ module PrismFuzzer
       /\A-fvisibility=/,
       /\A-std=/,
       /\A-W/,
-      /\A-D(?:PRISM_FUZZ_IJON|PRISM_FUZZ_ALLOW_STREAM_WITH_IJON|PRISM_NO_SOURCE_IJON|PRISM_XALLOCATOR|SLOW)(?:=.*)?\z/
+      /\A-D(?:PRISM_FUZZ_IJON|PRISM_FUZZ_ALLOW_STREAM_WITH_IJON|PRISM_NO_SOURCE_IJON|PRISM_FUZZ_INLINE_ASSERTS|PRISM_NO_INLINE_ASSERTS|PRISM_XALLOCATOR|SLOW)(?:=.*)?\z/
     ].freeze
 
     class TopologyError < StandardError; end

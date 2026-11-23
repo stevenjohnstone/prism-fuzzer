@@ -1,0 +1,437 @@
+From 002e85d87806e73937680cb2c4581f511b44755d Mon Sep 17 00:00:00 2001
+From: prism-fuzzer <fuzz@prism-fuzzer.local>
+Date: Mon, 23 Nov 2026 20:32:33 +0000
+Subject: [PATCH] Add optional inline AST and diagnostic span invariant
+ assertions
+
+---
+ include/prism/internal/fuzz_assert.h | 126 ++++++++++++++++++++++
+ include/prism/internal/node.h        |   9 ++
+ src/prism.c                          | 153 ++++++++++++++++++++++++++-
+ templates/src/node.c.erb             |  28 +++++
+ 4 files changed, 313 insertions(+), 3 deletions(-)
+ create mode 100644 include/prism/internal/fuzz_assert.h
+
+diff --git a/include/prism/internal/fuzz_assert.h b/include/prism/internal/fuzz_assert.h
+new file mode 100644
+index 0000000..39c196b
+--- /dev/null
++++ b/include/prism/internal/fuzz_assert.h
+@@ -0,0 +1,126 @@
++#ifndef PRISM_INTERNAL_FUZZ_ASSERT_H
++#define PRISM_INTERNAL_FUZZ_ASSERT_H
++
++#if defined(PRISM_FUZZ_INLINE_ASSERTS) && !defined(PRISM_NO_INLINE_ASSERTS)
++#define PRISM_FUZZ_INLINE_ASSERTS_ENABLED 1
++
++#include "prism/compiler/branch.h"
++#include "prism/compiler/format.h"
++#include "prism/compiler/inline.h"
++#include "prism/compiler/noreturn.h"
++
++#include "prism/ast.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++PRISM_NORETURN void
++pm_fuzz_span_fail(const char *fmt, ...) PRISM_ATTRIBUTE_FORMAT(1, 2);
++
++static PRISM_INLINE const char *
++pm_fuzz_loc_violation_kind(uint32_t start, uint32_t length) {
++    if (start >= 0x80000000U) {
++        return "start_underflow";
++    }
++    if (length >= 0x80000000U) {
++        return "length_underflow";
++    }
++    if ((uint64_t) start + (uint64_t) length >= 0x100000000ULL) {
++        return "length_underflow";
++    }
++    return NULL;
++}
++
++static PRISM_INLINE const char *
++pm_fuzz_bounded_violation_kind(uint32_t start, uint32_t length, size_t parsed_size) {
++    if ((size_t) start <= parsed_size && (size_t) length <= parsed_size - (size_t) start) {
++        return NULL;
++    }
++    if ((uint64_t) parsed_size < 0x80000000ULL && start >= 0x80000000U) {
++        return "start_underflow";
++    }
++    if ((uint64_t) parsed_size < 0x80000000ULL && length >= 0x80000000U) {
++        return "length_underflow";
++    }
++    if ((uint64_t) start + (uint64_t) length >= 0x100000000ULL) {
++        return "length_underflow";
++    }
++    if ((size_t) start > parsed_size) {
++        return "start_oob";
++    }
++    return "end_oob";
++}
++
++static PRISM_INLINE void
++pm_fuzz_assert_node_loc(pm_location_t loc, const char *node_type, const char *site) {
++    const char *kind = pm_fuzz_loc_violation_kind(loc.start, loc.length);
++    if (PRISM_UNLIKELY(kind != NULL)) {
++        pm_fuzz_span_fail(
++            "INVARIANT[node_location]: site=%s type=%s kind=%s [detail: start=%u length=%u]\n",
++            site,
++            node_type,
++            kind,
++            loc.start,
++            loc.length
++        );
++    }
++}
++
++static PRISM_INLINE void
++pm_fuzz_assert_sub_loc(pm_location_t loc, const char *node_type, const char *field_name, const char *site) {
++    const char *kind = pm_fuzz_loc_violation_kind(loc.start, loc.length);
++    if (PRISM_UNLIKELY(kind != NULL)) {
++        pm_fuzz_span_fail(
++            "INVARIANT[node_sub_location]: site=%s type=%s field=%s kind=%s [detail: start=%u length=%u]\n",
++            site,
++            node_type,
++            field_name,
++            kind,
++            loc.start,
++            loc.length
++        );
++    }
++}
++
++static PRISM_INLINE uint32_t
++pm_fuzz_bounds_diff(uint32_t start, uint32_t end, const char *op, const char *site) {
++    if (PRISM_UNLIKELY(start >= 0x80000000U)) {
++        pm_fuzz_span_fail(
++            "INVARIANT[node_location]: site=%s op=%s kind=start_underflow [detail: start=%u end=%u]\n",
++            site,
++            op,
++            start,
++            end
++        );
++    }
++    if (PRISM_UNLIKELY(end < start)) {
++        pm_fuzz_span_fail(
++            "INVARIANT[node_location]: site=%s op=%s kind=length_underflow [detail: start=%u end=%u length=%u]\n",
++            site,
++            op,
++            start,
++            end,
++            (uint32_t) (end - start)
++        );
++    }
++    return (uint32_t) (end - start);
++}
++
++static PRISM_INLINE pm_location_t
++pm_fuzz_location_init(uint32_t start, uint32_t length, const char *site) {
++    const char *kind = pm_fuzz_loc_violation_kind(start, length);
++    if (PRISM_UNLIKELY(kind != NULL)) {
++        pm_fuzz_span_fail(
++            "INVARIANT[node_location]: site=%s op=location_init kind=%s [detail: start=%u length=%u]\n",
++            site,
++            kind,
++            start,
++            length
++        );
++    }
++    return (pm_location_t) { .start = start, .length = length };
++}
++
++#endif
++
++#endif
+diff --git a/include/prism/internal/node.h b/include/prism/internal/node.h
+index 9519a3e..a08c45a 100644
+--- a/include/prism/internal/node.h
++++ b/include/prism/internal/node.h
+@@ -8,6 +8,7 @@
+ 
+ #include "prism/arena.h"
+ #include "prism/internal/assert.h"
++#include "prism/internal/fuzz_assert.h"
+ 
+ #include <stddef.h>
+ #include <stdint.h>
+@@ -23,11 +24,19 @@
+  * An unset location must be initialized separately from the first child. */
+ static PRISM_FORCE_INLINE pm_location_t
+ pm_location_join(pm_location_t left, pm_location_t right) {
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++    pm_fuzz_assert_node_loc(left, "JOIN_LEFT", "pm_location_join");
++    pm_fuzz_assert_node_loc(right, "JOIN_RIGHT", "pm_location_join");
++#endif
+     uint32_t start = left.start < right.start ? left.start : right.start;
+     uint32_t left_end = PM_LOCATION_END(&left);
+     uint32_t right_end = PM_LOCATION_END(&right);
+     uint32_t end = left_end > right_end ? left_end : right_end;
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++    pm_location_t location = { .start = start, .length = pm_fuzz_bounds_diff(start, end, "location_join", "pm_location_join") };
++#else
+     pm_location_t location = { .start = start, .length = end - start };
++#endif
+     return location;
+ }
+ 
+diff --git a/src/prism.c b/src/prism.c
+index 270dd3c..1faf6e0 100644
+--- a/src/prism.c
++++ b/src/prism.c
+@@ -95,14 +95,108 @@ pm_version(void) {
+ #define FL PM_NODE_FLAGS
+ #define UP PM_NODE_UPCAST
+ 
++#define PM_NODE_START(node_) (UP(node_)->location.start)
++#define PM_NODE_LENGTH(node_) (UP(node_)->location.length)
++#define PM_NODE_END(node_) (UP(node_)->location.start + UP(node_)->location.length)
++
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++static PRISM_INLINE void
++pm_fuzz_validate_token(const pm_parser_t *parser, const pm_token_t *token, const char *op, const char *site) {
++    if (PRISM_UNLIKELY(token == NULL || token->start == NULL || token->end == NULL)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=%s kind=null_token\n", site, op);
++    }
++    if (PRISM_UNLIKELY(token->start < parser->start)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=%s kind=start_underflow\n", site, op);
++    }
++    if (PRISM_UNLIKELY(token->end < token->start)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=%s kind=length_underflow\n", site, op);
++    }
++    if (PRISM_UNLIKELY(token->end > parser->end)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=%s kind=end_oob\n", site, op);
++    }
++}
++
++static PRISM_INLINE uint32_t
++pm_fuzz_token_start(const pm_parser_t *parser, const pm_token_t *token, const char *site) {
++    pm_fuzz_validate_token(parser, token, "token_start", site);
++    return U32(token->start - parser->start);
++}
++
++static PRISM_INLINE uint32_t
++pm_fuzz_token_end(const pm_parser_t *parser, const pm_token_t *token, const char *site) {
++    pm_fuzz_validate_token(parser, token, "token_end", site);
++    return U32(token->end - parser->start);
++}
++
++static PRISM_INLINE uint32_t
++pm_fuzz_token_length(const pm_token_t *token, const char *site) {
++    if (PRISM_UNLIKELY(token == NULL || token->start == NULL || token->end == NULL)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=token_length kind=null_token\n", site);
++    }
++    if (PRISM_UNLIKELY(token->end < token->start || (size_t) (token->end - token->start) >= 0x80000000U)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=token_length kind=length_underflow\n", site);
++    }
++    return U32(token->end - token->start);
++}
++
++static PRISM_INLINE uint32_t
++pm_fuzz_tokens_length(const pm_token_t *left, const pm_token_t *right, const char *site) {
++    if (PRISM_UNLIKELY(left == NULL || right == NULL || left->start == NULL || right->end == NULL)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=tokens_length kind=null_token\n", site);
++    }
++    if (PRISM_UNLIKELY(right->end < left->start || (size_t) (right->end - left->start) >= 0x80000000U)) {
++        pm_fuzz_span_fail(
++            "INVARIANT[node_location]: site=%s op=tokens_length kind=length_underflow [detail: length=%u]\n",
++            site,
++            U32(right->end - left->start)
++        );
++    }
++    return U32(right->end - left->start);
++}
++
++static PRISM_INLINE uint32_t
++pm_fuzz_node_length_set(pm_node_t *node, uint32_t end, const char *op, const char *site) {
++    uint32_t start = node->location.start;
++    if (PRISM_UNLIKELY(start >= 0x80000000U || end < start)) {
++        const char *kind = start >= 0x80000000U ? "start_underflow" : "length_underflow";
++        pm_fuzz_span_fail(
++            "INVARIANT[node_location]: site=%s type=%s kind=%s [detail: op=%s start=%u end=%u length=%u]\n",
++            site,
++            pm_node_type(node->type),
++            kind,
++            op,
++            start,
++            end,
++            U32(end - start)
++        );
++    }
++    node->location.length = U32(end - start);
++    return node->location.length;
++}
++
++#define PM_TOKEN_START(parser_, token_) pm_fuzz_token_start((parser_), (token_), __func__)
++#define PM_TOKEN_END(parser_, token_) pm_fuzz_token_end((parser_), (token_), __func__)
++#define PM_TOKEN_LENGTH(token_) pm_fuzz_token_length((token_), __func__)
++#define PM_TOKENS_LENGTH(left_, right_) pm_fuzz_tokens_length((left_), (right_), __func__)
++
++#define PM_NODES_LENGTH(left_, right_) pm_fuzz_bounds_diff(PM_NODE_START(left_), PM_NODE_END(right_), "nodes_length", __func__)
++#define PM_TOKEN_NODE_LENGTH(parser_, token_, node_) pm_fuzz_bounds_diff(PM_TOKEN_START(parser_, token_), PM_NODE_END(node_), "token_node_length", __func__)
++#define PM_NODE_TOKEN_LENGTH(parser_, node_, token_) pm_fuzz_bounds_diff(PM_NODE_START(node_), PM_TOKEN_END(parser_, token_), "node_token_length", __func__)
++
++#define PM_NODE_START_SET_NODE(left_, right_) (PM_NODE_START(left_) = PM_NODE_START(right_))
++#define PM_NODE_START_SET_TOKEN(parser_, node_, token_) (PM_NODE_START(node_) = PM_TOKEN_START(parser_, token_))
++#define PM_NODE_LENGTH_SET_NODE(left_, right_) pm_fuzz_node_length_set(UP(left_), PM_NODE_END(right_), "length_set_node", __func__)
++#define PM_NODE_LENGTH_SET_TOKEN(parser_, node_, token_) pm_fuzz_node_length_set(UP(node_), PM_TOKEN_END(parser_, token_), "length_set_token", __func__)
++#define PM_NODE_LENGTH_SET_LOCATION(node_, location_) pm_fuzz_node_length_set(UP(node_), PM_LOCATION_END(location_), "length_set_location", __func__)
++
++#define PM_LOCATION_INIT(start_, length_) pm_fuzz_location_init((start_), (length_), __func__)
++#define PM_LOCATION_INIT_BOUNDS(start_, end_) PM_LOCATION_INIT((start_), pm_fuzz_bounds_diff((start_), (end_), "bounds", __func__))
++#else
+ #define PM_TOKEN_START(parser_, token_) U32((token_)->start - (parser_)->start)
+ #define PM_TOKEN_END(parser_, token_) U32((token_)->end - (parser_)->start)
+ #define PM_TOKEN_LENGTH(token_) U32((token_)->end - (token_)->start)
+ #define PM_TOKENS_LENGTH(left_, right_) U32((right_)->end - (left_)->start)
+ 
+-#define PM_NODE_START(node_) (UP(node_)->location.start)
+-#define PM_NODE_LENGTH(node_) (UP(node_)->location.length)
+-#define PM_NODE_END(node_) (UP(node_)->location.start + UP(node_)->location.length)
+ #define PM_NODES_LENGTH(left_, right_) (PM_NODE_END(right_) - PM_NODE_START(left_))
+ 
+ #define PM_TOKEN_NODE_LENGTH(parser_, token_, node_) (PM_NODE_END(node_) - PM_TOKEN_START(parser_, token_))
+@@ -129,6 +223,7 @@ pm_location_init(uint32_t start, uint32_t length) {
+ 
+ #define PM_LOCATION_INIT(start_, length_) pm_location_init((start_), (length_))
+ #define PM_LOCATION_INIT_BOUNDS(start_, end_) PM_LOCATION_INIT((start_), U32((end_) - (start_)))
++#endif
+ #define PM_LOCATION_INIT_UNSET PM_LOCATION_INIT(0, 0)
+ #define PM_LOCATION_INIT_TOKEN(parser_, token_) PM_LOCATION_INIT(PM_TOKEN_START(parser_, token_), PM_TOKEN_LENGTH(token_))
+ #define PM_LOCATION_INIT_NODE(node_) UP(node_)->location
+@@ -526,10 +621,35 @@ debug_lex_state_set(pm_parser_t *parser, pm_lex_state_t state, char const * call
+ /**
+  * Append an error to the list of errors on the parser.
+  */
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
+ static PRISM_INLINE void
++pm_fuzz_assert_diag_span(const pm_parser_t *parser, const char *list_name, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id, const char *site) {
++    size_t parsed_size = (size_t) (parser->end - parser->start);
++    const char *kind = pm_fuzz_bounded_violation_kind(start, length, parsed_size);
++    if (PRISM_UNLIKELY(kind != NULL)) {
++        pm_diagnostic_t tmp = { .diag_id = diag_id };
++        const char *dtype = pm_diagnostic_type(&tmp);
++        pm_fuzz_span_fail(
++            "INVARIANT[diagnostic]: site=%s list=%s type=%s kind=%s [detail: start=%u length=%u parsed_size=%zu]\n",
++            site,
++            list_name,
++            (dtype != NULL && dtype[0] != 0) ? dtype : "unknown",
++            kind,
++            start,
++            length,
++            parsed_size
++        );
++    }
++}
++#endif
++
++static PRISM_INLINE void
+ pm_parser_err(pm_parser_t *parser, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id) {
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++    pm_fuzz_assert_diag_span(parser, "error", start, length, diag_id, "pm_parser_err");
++#endif
+     pm_diagnostic_list_append(&parser->metadata_arena, &parser->error_list, start, length, diag_id);
+ }
+ 
+ /**
+  * Append an error to the list of errors on the parser using the location of the
+@@ -580,8 +700,18 @@ pm_parser_err_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id_
+ /**
+  * Append an error to the list of errors on the parser using a format string.
+  */
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++#define PM_PARSER_ERR_FORMAT(parser_, start_, length_, diag_id_, ...) \
++    do { \
++        uint32_t pm_fuzz_s_ = (start_); \
++        uint32_t pm_fuzz_l_ = (length_); \
++        pm_fuzz_assert_diag_span((parser_), "error", pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __func__); \
++        pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->error_list, pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __VA_ARGS__); \
++    } while (0)
++#else
+ #define PM_PARSER_ERR_FORMAT(parser_, start_, length_, diag_id_, ...) \
+     pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->error_list, start_, length_, diag_id_, __VA_ARGS__)
++#endif
+ 
+ /**
+  * Append an error to the list of errors on the parser using the location of the
+@@ -616,6 +746,9 @@ pm_parser_err_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id_
+  */
+ static PRISM_INLINE void
+ pm_parser_warn(pm_parser_t *parser, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id) {
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++    pm_fuzz_assert_diag_span(parser, "warning", start, length, diag_id, "pm_parser_warn");
++#endif
+     pm_diagnostic_list_append(&parser->metadata_arena, &parser->warning_list, start, length, diag_id);
+ }
+ 
+@@ -641,8 +774,18 @@ pm_parser_warn_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id
+  * Append a warning to the list of warnings on the parser using a format string
+  * and the given location.
+  */
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++#define PM_PARSER_WARN_FORMAT(parser_, start_, length_, diag_id_, ...) \
++    do { \
++        uint32_t pm_fuzz_s_ = (start_); \
++        uint32_t pm_fuzz_l_ = (length_); \
++        pm_fuzz_assert_diag_span((parser_), "warning", pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __func__); \
++        pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->warning_list, pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __VA_ARGS__); \
++    } while (0)
++#else
+ #define PM_PARSER_WARN_FORMAT(parser_, start_, length_, diag_id_, ...) \
+     pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->warning_list, start_, length_, diag_id_, __VA_ARGS__)
++#endif
+ 
+ /**
+  * Append a warning to the list of warnings on the parser using the location of
+diff --git a/templates/src/node.c.erb b/templates/src/node.c.erb
+index 842a978..e9404f0 100644
+--- a/templates/src/node.c.erb
++++ b/templates/src/node.c.erb
+@@ -2,8 +2,28 @@
+ #include "prism/internal/node.h"
+ 
+ #include "prism/internal/arena.h"
++#include "prism/internal/fuzz_assert.h"
+ #include "prism/internal/oom.h"
+ 
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++#include <stdarg.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++#if defined(__GNUC__) || defined(__clang__)
++__attribute__((noinline, cold))
++#endif
++PRISM_NORETURN void
++pm_fuzz_span_fail(const char *fmt, ...) {
++    va_list args;
++    va_start(args, fmt);
++    vfprintf(stderr, fmt, args);
++    va_end(args);
++    fflush(stderr);
++    abort();
++}
++#endif
++
+ /**
+  * Attempts to grow the scratch list to the next size. If there is already
+  * capacity in the list, this function does nothing. Otherwise it allocates a
+@@ -263,6 +283,14 @@ pm_visit_child_nodes(const pm_node_t *node, pm_visit_callback_t visitor, void *d
+  */
+ pm_<%= node.human %>_t *
+ pm_<%= node.human %>_new(pm_arena_t *arena, uint32_t node_id, pm_node_flags_t flags, pm_location_t location<%= params.empty? ? "" : ", #{params.join(", ")}" %>) {
++#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
++    pm_fuzz_assert_node_loc(location, "<%= node.type %>", "pm_<%= node.human %>_new");
++<%- node.fields.each do |field| -%>
++<%- if field.is_a?(Prism::Template::LocationField) || field.is_a?(Prism::Template::OptionalLocationField) -%>
++    pm_fuzz_assert_sub_loc(<%= field.name %>, "<%= node.type %>", "<%= field.name %>", "pm_<%= node.human %>_new");
++<%- end -%>
++<%- end -%>
++#endif
+     pm_<%= node.human %>_t *node = PM_ARENA_ALLOC(arena, pm_<%= node.human %>_t);
+ 
+     *node = (pm_<%= node.human %>_t) {
+-- 
+2.56.1
+
