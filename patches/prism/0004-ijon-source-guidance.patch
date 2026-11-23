@@ -1,0 +1,451 @@
+From bc7877c071184602e01416d27a30a46f12b02460 Mon Sep 17 00:00:00 2001
+From: prism-fuzzer <fuzz@prism-fuzzer.local>
+Date: Mon, 23 Nov 2026 16:28:49 +0000
+Subject: [PATCH] Add optional source-level IJON fuzzing guidance and regexp
+ depth guard
+
+---
+ include/prism/internal/ijon.h | 91 +++++++++++++++++++++++++++++++++++
+ src/arena.c                   |  2 +
+ src/constant_pool.c           | 11 +++++
+ src/double.c                  |  4 ++
+ src/integer.c                 |  3 ++
+ src/prism.c                   | 19 ++++++++
+ src/regexp.c                  | 15 ++++++
+ src/static_literals.c         | 13 +++++
+ src/xxh3.c                    |  2 +
+ 9 files changed, 160 insertions(+)
+ create mode 100644 include/prism/internal/ijon.h
+
+diff --git a/include/prism/internal/ijon.h b/include/prism/internal/ijon.h
+new file mode 100644
+index 0000000..d23b727
+--- /dev/null
++++ b/include/prism/internal/ijon.h
+@@ -0,0 +1,91 @@
++#ifndef PRISM_INTERNAL_IJON_H
++#define PRISM_INTERNAL_IJON_H
++
++/* AFL++ force-includes afl/types.h under AFL_LLVM_IJON=1, which defines MIN/MAX
++ * before src/prism.c defines its own MIN/MAX macros. */
++#ifdef _USE_IJON
++#undef MIN
++#undef MAX
++#endif
++
++#if defined(PRISM_FUZZ_IJON) && !defined(PRISM_NO_SOURCE_IJON)
++#define PRISM_FUZZ_IJON_ENABLED 1
++#include "prism/compiler/inline.h"
++
++#include <stdint.h>
++
++#ifndef _USE_IJON
++extern void ijon_set(uint32_t addr, uint32_t val);
++extern void ijon_max(uint32_t addr, uint64_t val);
++#endif
++
++#ifndef FUZZ_IJON_SIDE_SALT
++#define FUZZ_IJON_SIDE_SALT 0u
++#endif
++
++#define PM_IJON_MAX_CAP 0x3fffffffffffffffULL
++
++static PRISM_INLINE uint32_t
++pm_ijon_mix32(uint32_t h) {
++    h ^= h >> 16;
++    h *= 0x85ebca6bu;
++    h ^= h >> 13;
++    h *= 0xc2b2ae35u;
++    h ^= h >> 16;
++    return h;
++}
++
++static PRISM_INLINE uint32_t
++pm_ijon_loc(uint32_t tag) {
++    uint32_t h = pm_ijon_mix32(tag ^ (uint32_t) FUZZ_IJON_SIDE_SALT ^ 0x9e3779b9u);
++    return h == 0u ? 1u : h;
++}
++
++static PRISM_INLINE uint64_t
++pm_ijon_clamp(uint64_t val) {
++    return val < PM_IJON_MAX_CAP ? val : PM_IJON_MAX_CAP;
++}
++
++#define PM_IJON_SET(tag, val) \
++    do { \
++        uint32_t pm_ijon_addr_ = pm_ijon_loc((uint32_t) (tag)); \
++        ijon_set(pm_ijon_addr_, pm_ijon_mix32(pm_ijon_addr_ ^ (uint32_t) (val))); \
++    } while (0)
++
++#define PM_IJON_MAX(tag, val) \
++    do { \
++        ijon_max(pm_ijon_loc((uint32_t) (tag)), pm_ijon_clamp((uint64_t) (val))); \
++    } while (0)
++
++#define PM_IJON_MIN(tag, dist) \
++    do { \
++        ijon_max(pm_ijon_loc((uint32_t) (tag)), PM_IJON_MAX_CAP - pm_ijon_clamp((uint64_t) (dist))); \
++    } while (0)
++
++#define PM_IJON_SET_IF(cond, tag, val) \
++    do { \
++        if (cond) PM_IJON_SET(tag, val); \
++    } while (0)
++
++#define PM_IJON_MAX_IF(cond, tag, val) \
++    do { \
++        if (cond) PM_IJON_MAX(tag, val); \
++    } while (0)
++
++#define PM_IJON_MIN_IF(cond, tag, dist) \
++    do { \
++        if (cond) PM_IJON_MIN(tag, dist); \
++    } while (0)
++
++#else
++
++#define PM_IJON_SET(tag, val) ((void) 0)
++#define PM_IJON_MAX(tag, val) ((void) 0)
++#define PM_IJON_MIN(tag, dist) ((void) 0)
++#define PM_IJON_SET_IF(cond, tag, val) ((void) 0)
++#define PM_IJON_MAX_IF(cond, tag, val) ((void) 0)
++#define PM_IJON_MIN_IF(cond, tag, dist) ((void) 0)
++
++#endif
++
++#endif
+diff --git a/src/arena.c b/src/arena.c
+index bbe698d..47efbc1 100644
+--- a/src/arena.c
++++ b/src/arena.c
+@@ -2,6 +2,7 @@
+ 
+ #include "prism/internal/allocator.h"
+ #include "prism/internal/assert.h"
++#include "prism/internal/ijon.h"
+ #include "prism/internal/oom.h"
+ 
+ #include <stdint.h>
+@@ -79,6 +80,7 @@ pm_arena_block_new(pm_arena_t *arena, size_t data_size, size_t initial_used) {
+     pm_arena_block_t *block = pm_arena_block_alloc(arena->current, data_size, initial_used);
+     arena->current = block;
+     arena->block_count++;
++    PM_IJON_MAX_IF(arena->block_count >= 4, 0x801u, arena->block_count);
+     return block;
+ }
+ 
+diff --git a/src/constant_pool.c b/src/constant_pool.c
+index e5c9066..ae4f536 100644
+--- a/src/constant_pool.c
++++ b/src/constant_pool.c
+@@ -4,6 +4,7 @@
+ #include "prism/compiler/inline.h"
+ #include "prism/internal/arena.h"
+ #include "prism/internal/assert.h"
++#include "prism/internal/ijon.h"
+ 
+ #include <stdbool.h>
+ 
+@@ -323,6 +324,9 @@ pm_constant_pool_insert(pm_arena_t *arena, pm_constant_pool_t *pool, const uint8
+     uint32_t hash = pm_constant_pool_hash(start, length);
+     uint32_t index = hash & mask;
+     pm_constant_pool_bucket_t *bucket;
++#ifdef PRISM_FUZZ_IJON_ENABLED
++    uint32_t probe_steps = 0;
++#endif
+ 
+     while (bucket = &pool->buckets[index], bucket->id != PM_CONSTANT_ID_UNSET) {
+         // If there is a collision, then we need to check if the content is the
+@@ -344,11 +348,18 @@ pm_constant_pool_insert(pm_arena_t *arena, pm_constant_pool_t *pool, const uint8
+         }
+ 
+         index = (index + 1) & mask;
++#ifdef PRISM_FUZZ_IJON_ENABLED
++        probe_steps++;
++#endif
+     }
++#ifdef PRISM_FUZZ_IJON_ENABLED
++    PM_IJON_MAX_IF(probe_steps > 0, 0x302u, probe_steps);
++#endif
+ 
+     // IDs are allocated starting at 1, since the value 0 denotes a non-existent
+     // constant.
+     uint32_t id = ++pool->size;
++    PM_IJON_MAX_IF(id >= 16, 0x301u, id);
+     PRISM_ASSERT(pool->size < ((uint32_t) (1 << 30)));
+ 
+     *bucket = (pm_constant_pool_bucket_t) {
+diff --git a/src/double.c b/src/double.c
+index 61b15e3..57c3116 100644
+--- a/src/double.c
++++ b/src/double.c
+@@ -3,6 +3,7 @@
+ #include "prism/internal/assert.h"
+ #include "prism/internal/bignum.h"
+ #include "prism/internal/bit.h"
++#include "prism/internal/ijon.h"
+ 
+ #include <float.h>
+ #include <stdbool.h>
+@@ -163,6 +164,7 @@ pm_double_round(uint64_t mantissa, int64_t exponent, bool inexact) {
+      * subnormal if the value is that small. */
+     int64_t shift = (int64_t) pm_bsrll(mantissa) + 1 - 53;
+     if (shift < -1074 - exponent) shift = -1074 - exponent;
++    PM_IJON_MIN(0x501u, shift <= 0 ? 0ULL : (uint64_t) shift);
+ 
+     uint64_t bits;
+     if (shift <= 0) {
+@@ -173,6 +175,7 @@ pm_double_round(uint64_t mantissa, int64_t exponent, bool inexact) {
+     } else {
+         uint64_t half = (uint64_t) 1 << (shift - 1);
+         uint64_t rest = mantissa & (half - 1 + half);
++        PM_IJON_MIN(0x502u, rest ^ half);
+         bits = shift == 64 ? 0 : mantissa >> shift;
+         if (rest > half || (rest == half && (inexact || (bits & 1)))) bits++;
+     }
+@@ -182,6 +185,7 @@ pm_double_round(uint64_t mantissa, int64_t exponent, bool inexact) {
+      * subnormal that rounded up into the normal range, and a significand that
+      * rounded up to 2**53 into the next binade. */
+     int64_t scale = exponent + shift;
++    PM_IJON_MIN(0x503u, scale >= 971 ? 0ULL : (uint64_t) (971 - scale));
+     if (scale > 971) return PM_DOUBLE_INFINITY;
+ 
+     bits += (uint64_t) (scale + 1074) << 52;
+diff --git a/src/integer.c b/src/integer.c
+index 554a52a..21160ee 100644
+--- a/src/integer.c
++++ b/src/integer.c
+@@ -9,6 +9,7 @@
+ #include "prism/internal/bignum.h"
+ #include "prism/internal/bit.h"
+ #include "prism/internal/buffer.h"
++#include "prism/internal/ijon.h"
+ #include "prism/internal/oom.h"
+ 
+ /* Include sys/types.h before inttypes.h to work around an issue with certain
+@@ -266,6 +267,7 @@ pm_integer_parse_decimal_divide(pm_arena_t *arena, pm_integer_t *integer, uint32
+         powers[level].words = pm_bignum_scratch_take(&scratch, 2 * previous->length);
+         pm_bignum_multiply(&powers[level], previous, previous, &scratch);
+     }
++    PM_IJON_MAX(0x601u, level);
+ 
+     pm_integer_parse_decimal_divide_chunks(&result, nchunks, chunks, powers, &scratch);
+     xfree_sized(allocation, sizeof(uint32_t) * (size_t) scratch_size);
+@@ -342,6 +344,7 @@ pm_integer_parse_digits(pm_arena_t *arena, pm_integer_t *integer, uint32_t base,
+     for (; cursor < end; cursor++) {
+         if (pm_integer_separator(*cursor)) continue;
+         uint64_t digit = (uint64_t) pm_integer_parse_digit(*cursor);
++        PM_IJON_MIN_IF(cursor - start >= 16, 0x602u, value >= limit ? 0ULL : (limit - value));
+ 
+         if (value > limit || (value == limit && digit > limit_digit)) {
+             uint32_t digits = 0;
+diff --git a/src/prism.c b/src/prism.c
+index dcbd52a..270dd3c 100644
+--- a/src/prism.c
++++ b/src/prism.c
+@@ -14,6 +14,7 @@
+ #include "prism/internal/diagnostic.h"
+ #include "prism/internal/double.h"
+ #include "prism/internal/encoding.h"
++#include "prism/internal/ijon.h"
+ #include "prism/internal/integer.h"
+ #include "prism/internal/line_offset_list.h"
+ #include "prism/internal/list.h"
+@@ -13500,6 +13501,13 @@ parse_shareable_constant_write(pm_parser_t *parser, pm_node_t *write) {
+  */
+ static pm_node_t *
+ parse_write(pm_parser_t *parser, pm_node_t *target, pm_token_t *operator, pm_node_t *value) {
++    PM_IJON_SET_IF(
++        PM_NODE_TYPE_P(target, PM_MULTI_TARGET_NODE) || PM_NODE_TYPE_P(target, PM_SPLAT_NODE) ||
++        PM_NODE_TYPE_P(target, PM_BACK_REFERENCE_READ_NODE) || PM_NODE_TYPE_P(target, PM_NUMBERED_REFERENCE_READ_NODE),
++        0x102u,
++        ((uint32_t) PM_NODE_TYPE(target) << 8) | (uint32_t) (operator != NULL ? operator->type : 0)
++    );
++
+     switch (PM_NODE_TYPE(target)) {
+         case PM_ERROR_RECOVERY_NODE:
+             return target;
+@@ -17948,6 +17956,8 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_set_t *captures, uint8_t flags
+         return parse_resource_recovery(parser, depth);
+     }
+ 
++    PM_IJON_MAX_IF(depth > 1, 0x103u, depth);
++
+     pm_node_t *node = NULL;
+ 
+     bool leading_rest = false;
+@@ -20222,6 +20232,7 @@ parse_uninterpolated_symbol_array(pm_parser_t *parser) {
+         }
+ 
+         if (parts.size > 0) {
++            PM_IJON_MAX(0x105u, parts.size);
+             pm_array_elements_append(parser, &elements, UP(pm_interpolated_symbol_node_create(parser, NULL, &parts, NULL)));
+             parts = (pm_node_list_t) { 0 };
+         } else if (current != NULL) {
+@@ -20412,6 +20423,7 @@ parse_uninterpolated_string_array(pm_parser_t *parser) {
+         }
+ 
+         if (parts.size > 0) {
++            PM_IJON_MAX(0x106u, parts.size);
+             pm_array_elements_append(parser, &elements, UP(pm_interpolated_string_node_create(parser, NULL, &parts, NULL)));
+             parts = (pm_node_list_t) { 0 };
+         } else if (current != NULL) {
+@@ -22272,6 +22284,13 @@ parse_aref(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_bin
+ static PRISM_INLINE pm_node_t *
+ parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_binding_power, pm_binding_power_t binding_power, uint8_t flags, uint16_t depth) {
+     pm_token_t token = parser->current;
++    PM_IJON_SET_IF(
++        PM_NODE_TYPE_P(node, PM_MULTI_WRITE_NODE) || PM_NODE_TYPE_P(node, PM_RESCUE_MODIFIER_NODE) ||
++        PM_NODE_TYPE_P(node, PM_MATCH_PREDICATE_NODE) || PM_NODE_TYPE_P(node, PM_MATCH_REQUIRED_NODE) ||
++        PM_NODE_TYPE_P(node, PM_SPLAT_NODE),
++        0x101u,
++        ((uint32_t) PM_NODE_TYPE(node) << 8) | (uint32_t) token.type
++    );
+ 
+     switch (token.type) {
+         case PM_TOKEN_EQUAL:
+diff --git a/src/regexp.c b/src/regexp.c
+index abce764..cc57a63 100644
+--- a/src/regexp.c
++++ b/src/regexp.c
+@@ -9,6 +9,7 @@
+ #include "prism/internal/char.h"
+ #include "prism/internal/diagnostic.h"
+ #include "prism/internal/encoding.h"
++#include "prism/internal/ijon.h"
+ #include "prism/internal/memchr.h"
+ #include "prism/internal/node.h"
+ #include "prism/internal/options.h"
+@@ -20,7 +21,13 @@
+ #include <string.h>
+ 
+ /** The maximum depth of nested groups allowed in a regular expression. */
++#ifndef PM_REGEXP_PARSE_DEPTH_MAX
++#ifdef PRISM_DEPTH_MAXIMUM
++#define PM_REGEXP_PARSE_DEPTH_MAX PRISM_DEPTH_MAXIMUM
++#else
+ #define PM_REGEXP_PARSE_DEPTH_MAX 4096
++#endif
++#endif
+ 
+ /**
+  * Whether an ASCII byte is written as it is when a regular expression is
+@@ -2019,6 +2026,7 @@ pm_regexp_class_add_set(pm_regexp_parser_t *parser, pm_regexp_class_t *character
+ static bool
+ pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
+     const uint8_t *open = parser->cursor - 1;
++    PM_IJON_MAX_IF(depth > 1, 0x401u, depth);
+ 
+     if (depth >= PM_REGEXP_PARSE_DEPTH_MAX) {
+         pm_regexp_parse_error(parser, parser->start, parser->end, "parse depth limit over");
+@@ -2053,6 +2061,11 @@ pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
+ 
+     while (token.type != PM_REGEXP_CLASS_TOKEN_CLOSE) {
+         bool fetched = false;
++        PM_IJON_SET_IF(
++            character_class.set || token.type == PM_REGEXP_CLASS_TOKEN_AND || token.type == PM_REGEXP_CLASS_TOKEN_POSIX_OPEN,
++            0x402u,
++            ((uint32_t) character_class.state << 8) | ((uint32_t) (character_class.set ? 1u : 0u) << 7) | (uint32_t) token.type
++        );
+ 
+         switch (token.type) {
+             case PM_REGEXP_CLASS_TOKEN_EOF:
+@@ -2528,6 +2541,7 @@ pm_regexp_parse_item(pm_regexp_parser_t *parser, uint16_t depth) {
+  */
+ static bool
+ pm_regexp_parse_expression(pm_regexp_parser_t *parser, uint16_t depth) {
++    PM_IJON_MAX_IF(depth > 1, 0x403u, depth);
+     if (depth >= PM_REGEXP_PARSE_DEPTH_MAX) {
+         pm_regexp_parse_error(parser, parser->start, parser->end, "parse depth limit over");
+         return false;
+@@ -3045,6 +3059,7 @@ static const bool pm_regexp_preprocess_stops[128] = {
+  */
+ static bool
+ pm_regexp_preprocess_scan(pm_regexp_preprocessor_t *preprocessor, const uint8_t **parent_cursor, bool extended, bool nested, uint16_t depth) {
++    PM_IJON_MAX_IF(depth > 1, 0x404u, depth);
+     /* Groups nested this deeply are an error of the pattern, which its walk
+      * reports. Past that depth, this leaves the cursor where it is, so that
+      * the caller reads the escapes of the subexpression as part of its own
+diff --git a/src/static_literals.c b/src/static_literals.c
+index 9e9a4c7..8bef47e 100644
+--- a/src/static_literals.c
++++ b/src/static_literals.c
+@@ -6,6 +6,7 @@
+ #include "prism/internal/allocator.h"
+ #include "prism/internal/assert.h"
+ #include "prism/internal/buffer.h"
++#include "prism/internal/ijon.h"
+ #include "prism/internal/integer.h"
+ #include "prism/internal/isinf.h"
+ #include "prism/internal/oom.h"
+@@ -248,6 +249,7 @@ compare_nodes(const pm_parser_t *parser, const pm_node_t *left, const pm_node_t
+     enum pm_node_type left_type = static_literal_type(left);
+     enum pm_node_type right_type = static_literal_type(right);
+     if (left_type != right_type) return COMPARE(left_type, right_type);
++    PM_IJON_SET(0x201u, (uint32_t) left_type);
+ 
+     switch (left_type) {
+         case PM_INTEGER_NODE:
+@@ -379,6 +381,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+ 
+         if (literals->size < PM_STATIC_LITERALS_INLINE_CAPACITY) {
+             literals->nodes[literals->size++] = node;
++            PM_IJON_MAX_IF(literals->size >= 4, 0x202u, literals->size);
+             return NULL;
+         }
+ 
+@@ -394,6 +397,9 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+     uint64_t hash = node_hash(parser, node);
+     uint32_t mask = literals->capacity - 1;
+     uint32_t index = (uint32_t) (hash & mask);
++#ifdef PRISM_FUZZ_IJON_ENABLED
++    uint32_t probe_steps = 0;
++#endif
+ 
+     /* We use linear probing to resolve collisions. This means that if the
+      * current index is occupied, we will move to the next index and try again.
+@@ -404,7 +410,13 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+         const pm_static_literals_entry_t *entry = &literals->entries[index];
+         if (entry->hash == hash && compare_nodes(parser, entry->node, node) == 0) break;
+         index = (index + 1) & mask;
++#ifdef PRISM_FUZZ_IJON_ENABLED
++        probe_steps++;
++#endif
+     }
++#ifdef PRISM_FUZZ_IJON_ENABLED
++    PM_IJON_MAX_IF(probe_steps > 0, 0x203u, probe_steps);
++#endif
+ 
+     /* If the current index is occupied, we need to return the node that was
+      * already in the hash. Otherwise, we can just increment the size and insert
+@@ -413,6 +425,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+ 
+     if (result == NULL) {
+         literals->size++;
++        PM_IJON_MAX(0x202u, literals->size);
+         literals->entries[index] = (pm_static_literals_entry_t) { .node = node, .hash = hash };
+     } else if (replace) {
+         literals->entries[index].node = node;
+diff --git a/src/xxh3.c b/src/xxh3.c
+index 3e4fd48..12c5415 100644
+--- a/src/xxh3.c
++++ b/src/xxh3.c
+@@ -16,6 +16,7 @@
+  */
+ 
+ #include "prism/internal/xxh3.h"
++#include "prism/internal/ijon.h"
+ 
+ #include "prism/compiler/accel.h"
+ #include "prism/compiler/bswap.h"
+@@ -276,6 +277,7 @@ XXH3_64_large(const uint8_t *input, size_t length) {
+ 
+ uint64_t
+ pm_xxh3(const uint8_t *input, size_t length) {
++    PM_IJON_MAX_IF(length > 16, 0x701u, length);
+     if (length == 0) {
+         return XXH3_64_empty();
+     } else if (length <= 3) {
+-- 
+2.56.1
+

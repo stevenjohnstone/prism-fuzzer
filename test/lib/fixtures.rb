@@ -10,10 +10,58 @@ module PrismFuzzerTest
 
     # Creates a 3-commit synthetic upstream Prism git repository matching the
     # patch context expected by patches/prism/*:
-    #   v1: unpatched upstream (all 3 repo patches apply cleanly)
+    #   v1: unpatched upstream (all 4 repo patches apply cleanly)
     #   v2: v1 with 0002-accel-swar-backend-define.patch already upstream
     #   v3: v2 with a third source change in src/integer.c
     # Returns { repo:, v1:, v2:, v3: }.
+    def populate_patch_preimage!(dir, patch_path, line_shifts: {})
+      cur_file = nil
+      file_hunks = Hash.new { |h, k| h[k] = [] }
+      cur_hunk = nil
+
+      File.readlines(patch_path).each do |raw|
+        line = raw.chomp
+        if line.start_with?("diff --git ")
+          cur_hunk = nil
+          m = line.match(%r{\Adiff --git a/(\S+) b/(\S+)\z})
+          cur_file = m ? m[1] : nil
+        elsif line.start_with?("new file mode ")
+          cur_file = nil
+        elsif cur_file && (m = line.match(/\A@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@/))
+          old_start = m[1].to_i
+          cur_hunk = { start: old_start, lines: [] }
+          file_hunks[cur_file] << cur_hunk
+        elsif cur_hunk && (line.start_with?(" ") || line.start_with?("-"))
+          cur_hunk[:lines] << line[1..]
+        end
+      end
+
+      file_hunks.each do |rel_path, hunks|
+        full = File.join(dir, rel_path)
+        FileUtils.mkdir_p(File.dirname(full))
+        lines = File.file?(full) ? File.readlines(full, chomp: true) : []
+        shifts = line_shifts[rel_path] || []
+
+        hunks.each do |h|
+          adj = shifts.select { |threshold, _| h[:start] >= threshold }.sum(&:last)
+          pos = h[:start] + adj # 1-indexed
+          lines << "/* pad */" while lines.length < pos - 1
+          if pos >= 2 && (lines[pos - 2] == "/* pad */" || lines[pos - 2].to_s.start_with?("/* line "))
+            lines[pos - 2] = "#if 0"
+          end
+          h[:lines].each_with_index do |hl, idx|
+            lines[pos - 1 + idx] = hl
+          end
+          after_idx = pos - 1 + h[:lines].length
+          if lines[after_idx].nil? || lines[after_idx] == "/* pad */" || lines[after_idx].to_s.start_with?("/* line ")
+            lines[after_idx] = "#endif"
+          end
+        end
+        lines << "typedef int pm_fixture_tu_#{File.basename(rel_path, '.c')}_t;"
+        File.write(full, "#{lines.join("\n")}\n")
+      end
+    end
+
     def build_synthetic_upstream_prism(dir, root_dir: PrismFuzzerTest::ROOT_DIR)
       FileUtils.mkdir_p([
         File.join(dir, "include/prism/internal"),
@@ -148,6 +196,11 @@ module PrismFuzzerTest
         ""
       ])
       File.write(File.join(dir, "src/integer.c"), integer_lines.join("\n"))
+      populate_patch_preimage!(
+        dir,
+        File.join(root_dir, "patches/prism/0004-ijon-source-guidance.patch"),
+        line_shifts: { "src/integer.c" => [[32, -2]] }
+      )
 
       git.call("add", "-A")
       git.call("commit", "-q", "-m", "Upstream v1 (unpatched)")
