@@ -65,7 +65,10 @@ module PrismFuzzer
             File.join(ws[:build_dir], "topology.resolved.json")
           ].each do |rc|
             rdata = read_json(rc)
-            return normalize_runtime_paths!(rdata, fuzz_root: root) if rdata && rdata.key?("fuzzers")
+            next unless rdata && rdata.key?("fuzzers")
+            next if data["name"] && rdata["name"] != data["name"]
+
+            return normalize_runtime_paths!(rdata, fuzz_root: root)
           end
           return normalize_runtime_paths!(compile_plan(data, fuzz_root: root), fuzz_root: root)
         end

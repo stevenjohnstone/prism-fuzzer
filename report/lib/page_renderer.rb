@@ -19,10 +19,14 @@ module PrismFuzzerReport
 
     def render_peer_sync_rows(fleet)
       main_name = fleet[:main_name]
-      peer_sync_by_name = fleet[:peer_sync_by_name]
-      fleet[:fuzzers].reject { |f| f[:name] == main_name }.map do |f|
-        ps = peer_sync_by_name[f[:name]]
+      worker_by_name = fleet[:worker_by_name] || {}
+      rows = fleet[:sync_rows] || fleet[:fuzzers].filter_map { |f| fleet[:peer_sync_by_name][f[:name]] }
+      rows.filter_map do |ps|
+        f = ps[:source_fuzzer] || worker_by_name[ps[:source_name]]
+        next unless f
+
         consumer = ps[:consumer_name] || main_name
+        alias_label = ps[:peer_alias] && !ps[:peer_alias].empty? ? ps[:peer_alias] : "#{f[:name]}_peer"
         total = [ps[:peer_total], 1].max.to_f
         imp_w = (ps[:imported_by_main] * 100.0 / total).round(2)
         rej_w = (ps[:rejected_by_main] * 100.0 / total).round(2)
@@ -43,7 +47,7 @@ module PrismFuzzerReport
                 "Rejected by #{consumer}: #{Helpers.format_int(ps[:rejected_by_main])} | " \
                 "Unsynced backlog: #{Helpers.format_int(ps[:unsynced_backlog])}"
               when :shadow_peer
-                "#{f[:name]} → #{consumer} (#{consumer}/.synced/#{f[:name]}_peer, queue: #{Helpers.format_int(ps[:peer_total])}) — " \
+                "#{f[:name]} → #{consumer} (#{consumer}/.synced/#{alias_label}, queue: #{Helpers.format_int(ps[:peer_total])}) — " \
                 "Cursor: #{Helpers.format_int(ps[:cursor])} (#{format('%.1f%%', ps[:sync_pct])}) | " \
                 "Tested by #{consumer}: #{Helpers.format_int(ps[:tested_by_main])} | " \
                 "Imported by #{consumer}: #{Helpers.format_int(ps[:imported_by_main])} (#{format('%.2f%%', ps[:yield_pct])} of tested) | " \
@@ -58,7 +62,13 @@ module PrismFuzzerReport
                 "Skipped (sync:#{consumer}): #{Helpers.format_int(ps[:skipped_from_main])} | " \
                 "Unsynced backlog: #{Helpers.format_int(ps[:unsynced_backlog])}"
               end
-        route_suffix = (ps[:sync_mode] == :foreign_seeds || ps[:sync_mode] == :foreign_queue) ? " (-F)" : ""
+        route_suffix = if ps[:sync_mode] == :foreign_seeds || ps[:sync_mode] == :foreign_queue
+                         " (-F)"
+                       elsif ps[:sync_mode] == :shadow_peer
+                         " (peer)"
+                       else
+                         ""
+                       end
         <<~HTML
           <div class="sync-row" title="#{CGI.escapeHTML(tip)}" onclick="selectTab(#{Helpers.topo_js_arg(f[:name])})">
             <div class="sync-peer">
@@ -88,32 +98,35 @@ module PrismFuzzerReport
     end
 
     def render_peer_sync_card(fleet)
-      peer_sync_by_name = fleet[:peer_sync_by_name]
-      return "" unless peer_sync_by_name.any?
+      rows = fleet[:sync_rows] || fleet[:peer_sync_by_name].values
+      return "" unless rows.any?
 
       main_name = fleet[:main_name]
-      main_feeds = peer_sync_by_name.select { |_k, ps| ps[:consumer_name] == main_name }.values
-      upstream_feeds = peer_sync_by_name.reject { |_k, ps| ps[:consumer_name] == main_name }
-      total_main_tested = main_feeds.sum { |ps| ps[:tested_by_main] }
-      total_main_imported = main_feeds.sum { |ps| ps[:imported_by_main] }
-      total_main_backlog = main_feeds.sum { |ps| ps[:unsynced_backlog] }
-      overall_yield = total_main_tested > 0 ? (total_main_imported * 100.0 / total_main_tested) : 0.0
-      upstream_summary = upstream_feeds.map do |src_name, ps|
-        "; <code>#{CGI.escapeHTML(src_name)} &rarr; #{CGI.escapeHTML(ps[:consumer_name])}</code>: " \
-          "<strong>+#{Helpers.format_int(ps[:imported_by_main])}</strong> / <strong>#{Helpers.format_int(ps[:tested_by_main])}</strong> " \
-          "(<strong>#{format('%.2f%%', ps[:yield_pct])}</strong> yield)"
-      end.join
+      by_consumer = rows.group_by { |ps| ps[:consumer_name] || main_name }
+      ordered_consumers = ([main_name] + by_consumer.keys).uniq.select { |c| by_consumer.key?(c) }
+      consumer_summaries = ordered_consumers.map do |cname|
+        list = by_consumer[cname]
+        tested = list.sum { |ps| ps[:tested_by_main] }
+        imported = list.sum { |ps| ps[:imported_by_main] }
+        backlog = list.sum { |ps| ps[:unsynced_backlog] }
+        yld = tested > 0 ? (imported * 100.0 / tested) : 0.0
+        "into <code>#{CGI.escapeHTML(cname)}</code>: <strong>+#{Helpers.format_int(imported)}</strong> imported / " \
+          "<strong>#{Helpers.format_int(tested)}</strong> tested = <strong>#{format('%.2f%%', yld)}</strong> yield, " \
+          "<strong>#{Helpers.format_int(backlog)}</strong> unsynced backlog"
+      end.join("; ")
+      synced_path_hint = ordered_consumers.size == 1 ? "#{CGI.escapeHTML(ordered_consumers.first)}/.synced/&lt;peer&gt;" : "&lt;master&gt;/.synced/&lt;peer&gt;"
+      skipped_legend = ordered_consumers.size == 1 ? "Skipped (sync:#{CGI.escapeHTML(ordered_consumers.first)})" : "Skipped (from consumer)"
       <<~HTML
         <div class="chart-card sync-overview-card">
           <div class="chart-header">
             <div>
               <h3>Queue &amp; Foreign Sync Snapshot</h3>
-              <p class="chart-sub">How far each source has been scanned by its consumer via foreign sync (<code>-F</code>) or peer sync (<code>#{CGI.escapeHTML(main_name)}/.synced/&lt;peer&gt;</code>), and how many inputs yielded novel coverage vs. were rejected or skipped (into <code>#{CGI.escapeHTML(main_name)}</code>: <strong>+#{Helpers.format_int(total_main_imported)}</strong> imported / <strong>#{Helpers.format_int(total_main_tested)}</strong> tested = <strong>#{format("%.2f%%", overall_yield)}</strong> yield, <strong>#{Helpers.format_int(total_main_backlog)}</strong> unsynced backlog#{upstream_summary})</p>
+              <p class="chart-sub">How far each source has been scanned by its consumer via foreign sync (<code>-F</code>) or peer sync (<code>#{synced_path_hint}</code>), and how many inputs yielded novel coverage vs. were rejected or skipped (#{consumer_summaries})</p>
             </div>
             <div class="chart-legend">
               <span class="legend-item"><span class="legend-dot" style="background:#34d399"></span><span class="legend-name">Imported (Novel)</span></span>
               <span class="legend-item"><span class="legend-dot" style="background:#3b82f6"></span><span class="legend-name">Tested &amp; Rejected</span></span>
-              <span class="legend-item"><span class="legend-dot" style="background:#475569"></span><span class="legend-name">Skipped (sync:#{CGI.escapeHTML(main_name)})</span></span>
+              <span class="legend-item"><span class="legend-dot" style="background:#475569"></span><span class="legend-name">#{skipped_legend}</span></span>
               <span class="legend-item"><span class="legend-dot" style="background:#1e293b;border:1px solid #475569"></span><span class="legend-name">Unsynced Backlog</span></span>
             </div>
           </div>
@@ -134,6 +147,7 @@ module PrismFuzzerReport
       peer_sync_by_name = fleet[:peer_sync_by_name]
       cov_worker_pairs = cov_info[:cov_worker_pairs]
       cov_pairs_by_id = cov_info[:cov_pairs_by_id]
+      multi_master = Array(fleet[:group_masters]).size > 1
 
       fleet[:afl_fuzzers].map do |f|
         ps = peer_sync_by_name[f[:name]]
@@ -143,7 +157,8 @@ module PrismFuzzerReport
         crash_cls = f[:saved_crashes] > 0 ? "badge-danger" : "badge-muted"
         hang_cls = f[:saved_hangs] > 0 ? "badge-warn" : "badge-muted"
         if ps
-          main_sync_cell = "#{Helpers.format_int(ps[:cursor])} / #{Helpers.format_int(ps[:peer_total])} <span class=\"muted\">(#{format('%.0f%%', ps[:sync_pct])})</span>"
+          via = multi_master ? " <span class=\"muted\">&rarr; #{CGI.escapeHTML(ps[:consumer_name].to_s)}</span>" : ""
+          main_sync_cell = "#{Helpers.format_int(ps[:cursor])} / #{Helpers.format_int(ps[:peer_total])} <span class=\"muted\">(#{format('%.0f%%', ps[:sync_pct])})</span>#{via}"
           main_yield_cell = "<strong>+#{Helpers.format_int(ps[:imported_by_main])}</strong> / #{Helpers.format_int(ps[:tested_by_main])} <span class=\"muted\">(#{format('%.1f%%', ps[:yield_pct])})</span>"
         else
           main_sync_cell = "<span class=\"muted\">hub</span>"
@@ -403,9 +418,12 @@ module PrismFuzzerReport
       wpairs = CoverageView.resolve_worker_pairs(name, cov_info[:cov_worker_pairs], cov_info[:cov_pairs_by_id])
       worker_cov_btn = CoverageView.render_worker_cov_banner_buttons(wpairs)
 
+      upstream_gen_entry = peer_sync_by_name.find { |_gn, gps| gps[:is_generator] && gps[:consumer_name] == name }
       sync_kpis = if (ps = peer_sync_by_name[name])
+                    consumer_name = ps[:consumer_name] || main_name
+                    consumer_fuzzer = ps[:consumer_fuzzer] || (fleet[:worker_by_name] && fleet[:worker_by_name][consumer_name]) || main_fuzzer
+                    safe_consumer = CGI.escapeHTML(consumer_name)
                     if ps[:sync_mode] == :foreign_queue || ps[:sync_mode] == :shadow_peer
-                      upstream_gen_entry = peer_sync_by_name.find { |_gn, gps| gps[:is_generator] && gps[:consumer_name] == name }
                       intake_kpi = if upstream_gen_entry
                                      gen_name, gen_ps = upstream_gen_entry
                                      <<~INTAKE_KPI
@@ -420,11 +438,11 @@ module PrismFuzzerReport
                                        <div class="kpi-card">
                                          <div class="kpi-label">Sync Role</div>
                                          <div class="kpi-value">Master (-M)</div>
-                                         <div class="kpi-sub">isolated sync root (no sync from #{CGI.escapeHTML(main_name)})</div>
+                                         <div class="kpi-sub">sync group master (bridges to #{safe_consumer})</div>
                                        </div>
                                      INTAKE_KPI
                                    end
-                      sync_to_label = ps[:sync_mode] == :shadow_peer ? "Sync to #{CGI.escapeHTML(main_name)}" : "Foreign Sync to #{CGI.escapeHTML(main_name)} (-F)"
+                      sync_to_label = ps[:sync_mode] == :shadow_peer ? "Sync to #{safe_consumer}" : "Foreign Sync to #{safe_consumer} (-F)"
                       cursor_word = ps[:sync_mode] == :shadow_peer ? "cursor" : "scanned"
                       <<~SYNC_KPI
                         <div class="kpi-card">
@@ -437,17 +455,26 @@ module PrismFuzzerReport
                     else
                       <<~SYNC_KPI
                         <div class="kpi-card">
-                          <div class="kpi-label">Sync to #{CGI.escapeHTML(main_name)}</div>
+                          <div class="kpi-label">Sync to #{safe_consumer}</div>
                           <div class="kpi-value">+#{Helpers.format_int(ps[:imported_by_main])} <span class="muted">(#{format("%.1f%%", ps[:yield_pct])})</span></div>
                           <div class="kpi-sub">#{Helpers.format_int(ps[:tested_by_main])} tested &bull; cursor #{Helpers.format_int(ps[:cursor])}/#{Helpers.format_int(ps[:peer_total])} (#{format("%.0f%%", ps[:sync_pct])})</div>
                         </div>
                         <div class="kpi-card">
-                          <div class="kpi-label">Sync from #{CGI.escapeHTML(main_name)}</div>
+                          <div class="kpi-label">Sync from #{safe_consumer}</div>
                           <div class="kpi-value">#{format("%.0f%%", ps[:peer_from_main_pct])}</div>
-                          <div class="kpi-sub">cursor #{Helpers.format_int(ps[:peer_from_main_cursor])} / #{Helpers.format_int(main_fuzzer[:corpus_count])} in #{CGI.escapeHTML(main_name)}</div>
+                          <div class="kpi-sub">cursor #{Helpers.format_int(ps[:peer_from_main_cursor])} / #{Helpers.format_int(consumer_fuzzer[:corpus_count])} in #{safe_consumer}</div>
                         </div>
                       SYNC_KPI
                     end
+                  elsif upstream_gen_entry
+                    gen_name, gen_ps = upstream_gen_entry
+                    <<~INTAKE_KPI
+                      <div class="kpi-card">
+                        <div class="kpi-label">Intake from #{CGI.escapeHTML(gen_name)} (-F)</div>
+                        <div class="kpi-value">+#{Helpers.format_int(gen_ps[:imported_by_main])} <span class="muted">(#{format("%.1f%%", gen_ps[:yield_pct])})</span></div>
+                        <div class="kpi-sub">#{Helpers.format_int(gen_ps[:tested_by_main])} seeds tested &bull; primary hub master (-M)</div>
+                      </div>
+                    INTAKE_KPI
                   else
                     ""
                   end
@@ -555,6 +582,7 @@ module PrismFuzzerReport
                                      worker_by_name: fleet[:worker_by_name],
                                      color_by_name: fleet[:color_by_name],
                                      peer_sync_by_name: fleet[:peer_sync_by_name],
+                                     peer_import_stats: fleet[:peer_import_stats] || {},
                                      id_prefix: "ov-topo",
                                      topo_colors: topo_colors
                                    )
@@ -575,6 +603,7 @@ module PrismFuzzerReport
             worker_by_name: fleet[:worker_by_name],
             color_by_name: fleet[:color_by_name],
             peer_sync_by_name: fleet[:peer_sync_by_name],
+            peer_import_stats: fleet[:peer_import_stats] || {},
             id_prefix: "tab-topo",
             topo_colors: topo_colors
           )
@@ -695,7 +724,7 @@ module PrismFuzzerReport
                   <div class="kpi-sub">#{Helpers.format_compact(fleet[:fleet_execs])} total execs</div>
                 </div>
                 <div class="kpi-card">
-                  <div class="kpi-label">Main Coverage</div>
+                  <div class="kpi-label">#{main_fuzzer[:name] == "main" ? "Main Coverage" : "Hub Coverage (#{CGI.escapeHTML(main_fuzzer[:name])})"}</div>
                   <div class="kpi-value">#{format("%.2f%%", main_fuzzer[:bitmap_cvg])}</div>
                   <div class="kpi-sub">#{Helpers.format_int(main_fuzzer[:edges_found])} / #{Helpers.format_int(main_fuzzer[:total_edges])} edges</div>
                 </div>
@@ -737,8 +766,8 @@ module PrismFuzzerReport
                       <th class="num">Corpus</th>
                       <th class="num">Local Finds</th>
                       <th class="num">Synced</th>
-                      <th class="num">Main Sync</th>
-                      <th class="num">Main Yield (Imp / Tested)</th>
+                      <th class="num">#{Array(fleet[:group_masters]).size > 1 ? "Master Sync" : "Main Sync"}</th>
+                      <th class="num">#{Array(fleet[:group_masters]).size > 1 ? "Master Yield (Imp / Tested)" : "Main Yield (Imp / Tested)"}</th>
                       <th class="num">Pending (Fav/All)</th>
                       <th class="num">Crashes</th>
                       <th class="num">Hangs</th>

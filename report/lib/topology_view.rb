@@ -240,7 +240,7 @@ module PrismFuzzerReport
       [edges, labels]
     end
 
-    def render_topology_diagram_svg(topo, worker_by_name:, color_by_name:, peer_sync_by_name:, id_prefix: "topo", topo_colors: {})
+    def render_topology_diagram_svg(topo, worker_by_name:, color_by_name:, peer_sync_by_name:, peer_import_stats: {}, id_prefix: "topo", topo_colors: {})
       return "" unless topo.is_a?(Hash)
 
       generators = topo["generators"].is_a?(Hash) ? topo["generators"] : {}
@@ -445,9 +445,10 @@ module PrismFuzzerReport
           col = color_by_name[src_id] || "#a78bfa"
           edges_svg << %(<path d="M#{x1},#{y1.round(1)} C#{lane_x},#{y1.round(1)} #{lane_x},#{y2.round(1)} #{x2},#{y2.round(1)}" fill="none" stroke="#{CGI.escapeHTML(col)}" stroke-width="2" stroke-opacity="0.9" marker-end="url(##{id_prefix}-arr-purple)" />)
 
-          ps = peer_sync_by_name[src_id]
+          ps = peer_import_stats[[src_id, dst_id]]
+          ps ||= peer_sync_by_name[src_id] if peer_sync_by_name.dig(src_id, :consumer_name) == dst_id
           lbl = pi["alias"].to_s.empty? ? src_id : pi["alias"].to_s
-          tag = if ps && ps[:consumer_name] == dst_id
+          tag = if ps
                   "+#{Helpers.format_int(ps[:imported_by_main])}/#{Helpers.format_int(ps[:tested_by_main])}"
                 else
                   "peer:#{topo_trunc(lbl, 11)}"

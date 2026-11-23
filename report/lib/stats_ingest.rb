@@ -303,22 +303,163 @@ module PrismFuzzerReport
       end
     end
 
-    def compute_peer_sync(fuzzers:, afl_fuzzers:, main_fuzzer:, afl_dir:, topo_ctx: nil)
+    def read_cursor_file(path)
+      raw = File.binread(path)
+      raw.bytesize >= 4 ? raw.unpack1("V") : 0
+    rescue Errno::ENOENT, Errno::ESTALE, Errno::EISDIR
+      0
+    rescue SystemCallError, IOError => e
+      warn "StatsIngest: failed to read #{path}: #{e.class}: #{e.message}" unless ENV["FUZZ_QUIET"] == "1"
+      0
+    end
+
+    def resolve_group_masters(afl_fuzzers, expanded_afl_dir:, topo_ctx: nil)
+      topo = topo_ctx && topo_ctx[:topology]
+      topo_workers = topo.is_a?(Hash) ? Array(topo["workers"]).select { |w| w.is_a?(Hash) } : []
+      worker_spec_by_id = topo_workers.each_with_object({}) { |w, h| h[w["id"].to_s] = w }
+
+      explicit_master = lambda do |f|
+        if (wspec = worker_spec_by_id[f[:name]])
+          wspec["afl_role"].to_s == "main"
+        else
+          f[:stats]["command_line"].to_s.match?(/(?:\A|\s)-M(?:\s|\z)/)
+        end
+      end
+
+      explicit_secondary = lambda do |f|
+        if (wspec = worker_spec_by_id[f[:name]])
+          wspec["afl_role"] && wspec["afl_role"].to_s != "main"
+        else
+          f[:stats]["command_line"].to_s.match?(/(?:\A|\s)-S(?:\s|\z)/)
+        end
+      end
+
+      by_group_dir = afl_fuzzers.group_by { |f| File.expand_path(File.dirname(f[:dir])) }
+      master_by_group_dir = {}
+      by_group_dir.each do |gdir, g_fuzzers|
+        master = g_fuzzers.find { |gf| explicit_master.call(gf) }
+        if master.nil? && g_fuzzers.none? { |gf| explicit_secondary.call(gf) }
+          master = g_fuzzers.find { |gf| gf[:name] == "main" } || (gdir == expanded_afl_dir ? g_fuzzers.first : nil)
+        elsif master.nil?
+          master = g_fuzzers.find { |gf| gf[:name] == "main" && !explicit_secondary.call(gf) }
+        end
+        master_by_group_dir[gdir] = master if master
+      end
+
+      [master_by_group_dir, worker_spec_by_id]
+    end
+
+    def build_afl_sync_entry(src_fuzzer, dst_fuzzer, sync_mode:, peer_alias: nil)
+      peer_name = src_fuzzer[:name]
+      dst_name = dst_fuzzer[:name]
+      same_sync_dir = File.expand_path(File.dirname(src_fuzzer[:dir])) == File.expand_path(File.dirname(dst_fuzzer[:dir]))
+      peer_total = src_fuzzer[:corpus_count]
+
+      dst_cursors = dst_fuzzer[:synced_cursors] || {}
+      dst_max_src = dst_fuzzer[:origins][:max_src_by_source] || {}
+      dst_by_source = dst_fuzzer[:origins][:by_source] || {}
+
+      watermark = if sync_mode == :shadow_peer && peer_alias && !peer_alias.empty?
+                    alias_wm = dst_cursors[peer_alias] || read_cursor_file(File.join(dst_fuzzer[:dir], ".synced", peer_alias))
+                    [alias_wm, dst_cursors[peer_name].to_i].max
+                  else
+                    dst_cursors[peer_name] || 0
+                  end
+      in_flight = dst_max_src[peer_name] || 0
+
+      if sync_mode == :foreign_queue && in_flight > 0
+        # Foreign-synced fuzzer (-F, legacy fallback when .synced/<peer_alias> is absent):
+        # consumer scanned every peer queue file whose mtime was <= the mtime of the highest imported peer item.
+        qdir = File.join(src_fuzzer[:dir], "queue")
+        last_imp_prefix = format("id:%06d", in_flight - 1)
+        if Dir.exist?(qdir)
+          qfiles = Dir.children(qdir).select { |fn| fn.start_with?("id:") }
+          imp_fn = qfiles.find { |fn| fn.start_with?(last_imp_prefix) }
+          if imp_fn
+            imp_mtime = safe_mtime_i(File.join(qdir, imp_fn), fallback: 0)
+            if imp_mtime > 0
+              scanned = qfiles.count { |fn| safe_mtime_i(File.join(qdir, fn), fallback: imp_mtime + 1) <= imp_mtime }
+              watermark = [watermark, scanned].max
+            end
+          end
+        end
+      end
+
+      cursor = [[watermark, in_flight].max, peer_total].min
+      skipped_from_main = same_sync_dir ? lookup_prefix(src_fuzzer[:origins][:by_source][dst_name] || [], cursor) : 0
+      tested_by_main = [cursor - skipped_from_main, 0].max
+      imported_by_main = lookup_prefix(dst_by_source[peer_name] || [], dst_fuzzer[:corpus_count])
+      rejected_by_main = [tested_by_main - imported_by_main, 0].max
+      unsynced_backlog = [peer_total - cursor, 0].max
+      sync_pct = peer_total > 0 ? (cursor * 100.0 / peer_total) : 100.0
+      yield_pct = tested_by_main > 0 ? (imported_by_main * 100.0 / tested_by_main) : 0.0
+
+      peer_from_main_wm = src_fuzzer[:synced_cursors][dst_name] || 0
+      peer_from_main_max = src_fuzzer[:origins][:max_src_by_source][dst_name] || 0
+      peer_from_main_cursor = [[peer_from_main_wm, peer_from_main_max].max, dst_fuzzer[:corpus_count]].min
+      peer_from_main_pct = dst_fuzzer[:corpus_count] > 0 ? (peer_from_main_cursor * 100.0 / dst_fuzzer[:corpus_count]) : 100.0
+
+      {
+        is_generator: false,
+        sync_mode: sync_mode,
+        peer_alias: peer_alias,
+        source_fuzzer: src_fuzzer,
+        source_name: peer_name,
+        consumer_fuzzer: dst_fuzzer,
+        consumer_name: dst_name,
+        peer_total: peer_total,
+        watermark: watermark,
+        cursor: cursor,
+        skipped_from_main: skipped_from_main,
+        tested_by_main: tested_by_main,
+        imported_by_main: imported_by_main,
+        rejected_by_main: rejected_by_main,
+        unsynced_backlog: unsynced_backlog,
+        sync_pct: sync_pct,
+        yield_pct: yield_pct,
+        peer_from_main_cursor: peer_from_main_cursor,
+        peer_from_main_pct: peer_from_main_pct
+      }
+    end
+
+    def compute_peer_sync(fuzzers:, afl_fuzzers:, main_fuzzer:, afl_dir:, master_by_group_dir: {}, worker_spec_by_id: {}, topo_ctx: nil)
       aliases = (topo_ctx && topo_ctx[:aliases]) || { "seeds" => "grammar" }
       main_name = main_fuzzer[:name]
-      main_synced_cursors = main_fuzzer[:synced_cursors] || {}
-      main_max_src = main_fuzzer[:origins][:max_src_by_source] || {}
-      main_by_source = main_fuzzer[:origins][:by_source] || {}
       expanded_afl_dir = File.expand_path(afl_dir)
+      afl_by_name = afl_fuzzers.each_with_object({}) { |af, h| h[af[:name]] = af }
+      topo = topo_ctx && topo_ctx[:topology]
+      topo_workers = topo.is_a?(Hash) ? Array(topo["workers"]).select { |w| w.is_a?(Hash) } : []
+
+      peer_import_stats = {}
+      bridges_from_src = Hash.new { |h, k| h[k] = [] }
+      topo_workers.each do |dst_w|
+        dst_f = afl_by_name[dst_w["id"].to_s]
+        next unless dst_f
+
+        Array(dst_w["peer_imports"]).each do |pi|
+          next unless pi.is_a?(Hash)
+
+          src_f = afl_by_name[pi["worker"].to_s]
+          next unless src_f
+
+          entry = build_afl_sync_entry(src_f, dst_f, sync_mode: :shadow_peer, peer_alias: pi["alias"].to_s)
+          peer_import_stats[[src_f[:name], dst_f[:name]]] = entry
+          bridges_from_src[src_f[:name]] << entry
+        end
+      end
 
       peer_sync_by_name = {}
       fuzzers.each do |f|
-        next if f[:name] == main_name
-
         peer_name = f[:name]
         if f[:role] == :generator
-          intake_fuzzer = afl_fuzzers.max_by { |af| lookup_prefix(af[:origins][:by_source][peer_name] || [], af[:corpus_count]) }
-          if intake_fuzzer.nil? || lookup_prefix(intake_fuzzer[:origins][:by_source][peer_name] || [], intake_fuzzer[:corpus_count]).zero?
+          gen_wspec = worker_spec_by_id[peer_name]
+          gen_id = gen_wspec ? gen_wspec["generator"].to_s : peer_name
+          topo_consumer_w = topo_workers.find do |cw|
+            cw["kind"].to_s != "generator" && Array(cw["foreign_sync"]).map(&:to_s).include?(gen_id)
+          end
+          intake_fuzzer = topo_consumer_w && afl_by_name[topo_consumer_w["id"].to_s]
+          intake_fuzzer ||= afl_fuzzers.max_by { |af| lookup_prefix(af[:origins][:by_source][peer_name] || [], af[:corpus_count]) }
+          if intake_fuzzer.nil? || (topo_consumer_w.nil? && lookup_prefix(intake_fuzzer[:origins][:by_source][peer_name] || [], intake_fuzzer[:corpus_count]).zero?)
             intake_fuzzer = afl_fuzzers.find { |af| af[:name] == "ijon" } || main_fuzzer
           end
           peer_total = [f[:files_created].to_i, 0].max
@@ -334,8 +475,11 @@ module PrismFuzzerReport
           peer_sync_by_name[peer_name] = {
             is_generator: true,
             sync_mode: :foreign_seeds,
+            source_fuzzer: f,
+            source_name: peer_name,
             intake_fuzzer: intake_fuzzer,
             intake_name: intake_fuzzer[:name],
+            consumer_fuzzer: intake_fuzzer,
             consumer_name: intake_fuzzer[:name],
             peer_total: peer_total,
             watermark: scanned,
@@ -353,79 +497,42 @@ module PrismFuzzerReport
           next
         end
 
-        is_isolated_root = File.expand_path(File.dirname(f[:dir])) != expanded_afl_dir
-        peer_alias = aliases.key(peer_name) || (peer_name == "ijon" ? "ijon_peer" : nil)
-        shadow_synced_path = peer_alias ? File.join(main_fuzzer[:dir], ".synced", peer_alias) : nil
-        has_shadow_peer = !!(shadow_synced_path && File.file?(shadow_synced_path))
-        is_foreign_queue = is_isolated_root && !has_shadow_peer
-        peer_total = f[:corpus_count]
-        watermark = main_synced_cursors[peer_name] || 0
-        if has_shadow_peer
-          raw_cursor = begin
-                         File.binread(shadow_synced_path)
-                       rescue Errno::ENOENT, Errno::ESTALE
-                         "".b
-                       rescue SystemCallError, IOError => e
-                         warn "StatsIngest: failed to read #{shadow_synced_path}: #{e.class}: #{e.message}" unless ENV["FUZZ_QUIET"] == "1"
-                         "".b
-                       end
-          shadow_wm = raw_cursor.bytesize >= 4 ? raw_cursor.unpack1("V") : 0
-          watermark = [watermark, shadow_wm].max
+        gdir = File.expand_path(File.dirname(f[:dir]))
+        group_master = master_by_group_dir[gdir]
+
+        if group_master && group_master[:name] != peer_name
+          peer_sync_by_name[peer_name] = build_afl_sync_entry(f, group_master, sync_mode: :peer)
+          next
         end
-        in_flight = main_max_src[peer_name] || 0
-        if is_foreign_queue && in_flight > 0
-          # Foreign-synced fuzzer (-F, legacy fallback when .synced/ijon_peer is absent):
-          # main scanned every peer queue file whose mtime was <= the mtime of the highest imported peer item.
-          qdir = File.join(f[:dir], "queue")
-          last_imp_prefix = format("id:%06d", in_flight - 1)
-          if Dir.exist?(qdir)
-            qfiles = Dir.children(qdir).select { |fn| fn.start_with?("id:") }
-            imp_fn = qfiles.find { |fn| fn.start_with?(last_imp_prefix) }
-            if imp_fn
-              imp_mtime = safe_mtime_i(File.join(qdir, imp_fn), fallback: 0)
-              if imp_mtime > 0
-                scanned = qfiles.count { |fn| safe_mtime_i(File.join(qdir, fn), fallback: imp_mtime + 1) <= imp_mtime }
-                watermark = [watermark, scanned].max
-              end
-            end
-          end
+
+        next if peer_name == main_name
+
+        # Group master (or masterless worker) outside the primary hub: resolve explicit peer_import
+        # consumer if configured, or fall back to legacy shadow/foreign sync when no topology is loaded.
+        src_bridges = bridges_from_src[peer_name]
+        if src_bridges.any?
+          chosen = src_bridges.find { |b| b[:consumer_name] == main_name } || src_bridges.first
+          peer_sync_by_name[peer_name] = chosen
+        elsif topo.nil? && gdir != expanded_afl_dir
+          peer_alias = aliases.key(peer_name) || (peer_name == "ijon" ? "ijon_peer" : nil)
+          shadow_path = peer_alias ? File.join(main_fuzzer[:dir], ".synced", peer_alias) : nil
+          mode = (shadow_path && File.file?(shadow_path)) ? :shadow_peer : :foreign_queue
+          peer_sync_by_name[peer_name] = build_afl_sync_entry(f, main_fuzzer, sync_mode: mode, peer_alias: peer_alias)
         end
-        cursor = [[watermark, in_flight].max, peer_total].min
-
-        # Items in peer's queue[0...cursor] that originally came from `main` (sync:main) are skipped by `main` without running
-        skipped_from_main = is_isolated_root ? 0 : lookup_prefix(f[:origins][:by_source][main_name] || [], cursor)
-        tested_by_main = [cursor - skipped_from_main, 0].max
-        imported_by_main = lookup_prefix(main_by_source[peer_name] || [], main_fuzzer[:corpus_count])
-        rejected_by_main = [tested_by_main - imported_by_main, 0].max
-        unsynced_backlog = [peer_total - cursor, 0].max
-        sync_pct = peer_total > 0 ? (cursor * 100.0 / peer_total) : 100.0
-        yield_pct = tested_by_main > 0 ? (imported_by_main * 100.0 / tested_by_main) : 0.0
-
-        # Also track how far this peer has synced through `main`'s queue (`<peer>/.synced/main`)
-        peer_from_main_wm = f[:synced_cursors][main_name] || 0
-        peer_from_main_max = f[:origins][:max_src_by_source][main_name] || 0
-        peer_from_main_cursor = [[peer_from_main_wm, peer_from_main_max].max, main_fuzzer[:corpus_count]].min
-        peer_from_main_pct = main_fuzzer[:corpus_count] > 0 ? (peer_from_main_cursor * 100.0 / main_fuzzer[:corpus_count]) : 100.0
-
-        peer_sync_by_name[peer_name] = {
-          is_generator: false,
-          sync_mode: has_shadow_peer ? :shadow_peer : (is_foreign_queue ? :foreign_queue : :peer),
-          consumer_name: main_name,
-          peer_total: peer_total,
-          watermark: watermark,
-          cursor: cursor,
-          skipped_from_main: skipped_from_main,
-          tested_by_main: tested_by_main,
-          imported_by_main: imported_by_main,
-          rejected_by_main: rejected_by_main,
-          unsynced_backlog: unsynced_backlog,
-          sync_pct: sync_pct,
-          yield_pct: yield_pct,
-          peer_from_main_cursor: peer_from_main_cursor,
-          peer_from_main_pct: peer_from_main_pct
-        }
       end
-      peer_sync_by_name
+
+      sync_rows = []
+      fuzzers.each do |f|
+        primary_ps = peer_sync_by_name[f[:name]]
+        sync_rows << primary_ps if primary_ps
+        bridges_from_src[f[:name]].each do |bridge_ps|
+          next if primary_ps && primary_ps[:consumer_name] == bridge_ps[:consumer_name] && primary_ps[:sync_mode] == bridge_ps[:sync_mode]
+
+          sync_rows << bridge_ps
+        end
+      end
+
+      [peer_sync_by_name, sync_rows, peer_import_stats]
     end
 
     # Ingests AFL++ fuzzer_stats, plot_data, queue origins, and peer sync snapshots for a fleet.
@@ -550,13 +657,21 @@ module PrismFuzzerReport
       color_by_name = fuzzers.to_h { |f| [f[:name], f[:color]] }
       afl_fuzzers = fuzzers.reject { |f| f[:role] == :generator }
       gen_fuzzers = fuzzers.select { |f| f[:role] == :generator }
-      main_fuzzer = afl_fuzzers.find { |f| f[:name] == "main" } || afl_fuzzers.first || fuzzers.first
+      expanded_afl_dir = File.expand_path(afl_dir)
+      master_by_group_dir, worker_spec_by_id = resolve_group_masters(afl_fuzzers, expanded_afl_dir: expanded_afl_dir, topo_ctx: topo_ctx)
+      main_fuzzer = master_by_group_dir[expanded_afl_dir] ||
+                    master_by_group_dir.values.first ||
+                    afl_fuzzers.find { |f| f[:name] == "main" } ||
+                    afl_fuzzers.first ||
+                    fuzzers.first
 
-      peer_sync_by_name = compute_peer_sync(
+      peer_sync_by_name, sync_rows, peer_import_stats = compute_peer_sync(
         fuzzers: fuzzers,
         afl_fuzzers: afl_fuzzers,
         main_fuzzer: main_fuzzer,
         afl_dir: afl_dir,
+        master_by_group_dir: master_by_group_dir,
+        worker_spec_by_id: worker_spec_by_id,
         topo_ctx: topo_ctx
       )
 
@@ -566,9 +681,12 @@ module PrismFuzzerReport
         gen_fuzzers: gen_fuzzers,
         main_fuzzer: main_fuzzer,
         main_name: main_fuzzer[:name],
+        group_masters: master_by_group_dir.values.map { |m| m[:name] }.uniq,
         color_by_name: color_by_name,
         worker_by_name: fuzzers.each_with_object({}) { |f, h| h[f[:name]] = f },
         peer_sync_by_name: peer_sync_by_name,
+        sync_rows: sync_rows,
+        peer_import_stats: peer_import_stats,
         fleet_execs: afl_fuzzers.sum { |f| f[:execs_done] },
         fleet_speed: afl_fuzzers.sum { |f| f[:execs_per_sec] },
         fleet_crashes: fuzzers.sum { |f| f[:saved_crashes] },

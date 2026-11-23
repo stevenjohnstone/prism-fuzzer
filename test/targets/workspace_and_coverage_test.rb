@@ -870,6 +870,180 @@ class WorkspaceAndCoverageTest < Minitest::Test
     end
   end
 
+  def test_multi_sync_group_report_attributes_secondaries_to_group_masters
+    require_relative "../../report/report"
+
+    with_tmpdir("report-multi-master-") do |workdir|
+      ws_dir = File.join(workdir, "ws")
+      afl_ijon_dir = File.join(ws_dir, "afl-ijon")
+      afl_cfg_dir = File.join(ws_dir, "afl")
+      camp = File.join(workdir, "ijon_multi.rb")
+
+      File.write(camp, <<~RB)
+        PrismFuzzer.campaign "multi-master-report-test" do
+          workspace #{ws_dir.dump}
+          prism :prism_a, repo: "https://example.invalid/prism.git", dir: #{workdir.dump}, patches: "none", templates: "never"
+          grammar_generator :grammar, source: :prism_a, fuzzer: "fuzz.ijon", sync_group: "afl-ijon", seeds_dir: #{File.join(workdir, "gseeds").dump}
+          fuzzer "fuzz.ijon",      shape: :prism_parse, source: :prism_a, sanitizers: [],             mode: :fast, afl: :lto, ijon: true
+          fuzzer "fuzz.ijon.asan", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, ijon: true
+          fuzzer "fuzz",           shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
+          sync_group "afl-ijon", dir: "afl-ijon", primary: true
+          sync_group :afl,       dir: "afl"
+
+          worker :grammar, kind: :generator, generator: :grammar
+          worker :"ijon-scout", fuzzer: "fuzz.ijon", sync_group: "afl-ijon", afl_role: :main, schedule: "explore" do
+            foreign_sync :grammar
+            peer_import group: :afl, worker: :main, alias: "cfg_peer"
+          end
+          worker :"ijon-asan", fuzzer: "fuzz.ijon.asan", sync_group: "afl-ijon", afl_role: :secondary, schedule: "exploit"
+          worker :main, fuzzer: "fuzz", sync_group: :afl, afl_role: :main, schedule: "exploit" do
+            peer_import group: "afl-ijon", worker: :"ijon-scout", alias: "ijon_scout_peer"
+            peer_import group: "afl-ijon", worker: :"ijon-asan",  alias: "ijon_asan_peer"
+          end
+          worker :cfg_sec, fuzzer: "fuzz", sync_group: :afl, afl_role: :secondary, schedule: "fast"
+        end
+      RB
+
+      ir, = PrismFuzzer::Topology.load_ir(camp, fuzz_root: root_dir)
+      topo = PrismFuzzer::Topology.compile_plan(ir, fuzz_root: root_dir)
+
+      write_worker = lambda do |root, name, count:, cmd:, queue_files:, cursors: {}|
+        wdir = File.join(root, name)
+        FileUtils.mkdir_p([File.join(wdir, "queue"), File.join(wdir, ".synced")])
+        File.write(File.join(wdir, "fuzzer_stats"), <<~STATS)
+          start_time    : 1700000000
+          run_time      : 30
+          execs_done    : 5000
+          execs_per_sec : 166.0
+          corpus_count  : #{count}
+          bitmap_cvg    : 22.50%
+          edges_found   : 45
+          total_edges   : 200
+          afl_banner    : #{name}
+          command_line  : #{cmd}
+        STATS
+        queue_files.each { |fn| File.binwrite(File.join(wdir, "queue", fn), "\x00\x00\x03\x01x\n".b) }
+        cursors.each { |k, v| File.binwrite(File.join(wdir, ".synced", k), [v].pack("V")) }
+      end
+
+      FileUtils.mkdir_p(File.join(afl_ijon_dir, "grammar"))
+      File.write(File.join(afl_ijon_dir, "grammar/fuzzer_stats"), "fuzzer_role : generator\nfiles_created : 20\npending_files : 5\nrun_time : 30\n")
+
+      # ijon-scout (-M of afl-ijon): imported 2 from ijon-asan, 1 from grammar, 1 from main via cfg_peer
+      write_worker.call(
+        afl_ijon_dir, "ijon-scout",
+        count: 5,
+        cmd: "afl-fuzz -M ijon-scout -- fuzz.ijon",
+        queue_files: [
+          "id:000000,orig:seed",
+          "id:000001,sync:grammar,src:000001",
+          "id:000002,sync:ijon-asan,src:000001",
+          "id:000003,sync:ijon-asan,src:000002",
+          "id:000004,sync:cfg_peer,src:000001"
+        ],
+        cursors: { "ijon-asan" => 4, "cfg_peer" => 3 }
+      )
+
+      # ijon-asan (-S of afl-ijon): 4 items (1 echoed from ijon-scout, 3 local); ijon-scout scanned all 4 (3 tested, 2 imported)
+      write_worker.call(
+        afl_ijon_dir, "ijon-asan",
+        count: 4,
+        cmd: "afl-fuzz -S ijon-asan -- fuzz.ijon.asan",
+        queue_files: [
+          "id:000000,sync:ijon-scout,src:000000",
+          "id:000001,src:000000,op:havoc",
+          "id:000002,src:000000,op:havoc",
+          "id:000003,src:000000,op:havoc"
+        ],
+        cursors: { "ijon-scout" => 5 }
+      )
+
+      # main (-M of afl): imported 2 from cfg_sec, 1 from ijon-scout, 0 from ijon-asan (tested only 2 via ijon_asan_peer!)
+      write_worker.call(
+        afl_cfg_dir, "main",
+        count: 4,
+        cmd: "afl-fuzz -M main -- fuzz",
+        queue_files: [
+          "id:000000,orig:seed",
+          "id:000001,sync:cfg_sec,src:000000",
+          "id:000002,sync:cfg_sec,src:000001",
+          "id:000003,sync:ijon_scout_peer,src:000002"
+        ],
+        cursors: { "cfg_sec" => 3, "ijon_scout_peer" => 5, "ijon_asan_peer" => 2 }
+      )
+
+      # cfg_sec (-S of afl): 3 items, synced against main (not ijon-scout!)
+      write_worker.call(
+        afl_cfg_dir, "cfg_sec",
+        count: 3,
+        cmd: "afl-fuzz -S cfg_sec -- fuzz",
+        queue_files: [
+          "id:000000,orig:seed",
+          "id:000001,src:000000,op:havoc",
+          "id:000002,src:000000,op:havoc"
+        ],
+        cursors: { "main" => 4 }
+      )
+
+      topo_ctx = PrismFuzzerReport::Helpers.topology_context(topo)
+      fleet = PrismFuzzerReport::StatsIngest.ingest_fuzzers(afl_ijon_dir, topo_ctx: topo_ctx)
+
+      assert_equal "ijon-scout", fleet[:main_name]
+      assert_nil fleet[:peer_sync_by_name]["ijon-scout"]
+
+      # ijon-asan is secondary to ijon-scout (NOT main!)
+      ps_ijon_asan = fleet[:peer_sync_by_name]["ijon-asan"]
+      assert_equal "ijon-scout", ps_ijon_asan[:consumer_name]
+      assert_equal :peer, ps_ijon_asan[:sync_mode]
+      assert_equal 4, ps_ijon_asan[:cursor]
+      assert_equal 1, ps_ijon_asan[:skipped_from_main]
+      assert_equal 3, ps_ijon_asan[:tested_by_main]
+      assert_equal 2, ps_ijon_asan[:imported_by_main]
+
+      # cfg_sec is secondary to main (NOT ijon-scout!)
+      ps_cfg_sec = fleet[:peer_sync_by_name]["cfg_sec"]
+      assert_equal "main", ps_cfg_sec[:consumer_name]
+      assert_equal :peer, ps_cfg_sec[:sync_mode]
+      assert_equal 3, ps_cfg_sec[:tested_by_main]
+      assert_equal 2, ps_cfg_sec[:imported_by_main]
+
+      # main bridges into ijon-scout via cfg_peer, and cross-group peer_import_stats tracks ijon-scout -> main & ijon-asan -> main
+      ps_main = fleet[:peer_sync_by_name]["main"]
+      assert_equal "ijon-scout", ps_main[:consumer_name]
+      assert_equal :shadow_peer, ps_main[:sync_mode]
+      assert_equal 3, ps_main[:cursor]
+      assert_equal 1, ps_main[:imported_by_main]
+
+      bridge_scout_main = fleet[:peer_import_stats][["ijon-scout", "main"]]
+      assert_equal 5, bridge_scout_main[:tested_by_main]
+      assert_equal 1, bridge_scout_main[:imported_by_main]
+
+      bridge_asan_main = fleet[:peer_import_stats][["ijon-asan", "main"]]
+      assert_equal 2, bridge_asan_main[:tested_by_main]
+      assert_equal 0, bridge_asan_main[:imported_by_main]
+
+      out_html = File.join(ws_dir, "report", "index.html")
+      PrismFuzzerReport.generate(afl_dir: afl_ijon_dir, out_path: out_html, triage_dir: File.join(ws_dir, "report", "triage"), topo: topo)
+      html = File.read(out_html)
+      sync_sec = html[%r{<div class="chart-card sync-overview-card">.*?</div>\s*<div class="table-card">}m].to_s
+
+      assert_includes html, "Hub Coverage (ijon-scout)"
+      assert_includes html, "Master Sync"
+      assert_match(%r{<strong>ijon-asan</strong>\s*<span[^>]*>&rarr; ijon-scout</span>}, sync_sec)
+      assert_match(%r{<strong>cfg_sec</strong>\s*<span[^>]*>&rarr; main</span>}, sync_sec)
+      assert_match(%r{<strong>ijon-scout</strong>\s*<span[^>]*>&rarr; main \(peer\)</span>}, sync_sec)
+      assert_match(%r{<strong>main</strong>\s*<span[^>]*>&rarr; ijon-scout \(peer\)</span>}, sync_sec)
+
+      asan_tab = html[%r{<section id="tab-ijon-asan" class="tab-panel">.*?</section>}m]
+      assert_includes asan_tab, "Sync to ijon-scout"
+      assert_includes asan_tab, "Sync from ijon-scout"
+
+      cfg_tab = html[%r{<section id="tab-cfg_sec" class="tab-panel">.*?</section>}m]
+      assert_includes cfg_tab, "Sync to main"
+      assert_includes cfg_tab, "Sync from main"
+    end
+  end
+
   def test_real_multi_pair_coverage_replay_report_publish_and_signal_safety
     skip "clang/llvm-profdata/llvm-cov unavailable" unless find_executable("clang") && find_executable("llvm-profdata") && find_executable("llvm-cov")
 

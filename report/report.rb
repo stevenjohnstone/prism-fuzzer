@@ -34,10 +34,10 @@ module PrismFuzzerReport
 
   module_function
 
-  def resolve_paths(afl_dir: nil, out_path: nil, cov_json_path: nil, triage_dir: nil)
+  def resolve_paths(afl_dir: nil, out_path: nil, cov_json_path: nil, triage_dir: nil, topo: nil)
     root_dir = File.expand_path("..", __dir__)
     ws_defaults = if defined?(PrismFuzzer::Topology)
-                    discovered = PrismFuzzer::Topology.discover(afl_dir: afl_dir, triage_dir: triage_dir, start_dir: root_dir)
+                    discovered = topo || PrismFuzzer::Topology.discover(afl_dir: afl_dir, triage_dir: triage_dir, start_dir: root_dir)
                     PrismFuzzer::Topology.workspace_paths(discovered)
                   end
 
@@ -61,7 +61,8 @@ module PrismFuzzerReport
       afl_dir: afl_dir,
       out_path: out_path,
       cov_json_path: cov_json_path,
-      triage_dir: triage_dir
+      triage_dir: triage_dir,
+      topo: topo
     )
 
     resolved_afl = paths[:afl_dir]
