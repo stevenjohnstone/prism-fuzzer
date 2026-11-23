@@ -268,6 +268,10 @@ _report:
 
 report: docker-build targets-sync _report
 
+pages-worktree:
+	$(ECHO) "ensuring gh-pages worktree at $(REPORTS_DIR)"
+	$(Q) ruby ./bin/publish.rb --init --gh-pages --out-dir $(REPORTS_DIR)
+
 publish:
 	$(ECHO) "publishing reports to $(REPORTS_DIR)"
 	$(Q) ruby ./bin/publish.rb --report-dir $(FUZZ_REPORT_DIR) --triage-dir $(FUZZ_TRIAGE_DIR) --coverage-dir $(FUZZ_COVERAGE_DIR) --bin-dir $(FUZZ_BIN_DIR) --out-dir $(REPORTS_DIR) $(PUBLISH_ARGS)
@@ -322,4 +326,4 @@ clean:
 	$(Q) ruby -r./runtime/campaign -e 'PrismFuzzer::Campaign.clean_preserving_paths(ARGV[0], ARGV[1..])' "$(FUZZ_DIR)" "$(FUZZ_BUILD_DIR)" "$(FUZZ_TRIAGE_DIR)"
 	$(ECHO) "done"
 
-.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage clean
+.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage clean

@@ -347,7 +347,7 @@ module PrismFuzzer
       run_host_script_stage!(ctx, "report", "Generate campaign report", cmd, fail_message: "report.rb failed", done_message: "Report written to #{Topology.path_relative_or_abs(out_html, ctx[:fuzz_root])}", dry_run: dry_run)
     end
 
-    def run_publish!(ctx, dry_run: false)
+    def run_publish!(ctx, extra_args: [], dry_run: false)
       ws = ctx[:ws]
       pub_opts = step_opts(ctx[:lifecycle], "publish")
       slug = ctx[:plan].fetch("name", "campaign").to_s.downcase.gsub(/[^a-z0-9_.-]+/, "-")
@@ -365,6 +365,12 @@ module PrismFuzzer
         "--out-dir", out_dir
       ]
       cmd.push("--title", pub_opts["title"]) if pub_opts["title"]
+      cmd.push(pub_opts["gh_pages"] ? "--gh-pages" : "--no-gh-pages") if pub_opts.key?("gh_pages")
+      cmd.push("--branch", pub_opts["branch"]) if pub_opts["branch"]
+      cmd.push("--remote", pub_opts["remote"]) if pub_opts["remote"]
+      cmd << "--commit" if pub_opts["commit"]
+      cmd << "--push" if pub_opts["push"]
+      cmd.concat(Array(extra_args))
       run_host_script_stage!(ctx, "publish", "Publish report '#{run_id}'", cmd, fail_message: "publish.rb failed", done_message: "Published '#{run_id}' to #{Topology.path_relative_or_abs(out_dir, ctx[:fuzz_root])}", dry_run: dry_run)
     end
 

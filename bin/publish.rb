@@ -5,7 +5,9 @@ require "cgi"
 require "erb"
 require "fileutils"
 require "json"
+require "open3"
 require "optparse"
+require "shellwords"
 require "time"
 
 topology_lib = File.expand_path("../runtime/topology.rb", __dir__)
@@ -174,57 +176,66 @@ module PrismFuzzerPublish
     }
   end
 
-  def copy_campaign_artifacts!(run_dir:, report_dir:, coverage_dir:, triage_dir:)
+  def copy_dir_contents!(src_dir, dst_dir, skip: [], exclude_abs: [])
+    return unless src_dir && File.directory?(src_dir)
+
+    FileUtils.mkdir_p(dst_dir)
+    skip_set = skip.map(&:to_s)
+    excl = exclude_abs.compact.map { |p| File.expand_path(p) }
+    Dir.children(src_dir).sort.each do |entry|
+      next if skip_set.include?(entry)
+
+      src = File.join(src_dir, entry)
+      src_abs = File.expand_path(src)
+      next if excl.any? { |ep| src_abs == ep || ep.start_with?("#{src_abs}/") }
+
+      FileUtils.cp_r(src, File.join(dst_dir, entry))
+    end
+  end
+
+  def find_coverage_html_artifact(cov_out)
+    legacy = File.join(cov_out, "report", "index.html")
+    return "report/coverage/report/index.html" if File.file?(legacy)
+
+    pair_html = Dir.glob(File.join(cov_out, "pairs", "*", "report", "index.html")).sort.first
+    return nil unless pair_html
+
+    pid = File.basename(File.dirname(File.dirname(pair_html)))
+    "report/coverage/pairs/#{pid}/report/index.html"
+  end
+
+  def copy_campaign_artifacts!(run_dir:, report_dir:, coverage_dir:, triage_dir:, out_dir: nil)
     artifacts = {}
     rep_out = File.join(run_dir, "report")
+    cov_out = File.join(rep_out, "coverage")
+    triage_out = File.join(rep_out, "triage")
+    excl = [out_dir, run_dir].compact
 
     if report_dir && File.directory?(report_dir)
-      %w[index.html sankey.html].each do |fn|
-        src = File.join(report_dir, fn)
-        next unless File.file?(src)
-
-        FileUtils.mkdir_p(rep_out)
-        FileUtils.cp(src, File.join(rep_out, fn))
-        key = fn == "index.html" ? "report" : fn.delete_suffix(".html")
-        artifacts[key] = "report/#{fn}"
-      end
+      skip = []
+      skip << "coverage" if coverage_dir && File.directory?(coverage_dir)
+      skip << "triage" if triage_dir && File.directory?(triage_dir)
+      copy_dir_contents!(report_dir, rep_out, skip: skip, exclude_abs: excl)
     end
 
-    if coverage_dir && File.directory?(coverage_dir)
-      cov_out = File.join(rep_out, "coverage")
-      %w[summary.txt coverage.json lcov.info].each do |fn|
-        src = File.join(coverage_dir, fn)
-        next unless File.file?(src)
+    copy_dir_contents!(coverage_dir, cov_out, exclude_abs: excl) if coverage_dir && File.directory?(coverage_dir)
+    copy_dir_contents!(triage_dir, triage_out, exclude_abs: excl) if triage_dir && File.directory?(triage_dir)
 
-        FileUtils.mkdir_p(cov_out)
-        FileUtils.cp(src, File.join(cov_out, fn))
-        artifacts["coverage_#{fn.tr('.', '_')}"] = "report/coverage/#{fn}"
-      end
-      Dir.glob(File.join(coverage_dir, "pairs", "*")).sort.each do |pdir|
-        next unless File.directory?(pdir)
+    artifacts["report"] = "report/index.html" if File.file?(File.join(rep_out, "index.html"))
+    artifacts["sankey"] = "report/sankey.html" if File.file?(File.join(rep_out, "sankey.html"))
 
-        pid = File.basename(pdir)
-        dest_dir = File.join(cov_out, "pairs", pid)
-        %w[summary.txt lcov.info].each do |fn|
-          src = File.join(pdir, fn)
-          next unless File.file?(src)
+    cov_html = find_coverage_html_artifact(cov_out)
+    artifacts["coverage_html"] = cov_html if cov_html
+    %w[summary.txt coverage.json lcov.info].each do |fn|
+      next unless File.file?(File.join(cov_out, fn))
 
-          FileUtils.mkdir_p(dest_dir)
-          FileUtils.cp(src, File.join(dest_dir, fn))
-        end
-      end
+      artifacts["coverage_#{fn.tr('.', '_')}"] = "report/coverage/#{fn}"
     end
 
-    if triage_dir && File.directory?(triage_dir)
-      triage_out = File.join(rep_out, "triage")
-      %w[clusters.json metadata.json].each do |fn|
-        src = File.join(triage_dir, fn)
-        next unless File.file?(src)
+    %w[clusters.json metadata.json].each do |fn|
+      next unless File.file?(File.join(triage_out, fn))
 
-        FileUtils.mkdir_p(triage_out)
-        FileUtils.cp(src, File.join(triage_out, fn))
-        artifacts[fn.delete_suffix(".json")] = "report/triage/#{fn}"
-      end
+      artifacts[fn.delete_suffix(".json")] = "report/triage/#{fn}"
     end
 
     artifacts
@@ -272,7 +283,8 @@ module PrismFuzzerPublish
                links << %(<a href="#{dir}/#{arts['report']}">Report</a>) if arts["report"]
                links << %(<a href="#{dir}/#{arts['plots']}">Plots</a>) if arts["plots"] && !arts["report"]
                links << %(<a href="#{dir}/#{arts['sankey']}">Sankey</a>) if arts["sankey"]
-               links << %(<a href="#{dir}/#{arts['coverage_summary_txt']}">Coverage</a>) if arts["coverage_summary_txt"]
+               cov_link = arts["coverage_html"] || arts["coverage_summary_txt"]
+               links << %(<a href="#{dir}/#{cov_link}">Coverage</a>) if cov_link
                links << %(<a href="#{dir}/#{arts['clusters']}">Clusters JSON</a>) if arts["clusters"]
                links << %(<a href="#{dir}/manifest.json">Manifest</a>)
 
@@ -354,37 +366,161 @@ module PrismFuzzerPublish
     HTML
   end
 
+  EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+  def run_git(repo_dir, *args)
+    cmd = ["git", "-C", repo_dir, *args]
+    stdout, stderr, st = Open3.capture3(*cmd)
+    [stdout, stderr, st]
+  end
+
+  def run_git!(repo_dir, *args)
+    stdout, stderr, st = run_git(repo_dir, *args)
+    unless st.success?
+      detail = stderr.to_s.strip
+      detail = stdout.to_s.strip if detail.empty?
+      raise "git #{args.join(' ')} failed in #{repo_dir}: #{detail}"
+    end
+    [stdout, stderr]
+  end
+
+  def ensure_gh_pages_worktree!(out_dir, fuzz_root:, branch: "gh-pages", remote: "origin")
+    out_abs = File.expand_path(out_dir)
+    root_abs = File.expand_path(fuzz_root)
+    unless File.exist?(File.join(root_abs, ".git"))
+      raise "#{root_abs} is not a git repository; cannot manage #{branch} worktree"
+    end
+
+    if File.exist?(File.join(out_abs, ".git"))
+      cur_out, _, st = run_git(out_abs, "symbolic-ref", "--short", "-q", "HEAD")
+      if st.success?
+        cur_branch = cur_out.strip
+        unless cur_branch == branch
+          raise "Worktree at #{out_abs} is on branch '#{cur_branch}', expected '#{branch}'"
+        end
+
+        return out_abs
+      end
+
+      _, _, head_st = run_git(out_abs, "rev-parse", "--git-dir")
+      if head_st.success?
+        raise "Worktree at #{out_abs} has detached HEAD; expected branch '#{branch}'"
+      end
+
+      raise "#{out_abs}/.git exists but is unusable from this environment"
+    end
+
+    if File.exist?(out_abs)
+      unless File.directory?(out_abs) && Dir.empty?(out_abs)
+        raise "#{out_abs} already exists and is not a #{branch} git worktree (move/remove it or pass --no-gh-pages)"
+      end
+
+      Dir.rmdir(out_abs)
+    end
+
+    FileUtils.mkdir_p(File.dirname(out_abs))
+    run_git(root_abs, "worktree", "prune")
+
+    _, _, has_local = run_git(root_abs, "show-ref", "--verify", "--quiet", "refs/heads/#{branch}")
+    if has_local.success?
+      run_git!(root_abs, "worktree", "add", out_abs, branch)
+      return out_abs
+    end
+
+    remotes_out, _, remotes_st = run_git(root_abs, "remote")
+    has_remote = remotes_st.success? && remotes_out.lines.map(&:strip).include?(remote)
+    if has_remote
+      run_git(root_abs, "fetch", "--quiet", remote, branch)
+      _, _, has_remote_ref = run_git(root_abs, "show-ref", "--verify", "--quiet", "refs/remotes/#{remote}/#{branch}")
+      if has_remote_ref.success?
+        run_git!(root_abs, "worktree", "add", "--track", "-b", branch, out_abs, "#{remote}/#{branch}")
+        return out_abs
+      end
+    end
+
+    _, _, orphan_st = run_git(root_abs, "worktree", "add", "--orphan", "-b", branch, out_abs)
+    return out_abs if orphan_st.success?
+
+    init_sha, = run_git!(root_abs, "commit-tree", EMPTY_TREE_SHA, "-m", "Initialize #{branch} branch")
+    run_git!(root_abs, "update-ref", "refs/heads/#{branch}", init_sha.strip)
+    run_git!(root_abs, "worktree", "add", out_abs, branch)
+    out_abs
+  end
+
+  def commit_and_push_worktree!(out_dir, branch:, remote:, message:, commit:, push:)
+    out_abs = File.expand_path(out_dir)
+    run_git!(out_abs, "add", "-A")
+    status_out, = run_git!(out_abs, "status", "--porcelain")
+    if !status_out.strip.empty?
+      run_git!(out_abs, "commit", "-m", message)
+    else
+      _, _, has_head = run_git(out_abs, "rev-parse", "--verify", "HEAD")
+      puts "No new changes to commit in #{out_abs} (#{branch})." if has_head.success?
+    end
+
+    run_git!(out_abs, "push", "-u", remote, branch) if push
+  end
+
   def run(argv = ARGV)
-    fuzz_root = File.expand_path("..", __dir__)
-    ws = if defined?(PrismFuzzer::Topology)
-           t = PrismFuzzer::Topology.discover(start_dir: fuzz_root)
-           PrismFuzzer::Topology.workspace_paths(t, fuzz_root: fuzz_root)
-         end
     opts = {
-      fuzz_root: fuzz_root,
-      report_dir: ws ? ws[:report_dir] : File.join(fuzz_root, "tmp", "fuzz", "report"),
-      triage_dir: ws ? ws[:triage_dir] : File.join(fuzz_root, "tmp", "fuzz", "report", "triage"),
-      coverage_dir: ws ? ws[:coverage_dir] : File.join(fuzz_root, "tmp", "fuzz", "report", "coverage"),
-      bin_dir: ws ? ws[:bin_dir] : File.join(fuzz_root, "tmp", "fuzz", "bin"),
-      out_dir: ws ? ws[:reports_dir] : File.join(fuzz_root, "reports"),
+      fuzz_root: File.expand_path("..", __dir__),
+      report_dir: nil,
+      triage_dir: nil,
+      coverage_dir: nil,
+      bin_dir: nil,
+      out_dir: nil,
       run_id: nil,
       title: nil,
-      init_only: false
+      init_only: false,
+      gh_pages: nil,
+      branch: "gh-pages",
+      remote: "origin",
+      commit: false,
+      push: false
     }
 
     OptionParser.new do |op|
       op.banner = "Usage: publish.rb [options]"
+      op.on("--fuzz-root DIR", "Repository root for workspace discovery and gh-pages worktree") { |v| opts[:fuzz_root] = File.expand_path(v) }
       op.on("--report-dir DIR", "Campaign report output directory") { |v| opts[:report_dir] = File.expand_path(v) }
       op.on("--triage-dir DIR", "Triage output directory") { |v| opts[:triage_dir] = File.expand_path(v) }
       op.on("--coverage-dir DIR", "Coverage output directory") { |v| opts[:coverage_dir] = File.expand_path(v) }
       op.on("--bin-dir DIR", "Campaign bin snapshot directory") { |v| opts[:bin_dir] = File.expand_path(v) }
-      op.on("--out-dir DIR", "GitHub Pages reports root (default: reports)") { |v| opts[:out_dir] = File.expand_path(v) }
-      op.on("--run-id ID", "Run directory identifier under reports/runs/") { |v| opts[:run_id] = v }
+      op.on("--out-dir DIR", "GitHub Pages worktree/output root (default: reports)") { |v| opts[:out_dir] = File.expand_path(v) }
+      op.on("--run-id ID", "Run directory identifier under runs/") { |v| opts[:run_id] = v }
       op.on("--title TEXT", "Optional campaign title/note") { |v| opts[:title] = v }
-      op.on("--init", "Initialize empty reports/index.html without adding a run") { opts[:init_only] = true }
+      op.on("--init", "Initialize empty index.html without adding a run") { opts[:init_only] = true }
+      op.on("--[no-]gh-pages", "Manage out-dir as a gh-pages git worktree (default: auto for <root>/reports)") { |v| opts[:gh_pages] = v }
+      op.on("--branch NAME", "Git branch for Pages worktree (default: gh-pages)") { |v| opts[:branch] = v }
+      op.on("--remote NAME", "Git remote for --push (default: origin)") { |v| opts[:remote] = v }
+      op.on("--commit", "Stage and commit published files in the Pages worktree") { opts[:commit] = true }
+      op.on("--push", "Commit and push the Pages worktree branch to remote") { opts[:commit] = true; opts[:push] = true }
+      op.on("-h", "--help", "Show help") { puts op; return 0 }
     end.parse!(argv)
 
-    out_dir = opts[:out_dir]
+    fuzz_root = opts[:fuzz_root]
+    ws = if defined?(PrismFuzzer::Topology)
+           t = PrismFuzzer::Topology.discover(start_dir: fuzz_root)
+           PrismFuzzer::Topology.workspace_paths(t, fuzz_root: fuzz_root)
+         end
+
+    opts[:report_dir] ||= ws ? ws[:report_dir] : File.join(fuzz_root, "tmp", "fuzz", "report")
+    opts[:triage_dir] ||= ws ? ws[:triage_dir] : File.join(opts[:report_dir], "triage")
+    opts[:coverage_dir] ||= ws ? ws[:coverage_dir] : File.join(opts[:report_dir], "coverage")
+    opts[:bin_dir] ||= ws ? ws[:bin_dir] : File.join(fuzz_root, "tmp", "fuzz", "bin")
+    out_dir = opts[:out_dir] || (ws ? ws[:reports_dir] : File.join(fuzz_root, "reports"))
+
+    default_reports_dir = File.expand_path(File.join(fuzz_root, "reports"))
+    use_gh_pages = if opts[:gh_pages].nil?
+                     (File.expand_path(out_dir) == default_reports_dir && File.exist?(File.join(fuzz_root, ".git"))) || opts[:commit] || opts[:push]
+                   else
+                     opts[:gh_pages]
+                   end
+
+    if use_gh_pages
+      ensure_gh_pages_worktree!(out_dir, fuzz_root: fuzz_root, branch: opts[:branch], remote: opts[:remote])
+    end
+
     runs_root = File.join(out_dir, "runs")
     FileUtils.mkdir_p(runs_root)
     FileUtils.touch(File.join(out_dir, ".nojekyll"))
@@ -392,9 +528,10 @@ module PrismFuzzerPublish
     index_path = File.join(runs_root, "index.json")
     existing = read_json(index_path)
     runs = existing.is_a?(Array) ? existing : []
+    run_id = nil
 
     unless opts[:init_only]
-      versions = resolve_versions(fuzz_root: opts[:fuzz_root], bin_dir: opts[:bin_dir], triage_dir: opts[:triage_dir])
+      versions = resolve_versions(fuzz_root: fuzz_root, bin_dir: opts[:bin_dir], triage_dir: opts[:triage_dir])
       sha_short = versions.dig("prism_a", "git_commit") || versions.dig("prism_a", "commit")
       default_id = Time.now.utc.strftime("%Y%m%d-%H%M%SZ")
       default_id = "#{default_id}-#{sha_short.to_s[0, 8]}" if sha_short && !sha_short.to_s.empty?
@@ -409,7 +546,8 @@ module PrismFuzzerPublish
         run_dir: run_dir,
         report_dir: opts[:report_dir],
         coverage_dir: opts[:coverage_dir],
-        triage_dir: opts[:triage_dir]
+        triage_dir: opts[:triage_dir],
+        out_dir: out_dir
       )
       manifest = {
         "schema_version" => 1,
@@ -428,9 +566,27 @@ module PrismFuzzerPublish
       puts "Published run '#{run_id}' to #{run_dir}"
     end
 
-    runs.sort_by! { |r| r["published_at"].to_s }.reverse!
+    runs = runs.each_with_index.sort do |(a, ai), (b, bi)|
+      cmp = b["published_at"].to_s <=> a["published_at"].to_s
+      cmp.zero? ? ai <=> bi : cmp
+    end.map(&:first)
     File.write(index_path, "#{JSON.pretty_generate(runs)}\n")
     File.write(File.join(out_dir, "index.html"), render_index_html(runs))
+
+    if opts[:commit] || opts[:push]
+      msg = opts[:init_only] ? "Initialize #{opts[:branch]} reports" : "Publish campaign report #{run_id}"
+      commit_and_push_worktree!(
+        out_dir,
+        branch: opts[:branch],
+        remote: opts[:remote],
+        message: msg,
+        commit: opts[:commit],
+        push: opts[:push]
+      )
+    elsif use_gh_pages && !opts[:init_only]
+      wt_esc = Shellwords.escape(out_dir)
+      puts "Next (on #{opts[:branch]} worktree): git -C #{wt_esc} add -A && git -C #{wt_esc} commit -m #{Shellwords.escape("Publish #{run_id}")} && git -C #{wt_esc} push -u #{opts[:remote]} #{opts[:branch]}"
+    end
     0
   end
 end

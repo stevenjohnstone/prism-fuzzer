@@ -104,7 +104,7 @@ Running `report` (or setting `after_run { report ... }`) compiles a self-contain
 - **Time-Series SVG Charts & Sync Yield**: Plots edge coverage %, edges discovered, corpus growth, throughput (`execs/sec`), cumulative executions, pending favored queue, foreign synced imports, locally discovered items, grammar seed creation/import rates, and peer-sync import/reject/skip yield bars across workers.
 - **Crash Lineage & Interactive Triage Sankey ([`report/sankey.rb`](report/sankey.rb))**: Tracks crash provenance (grammar seeds vs. initial corpus vs. local mutations vs. synced peers) and visualizes fuzzer/origin → crash reason → root-cause cluster → signature bucket flows.
 - **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Collects corpus coverage cleanly across `(source, target)` pairs (filtering `fuzz_` harness helpers) and embeds interactive summary tables linked to full `llvm-cov` line-by-line HTML reports.
-- **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive multi-run campaign snapshots into `reports/` for GitHub Pages.
+- **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive complete multi-run report snapshots (including `llvm-cov` HTML and `triage/` bucket artifacts) into a gitignored `reports/` `gh-pages` branch worktree.
 
 ---
 
@@ -166,7 +166,7 @@ RUBY_REF=v3_4_1 ./campaigns/default.rb build --build-ruby
 ./campaigns/default.rb explain -- --cluster cluster-01 # Or add -- --disasm --all-buckets
 ./campaigns/default.rb verify -- --target /path/to/fixed-prism
 ./campaigns/default.rb bisect -- --good <sha> --bad HEAD --cluster cluster-01
-./campaigns/default.rb publish -- --run-id camp-01     # Snapshot <ws>/report/ into reports/ and update reports/index.html
+./campaigns/default.rb publish -- --run-id camp-01 --commit --push # Snapshot all report/coverage/triage artifacts to the gh-pages worktree (`reports/`) and push
 ./campaigns/default.rb clean                           # Remove runtime dirs under <ws>/ while keeping report/triage/ and build/
 make test                                              # Run dependency-tracked test stages in parallel inside Docker
 make test TEST_FORCE=1                                 # Re-run all test assertions while reusing cached .o/binary artifacts
@@ -212,7 +212,7 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 ├── Makefile                        wrapper targets for Docker, build, run, triage, and tests
 ├── bin
 │   ├── campaign.rb                 CLI dispatcher for campaign scripts
-│   ├── publish.rb                  packages HTML reports and coverage into reports/ for GitHub Pages
+│   ├── publish.rb                  packages report, coverage HTML, and triage artifacts into the gh-pages worktree (`reports/`)
 │   └── topology.rb                 CLI for validating, syncing, building, and planning topologies
 ├── campaigns
 │   └── default.rb                  default executable multi-fuzzer campaign script
@@ -249,9 +249,6 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 │   ├── lib                         HTML report views, SVG charts, Sankey extractor, and frontend assets
 │   ├── report.rb                   generates self-contained interactive HTML campaign reports
 │   └── sankey.rb                   builds the origin -> worker -> invariant -> cluster Sankey diagram
-├── reports
-│   ├── index.html                  static GitHub Pages archive index across published runs
-│   └── runs                        published campaign report snapshots
 ├── runtime
 │   ├── campaign.rb                 lifecycle timer, Docker container runner, and Campaign::Instance API
 │   ├── campaign_dsl.rb             Ruby topology & campaign DSL compiler frontend

@@ -42,12 +42,17 @@ module PrismFuzzer
         end
       end
 
-      if cli[:publish_run_id] || cli[:publish_title] || cli[:publish_out_dir]
+      if cli[:publish_run_id] || cli[:publish_title] || cli[:publish_out_dir] || cli.key?(:publish_commit) || cli.key?(:publish_push) || cli.key?(:publish_gh_pages) || cli[:publish_branch] || cli[:publish_remote]
         pub = lc["publish"].is_a?(Hash) ? lc["publish"] : {}
         pub["enabled"] = true unless pub.key?("enabled") && pub["enabled"] == false
         pub["run_id"] = cli[:publish_run_id] if cli[:publish_run_id]
         pub["title"] = cli[:publish_title] if cli[:publish_title]
         pub["out_dir"] = cli[:publish_out_dir] if cli[:publish_out_dir]
+        pub["gh_pages"] = cli[:publish_gh_pages] if cli.key?(:publish_gh_pages)
+        pub["branch"] = cli[:publish_branch] if cli[:publish_branch]
+        pub["remote"] = cli[:publish_remote] if cli[:publish_remote]
+        pub["commit"] = cli[:publish_commit] if cli.key?(:publish_commit)
+        pub["push"] = cli[:publish_push] if cli.key?(:publish_push)
         lc["publish"] = pub
       end
 

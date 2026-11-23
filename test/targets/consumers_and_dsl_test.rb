@@ -208,6 +208,106 @@ class ConsumersIntegrationTest < Minitest::Test
     end
   end
 
+  def test_publish_copies_all_artifacts_and_manages_gh_pages_worktree
+    with_tmpdir("publish-gh-pages-") do |workdir|
+      upstream = File.join(workdir, "origin.git")
+      repo_a = File.join(workdir, "repo_a")
+      repo_b = File.join(workdir, "repo_b")
+      assert_cmd("git", "init", "--bare", "-q", upstream)
+      assert_cmd("git", "init", "-q", "-b", "main", repo_a)
+      assert_cmd("git", "-C", repo_a, "config", "user.email", "test@example.com")
+      assert_cmd("git", "-C", repo_a, "config", "user.name", "Test")
+      assert_cmd("git", "-C", repo_a, "config", "commit.gpgsign", "false")
+      File.write(File.join(repo_a, ".gitignore"), "tmp/\nreports/\n")
+      File.write(File.join(repo_a, "README.md"), "repo\n")
+      assert_cmd("git", "-C", repo_a, "add", ".gitignore", "README.md")
+      assert_cmd("git", "-C", repo_a, "commit", "-qm", "init main")
+      assert_cmd("git", "-C", repo_a, "remote", "add", "origin", upstream)
+      assert_cmd("git", "-C", repo_a, "push", "-q", "-u", "origin", "main")
+
+      rep_src = File.join(repo_a, "tmp", "ws", "report")
+      cov_src = File.join(rep_src, "coverage")
+      tri_src = File.join(rep_src, "triage")
+      FileUtils.mkdir_p([
+        File.join(cov_src, "pairs", "prism_a__native", "report", "coverage"),
+        File.join(tri_src, "ABRT", "deadbeef")
+      ])
+      File.write(File.join(rep_src, "index.html"), "<html>main report</html>\n")
+      File.write(File.join(rep_src, "sankey.html"), "<html>sankey</html>\n")
+      File.write(File.join(cov_src, "coverage.json"), '{"pairs":[{"id":"prism_a__native","totals":{"regions":{"covered":8,"count":10,"percent":80.0}}}]}')
+      File.write(File.join(cov_src, "summary.txt"), "TOTAL 10 2 80.00% 1 0 100.00% 10 2 80.00%\n")
+      File.write(File.join(cov_src, "lcov.info"), "SF:src/prism.c\nend_of_record\n")
+      File.write(File.join(cov_src, "pairs", "prism_a__native", "summary.txt"), "pair summary\n")
+      File.write(File.join(cov_src, "pairs", "prism_a__native", "lcov.info"), "end_of_record\n")
+      File.write(File.join(cov_src, "pairs", "prism_a__native", "report", "index.html"), "<html>cov</html>\n")
+      File.write(File.join(cov_src, "pairs", "prism_a__native", "report", "coverage", "prism.c.html"), "<html>prism.c</html>\n")
+      File.write(File.join(tri_src, "clusters.json"), '{"clusters":[],"summary":{"cluster_count":0,"bucket_count":1,"total_occurrences":2}}')
+      File.write(File.join(tri_src, "metadata.json"), '{"summary":{"bucket_count":1,"total_occurrences":2}}')
+      File.write(File.join(tri_src, "ABRT", "deadbeef", "meta.json"), "{\"bucket_id\":\"ABRT/deadbeef\"}\n")
+      File.write(File.join(tri_src, "ABRT", "deadbeef", "input.min"), "crash()\n")
+      File.write(File.join(tri_src, "ABRT", "deadbeef", "verify.sh"), "#!/bin/sh\nexit 1\n")
+      File.write(File.join(tri_src, "ABRT", "deadbeef", "id:000001,sig:06"), "raw\n")
+
+      reports_a = File.join(repo_a, "reports")
+      assert_ruby_cmd(
+        repo_path("bin/publish.rb"),
+        "--fuzz-root", repo_a,
+        "--report-dir", rep_src,
+        "--triage-dir", tri_src,
+        "--coverage-dir", cov_src,
+        "--out-dir", reports_a,
+        "--run-id", "run-all",
+        "--commit",
+        "--push"
+      )
+
+      main_status, = assert_cmd("git", "-C", repo_a, "status", "--porcelain")
+      assert_equal "", main_status.strip
+      main_tree, = assert_cmd("git", "-C", repo_a, "ls-tree", "-r", "--name-only", "main")
+      refute_includes main_tree, "reports"
+
+      wt_branch, = assert_cmd("git", "-C", reports_a, "symbolic-ref", "--short", "HEAD")
+      assert_equal "gh-pages", wt_branch.strip
+      wt_status, = assert_cmd("git", "-C", reports_a, "status", "--porcelain")
+      assert_equal "", wt_status.strip
+
+      run_rep = File.join(reports_a, "runs", "run-all", "report")
+      assert_path_exists File.join(reports_a, ".nojekyll")
+      assert_path_exists File.join(run_rep, "index.html")
+      assert_path_exists File.join(run_rep, "sankey.html")
+      assert_path_exists File.join(run_rep, "coverage", "pairs", "prism_a__native", "report", "coverage", "prism.c.html")
+      assert_path_exists File.join(run_rep, "triage", "ABRT", "deadbeef", "input.min")
+      assert_path_exists File.join(run_rep, "triage", "ABRT", "deadbeef", "verify.sh")
+      assert_path_exists File.join(run_rep, "triage", "ABRT", "deadbeef", "meta.json")
+      assert_path_exists File.join(run_rep, "triage", "ABRT", "deadbeef", "id:000001,sig:06")
+
+      idx_html = File.read(File.join(reports_a, "index.html"))
+      assert_includes idx_html, "runs/run-all/report/coverage/pairs/prism_a__native/report/index.html"
+
+      remote_gh, = assert_cmd("git", "--git-dir", upstream, "rev-parse", "--verify", "refs/heads/gh-pages")
+      refute_empty remote_gh.strip
+
+      # Fresh clone attaches to existing origin/gh-pages worktree and preserves run-all
+      assert_cmd("git", "clone", "-q", upstream, repo_b)
+      assert_cmd("git", "-C", repo_b, "config", "user.email", "test@example.com")
+      assert_cmd("git", "-C", repo_b, "config", "user.name", "Test")
+      assert_cmd("git", "-C", repo_b, "config", "commit.gpgsign", "false")
+      reports_b = File.join(repo_b, "reports")
+      assert_ruby_cmd(
+        repo_path("bin/publish.rb"),
+        "--fuzz-root", repo_b,
+        "--report-dir", rep_src,
+        "--triage-dir", tri_src,
+        "--coverage-dir", cov_src,
+        "--out-dir", reports_b,
+        "--run-id", "run-two",
+        "--commit"
+      )
+      runs_idx = JSON.parse(File.read(File.join(reports_b, "runs", "index.json")))
+      assert_equal %w[run-two run-all], runs_idx.map { |r| r["run_id"] }
+    end
+  end
+
   def test_report_custom_worker_colors_override_palette
     # Regression (Bug #33): custom DSL worker color in PLOT_COLORS overrides PALETTE across report charts & SVG cards
     with_tmpdir("report-colors-") do |color_ws|
@@ -609,6 +709,11 @@ class CampaignDslAndSchemaTest < Minitest::Test
 
     dry_nopost_out, = assert_cmd(repo_path("campaigns/default.rb"), "run", "--skip-build", "--no-post", "--dry-run")
     refute_match(/triage\.rb|coverage\.sh|report\.rb|publish\.rb/, dry_nopost_out)
+
+    dry_pub_out, = assert_cmd(repo_path("campaigns/default.rb"), "publish", "--dry-run", "--", "--run-id", "cli-01", "--commit")
+    assert_includes dry_pub_out, "--run-id"
+    assert_includes dry_pub_out, "cli-01"
+    assert_includes dry_pub_out, "--commit"
 
     comp_out, = assert_cmd(
       repo_path("campaigns/default.rb"),

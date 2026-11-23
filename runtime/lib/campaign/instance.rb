@@ -145,11 +145,17 @@ module PrismFuzzer
         mark_invoked!
         return true if Thread.current[:prism_fuzzer_compiling_dsl]
 
-        ctx = opts.empty? ? context : context(
+        cli_opts = {
           publish_run_id: opts[:run_id],
           publish_title: opts[:title],
           publish_out_dir: opts[:out_dir]
-        )
+        }
+        cli_opts[:publish_gh_pages] = opts[:gh_pages] if opts.key?(:gh_pages)
+        cli_opts[:publish_branch] = opts[:branch] if opts.key?(:branch)
+        cli_opts[:publish_remote] = opts[:remote] if opts.key?(:remote)
+        cli_opts[:publish_commit] = opts[:commit] if opts.key?(:commit)
+        cli_opts[:publish_push] = opts[:push] if opts.key?(:push)
+        ctx = opts.empty? ? context : context(**cli_opts)
         Campaign.run_publish!(ctx, dry_run: dry_run)
       end
 

@@ -24,8 +24,8 @@ Comparing any two Prism versions (such as `main` before vs. after an optimizer/p
    - full `pm_serialize` byte buffer and `pm_prettyprint` output
 4. Linker `-Map` slices are processed by [`harnesses/prism/gen_diff_ids.rb`](../harnesses/prism/gen_diff_ids.rb) into `<binary>.ids` attributing every edge to `Domain=prism_a`, `Domain=prism_b`, or `Domain=harness`.
 
-## 3. Topology-Driven Orchestration, Triage & GitHub Pages (`reports/`)
+## 3. Topology-Driven Orchestration, Triage & GitHub Pages (`gh-pages` worktree)
 
 - `runtime/provenance.rb` snapshots compiled binaries, `.ids`, `fuzz-ruby-ext`, `prism_lib`, `tmp/fuzz/bin/topology.json`, and scripts into `tmp/fuzz/snapshot/`.
 - `runtime/run.sh`, `runtime/status.rb`, `triage/triage.rb`, `triage/cluster.rb`, `triage/verify.rb`, `triage/explain.rb`, `report/coverage.sh`, `report/report.rb`, and `report/sankey.rb` all discover sync groups, generators, fuzzer shapes, source pairs, and worker metadata directly from `topology.json`.
-- `bin/publish.rb` packages the unified campaign report (`<ws>/report/index.html`, bundling AFL++ telemetry, LLVM source coverage, and origin Sankey), LLVM coverage summaries/LCOV (`report/coverage/`), and cluster summaries into `reports/runs/<run-id>/`, regenerates `reports/index.html`, and `.github/workflows/pages.yml` deploys `reports/` on pushes to `main`.
+- `bin/publish.rb` attaches `reports/` as a gitignored `gh-pages` branch worktree (or targets `--out-dir DIR`), copies all report, `llvm-cov` HTML, and triage bucket artifacts into `runs/<run-id>/report/`, and regenerates `index.html` at the root of `gh-pages` without committing generated artifacts to `main`.

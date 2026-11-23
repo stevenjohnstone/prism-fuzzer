@@ -266,7 +266,7 @@ module PrismFuzzer
           PrismFuzzer::Campaign.run_report!(ctx, dry_run: opts[:dry_run])
           0
         when "publish"
-          PrismFuzzer::Campaign.run_publish!(ctx, dry_run: opts[:dry_run])
+          PrismFuzzer::Campaign.run_publish!(ctx, extra_args: extra_args, dry_run: opts[:dry_run])
           0
         when "retriage"
           PrismFuzzer::Campaign.ensure_docker_image!(fuzz_root: fuzz_root, dry_run: opts[:dry_run])

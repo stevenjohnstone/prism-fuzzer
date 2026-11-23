@@ -1044,10 +1044,14 @@ class WorkspaceAndCoverageTest < Minitest::Test
         assert_includes html, 'id="tab-sankey"'
         assert_includes html, "sankey-root"
 
-        # Publish manifest + artifacts
-        FileUtils.mkdir_p([File.join(real_ws, "report", "triage"), File.join(real_ws, "bin")])
+        # Publish manifest + all artifacts (including llvm-cov HTML and triage buckets)
+        bucket_dir = File.join(real_ws, "report", "triage", "ABRT", "deadbeef")
+        FileUtils.mkdir_p([bucket_dir, File.join(real_ws, "bin")])
         File.write(File.join(real_ws, "report", "triage", "metadata.json"), "{\"buckets\":[]}\n")
         File.write(File.join(real_ws, "report", "triage", "clusters.json"), "{\"clusters\":[]}\n")
+        File.write(File.join(bucket_dir, "meta.json"), "{\"bucket_id\":\"ABRT/deadbeef\"}\n")
+        File.write(File.join(bucket_dir, "input.min"), "x\n")
+        File.write(File.join(bucket_dir, "verify.sh"), "#!/bin/sh\nexit 0\n")
 
         assert_ruby_cmd(
           repo_path("bin", "publish.rb"),
@@ -1067,12 +1071,16 @@ class WorkspaceAndCoverageTest < Minitest::Test
         assert_equal %w[prism_a__native prism_a__swar prism_b__native], cov_pairs.keys.sort
         assert_equal "report/index.html", manifest.dig("artifacts", "report")
         assert_equal "report/triage/clusters.json", manifest.dig("artifacts", "clusters")
+        assert_equal "report/coverage/pairs/prism_a__native/report/index.html", manifest.dig("artifacts", "coverage_html")
 
         pub_dir = File.dirname(manifest_path)
         assert_path_exists File.join(pub_dir, "report", "index.html")
         assert_path_exists File.join(pub_dir, "report", "triage", "clusters.json")
+        assert_path_exists File.join(pub_dir, "report", "triage", "ABRT", "deadbeef", "meta.json")
+        assert_path_exists File.join(pub_dir, "report", "triage", "ABRT", "deadbeef", "input.min")
+        assert_path_exists File.join(pub_dir, "report", "triage", "ABRT", "deadbeef", "verify.sh")
         assert_path_exists File.join(pub_dir, "report", "coverage", "pairs", "prism_a__native", "summary.txt")
-        refute_path_exists File.join(pub_dir, "report", "coverage", "pairs", "prism_a__native", "report", "index.html")
+        assert_path_exists File.join(pub_dir, "report", "coverage", "pairs", "prism_a__native", "report", "index.html")
       end
     end
   end

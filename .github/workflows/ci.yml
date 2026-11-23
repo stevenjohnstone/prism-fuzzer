@@ -47,7 +47,6 @@ jobs:
             YAML.safe_load_file(".rubocop.yml")
             YAML.safe_load_file(".clang-format")
             YAML.safe_load_file(".github/workflows/ci.yml")
-            YAML.safe_load_file(".github/workflows/pages.yml")
           '
 
       - name: Run ShellCheck across all shell scripts

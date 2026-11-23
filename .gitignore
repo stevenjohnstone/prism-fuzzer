@@ -9,3 +9,4 @@ build/
 .DS_Store
 harnesses/prism/node_locations.inc
 harnesses/prism/node_serialize_walk.inc
+reports/
