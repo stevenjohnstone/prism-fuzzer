@@ -107,7 +107,7 @@ build_isolated_side() {
   local side_dir="$WORK_DIR/side_${side_tag}"
   local out_archive="$WORK_DIR/libprism_side_${side_tag}.a"
   rm -rf "$side_dir" "$out_archive"
-  mkdir -p "$side_dir/objs"
+  mkdir -p "$side_dir/objs" "$side_dir/gen"
 
   mapfile -t git_meta < <(ruby -r"$FUZZ_ROOT/runtime/provenance" -e '
     git = FuzzProvenance.detect_git_state(ARGV[0], paths: FuzzProvenance::PRISM_DIRTY_PATHS) || {}
@@ -148,8 +148,17 @@ build_isolated_side() {
     objs+=("$obj")
   done
 
+  local side_scan_flags=()
+  if [ -f "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" ] && [ -f "$prism_root/config.yml" ] && \
+     grep -rq 'PM_SCOPE_NODE' "$prism_root/include" 2>/dev/null && \
+     ruby "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" "$prism_root/config.yml" "$side_dir/gen/node_serialize_walk.inc" >/dev/null 2>&1; then
+    side_scan_flags+=("-I$side_dir/gen")
+  else
+    side_scan_flags+=(-DPRISM_FUZZ_NO_SERIALIZE_SCAN)
+  fi
+
   local side_obj="$side_dir/objs/prism_diff_side.o"
-  "${PRISM_CC[@]}" "${common_flags[@]}" -c "$FUZZ_ROOT/harnesses/prism/prism_diff_side.c" -o "$side_obj"
+  "${PRISM_CC[@]}" "${common_flags[@]}" "${side_scan_flags[@]}" -c "$FUZZ_ROOT/harnesses/prism/prism_diff_side.c" -o "$side_obj"
   objs+=("$side_obj")
 
   ar rcs "$out_archive" "${objs[@]}"
@@ -164,7 +173,7 @@ build_isolated_side() {
       next if sym.start_with?("__asan_", "__ubsan_", "__msan_", "__lsan_", "__tsan_", "__sanitizer_", "__sancov_", "__afl_", "__llvm_", "sancov.")
       next if seen[sym]
       seen[sym] = true
-      if sym =~ /\Afuzz_prism_side_(run|free|info)\z/
+      if sym =~ /\Afuzz_prism_side_(run|free|info|locate_serialize)\z/
         puts "#{sym} fuzz_prism_side_#{tag}_#{$1}"
       else
         puts "#{sym} __prism_#{tag}_#{sym}"

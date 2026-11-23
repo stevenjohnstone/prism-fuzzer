@@ -806,6 +806,50 @@ class TriageClusterTest < Minitest::Test
     end
   end
 
+  def test_section_type_ctx_and_preexe_similarity_differentiation
+    base = 0.50
+    sec_conflict = FuzzClustering::Similarity.diff_symptom_similarity(
+      base,
+      { "kind" => "ast_size_mismatch", "section" => "ast", "type" => "PM_INTEGER_NODE" },
+      { "kind" => "ast_size_mismatch", "section" => "warnings" }
+    )
+    assert_in_delta base * FuzzClustering::DIFF_CONFLICT_SCALE, sec_conflict, 1e-9
+
+    type_conflict = FuzzClustering::Similarity.diff_symptom_similarity(
+      base,
+      { "kind" => "ast_size_mismatch", "section" => "ast", "type" => "PM_INTEGER_NODE" },
+      { "kind" => "ast_size_mismatch", "section" => "ast", "type" => "PM_RATIONAL_NODE" }
+    )
+    assert_in_delta base * FuzzClustering::DIFF_CONFLICT_SCALE, type_conflict, 1e-9
+
+    type_match = FuzzClustering::Similarity.diff_symptom_similarity(
+      base,
+      { "kind" => "ast_size_mismatch", "section" => "ast", "type" => "PM_INTEGER_NODE" },
+      { "kind" => "ast_size_mismatch", "section" => "ast", "type" => "PM_INTEGER_NODE" }
+    )
+    assert_operator type_match, :>, base
+
+    feat_preexe = {
+      diff_fields: { "kind" => "ast_preexe_order_mismatch", "sub" => "tree" },
+      diff_has_domains: false,
+      diff_pooled_vec: { "1" => 1.0 },
+      diff_pooled_sum: 1.0,
+      diff_pooled_norm2: 1.0
+    }
+    feat_tree = {
+      diff_fields: { "kind" => "ast_tree_mismatch", "sub" => "tag", "ctx" => "CALL.arg" },
+      diff_has_domains: false,
+      diff_pooled_vec: { "1" => 1.0 },
+      diff_pooled_sum: 1.0,
+      diff_pooled_norm2: 1.0
+    }
+    assert_in_delta(
+      FuzzClustering::DIFF_LOCALS_MISMATCH_PENALTY,
+      FuzzClustering::Similarity.diff_parse_y_dual_similarity(feat_preexe, feat_tree),
+      1e-9
+    )
+  end
+
   private
 
   def build_corpus(extra_functions: {}, extra_df: {})

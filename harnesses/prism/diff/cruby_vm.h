@@ -18,7 +18,8 @@ VALUE diff_run_cruby(
     char *exc_buf,
     size_t exc_cap,
     char *tag_buf,
-    size_t tag_cap
+    size_t tag_cap,
+    uint32_t *out_err_line
 );
 void diff_run_cruby_compile(
     const char *source,
@@ -27,7 +28,8 @@ void diff_run_cruby_compile(
     char *exc_buf,
     size_t exc_cap,
     char *tag_buf,
-    size_t tag_cap
+    size_t tag_cap,
+    uint32_t *out_err_line
 );
 void diff_fail_syntax_mismatch(
     const uint8_t *source,
@@ -35,6 +37,8 @@ void diff_fail_syntax_mismatch(
     bool prism_ok,
     size_t prism_errs,
     const char *prism_diag,
+    const char *prism_enc,
+    const char *ast_ctx,
     bool cruby_ok,
     const char *cruby_tag,
     const char *exc_buf

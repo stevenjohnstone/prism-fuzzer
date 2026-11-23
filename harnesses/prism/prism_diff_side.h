@@ -30,12 +30,25 @@ typedef struct {
     const char *git_dirty;
 } fuzz_prism_side_info_t;
 
+typedef struct {
+    bool valid;
+    size_t meta_end;
+    size_t ast_start;
+    size_t cpool_offset;
+    uint32_t cpool_size;
+    size_t cpool_str_start;
+    char section[32];
+    char node_type[64];
+} fuzz_prism_serialize_loc_t;
+
 void fuzz_prism_side_a_run(const uint8_t *input, size_t size, fuzz_prism_side_result_t *out);
 void fuzz_prism_side_a_free(fuzz_prism_side_result_t *res);
 fuzz_prism_side_info_t fuzz_prism_side_a_info(void);
+void fuzz_prism_side_a_locate_serialize(const uint8_t *buf, size_t len, size_t query_off, fuzz_prism_serialize_loc_t *out);
 
 void fuzz_prism_side_b_run(const uint8_t *input, size_t size, fuzz_prism_side_result_t *out);
 void fuzz_prism_side_b_free(fuzz_prism_side_result_t *res);
 fuzz_prism_side_info_t fuzz_prism_side_b_info(void);
+void fuzz_prism_side_b_locate_serialize(const uint8_t *buf, size_t len, size_t query_off, fuzz_prism_serialize_loc_t *out);
 
 #endif

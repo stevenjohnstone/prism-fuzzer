@@ -407,12 +407,14 @@ module PrismFuzzer
                File.join(fuzz_root, "harnesses", "prism", "prism_diff.c"),
                File.join(fuzz_root, "harnesses", "prism", "prism_diff_side.c"),
                File.join(fuzz_root, "harnesses", "prism", "prism_diff_side.h"),
+               File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_serialize_scan.h"),
                File.join(fuzz_root, "harnesses", "prism", "include", "prism_ijon.h"),
+               File.join(fuzz_root, "harnesses", "prism", "gen_serialize_walk.rb"),
                File.join(fuzz_root, "harnesses", "prism", "gen_diff_ids.rb"),
                script,
                afl_stamp
              ]
-      max_in = (plan.dig("defaults", "max_input_size") || 1024).to_s
+      max_in = effective_compiled_max_input_size(plan).to_s
       bkey = build_key_digest({
         shape: "prism_diff_prism",
         id: id,
@@ -552,6 +554,7 @@ module PrismFuzzer
       ]
       deps = c_files + h_files + harness_srcs + [
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h"),
+        File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_serialize_scan.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "prism_ijon.h"),
         File.join(gen_dir, "node_serialize_walk.inc"),
         afl_stamp

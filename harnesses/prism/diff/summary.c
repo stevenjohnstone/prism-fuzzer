@@ -288,6 +288,7 @@ void diff_summary_init(diff_summary_t *s) {
     diff_span_vec_init(&s->block_owners);
     diff_tree_tok_vec_init(&s->tree);
     memset(s->counts, 0, sizeof(s->counts));
+    s->has_nested_preexe = false;
 }
 
 void diff_summary_free(diff_summary_t *s) {
@@ -298,6 +299,7 @@ void diff_summary_free(diff_summary_t *s) {
     diff_span_vec_free(&s->block_owners);
     diff_tree_tok_vec_free(&s->tree);
     memset(s->counts, 0, sizeof(s->counts));
+    s->has_nested_preexe = false;
 }
 
 static int diff_span_cmp(diff_span_t a, diff_span_t b, const char *buf) {
@@ -479,15 +481,140 @@ static void diff_format_tok_full(const diff_summary_t *s, diff_tree_tok_t tok, c
     dst[pos] = '\0';
 }
 
+static bool diff_is_ident_starter(unsigned char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' || ch >= 0x80;
+}
+
+/* Format a structural signature token for `sub=label` headlines: preserve
+ * operators, slot/scope names, and variable target prefixes (`l:`, `i:`, `$!`)
+ * while normalizing fuzzed user identifier/literal spellings to `<id>`. */
+static void diff_format_tok_sig(const diff_summary_t *s, diff_tree_tok_t tok, char dst[97]) {
+    const char *tname = diff_tok_tag_name((diff_tok_tag_t) tok.tag);
+    if (tok.label.length == 0) {
+        snprintf(dst, 97, "%s", tname);
+        return;
+    }
+
+    const char *lptr = s->strbuf.data + tok.label.offset;
+    size_t llen = tok.label.length;
+
+    switch ((diff_tok_tag_t) tok.tag) {
+        case DIFF_TOK_SCOPE:
+        case DIFF_TOK_SLOT:
+        case DIFF_TOK_RANGE:
+        case DIFF_TOK_FLIP:
+        case DIFF_TOK_TARGET_NONE:
+            diff_format_tok_full(s, tok, dst);
+            return;
+        case DIFF_TOK_CALL:
+        case DIFF_TOK_QCALL:
+        case DIFF_TOK_ATTRASGN:
+        case DIFF_TOK_OP_ASGN1:
+        case DIFF_TOK_OP_ASGN2: {
+            if (diff_is_ident_starter((unsigned char) lptr[0])) {
+                char suffix = (llen > 1 && (lptr[llen - 1] == '?' || lptr[llen - 1] == '!' || lptr[llen - 1] == '='))
+                    ? lptr[llen - 1]
+                    : '\0';
+                if (suffix != '\0') {
+                    snprintf(dst, 97, "%s:<id>%c", tname, suffix);
+                } else {
+                    snprintf(dst, 97, "%s:<id>", tname);
+                }
+            } else {
+                diff_format_tok_full(s, tok, dst);
+            }
+            return;
+        }
+        case DIFF_TOK_GVAR: {
+            if (llen >= 2 && lptr[0] == '$') {
+                unsigned char c1 = (unsigned char) lptr[1];
+                if (diff_is_ident_starter(c1)) {
+                    snprintf(dst, 97, "GVAR:$<id>");
+                } else if (c1 >= '0' && c1 <= '9') {
+                    snprintf(dst, 97, "GVAR:$<nth>");
+                } else {
+                    diff_format_tok_full(s, tok, dst);
+                }
+            } else {
+                snprintf(dst, 97, "GVAR:<id>");
+            }
+            return;
+        }
+        case DIFF_TOK_ASGN:
+        case DIFF_TOK_TARGET: {
+            if (llen >= 2 && lptr[1] == ':') {
+                snprintf(dst, 97, "%s:%c:<id>", tname, lptr[0]);
+            } else {
+                diff_format_tok_full(s, tok, dst);
+            }
+            return;
+        }
+        default:
+            snprintf(dst, 97, "%s:<id>", tname);
+            return;
+    }
+}
+
+static void diff_format_tree_ctx(
+    const diff_summary_t *s,
+    const size_t *open_stack,
+    size_t open_depth,
+    char dst[64]
+) {
+    if (open_depth == 0) {
+        snprintf(dst, 64, "ROOT");
+        return;
+    }
+
+    diff_tree_tok_t top = s->tree.items[open_stack[open_depth - 1]];
+    if ((diff_tok_tag_t) top.tag == DIFF_TOK_SLOT && open_depth >= 2) {
+        size_t pidx = open_depth - 2;
+        while (pidx > 0 && (diff_tok_tag_t) s->tree.items[open_stack[pidx]].tag == DIFF_TOK_SLOT) {
+            pidx--;
+        }
+        diff_tree_tok_t parent = s->tree.items[open_stack[pidx]];
+        const char *ptag = diff_tok_tag_name((diff_tok_tag_t) parent.tag);
+        char slot_name[24];
+        size_t slen = top.label.length < sizeof(slot_name) - 1 ? (size_t) top.label.length : sizeof(slot_name) - 1;
+        for (size_t k = 0; k < slen; k++) {
+            unsigned char ch = (unsigned char) s->strbuf.data[top.label.offset + k];
+            slot_name[k] = ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_') ? (char) ch : '_';
+        }
+        slot_name[slen] = '\0';
+        snprintf(dst, 64, "%s.%s", ptag, slot_name);
+        return;
+    }
+
+    if ((diff_tok_tag_t) top.tag == DIFF_TOK_SCOPE && top.label.length > 0) {
+        char sc_name[24];
+        size_t slen = top.label.length < sizeof(sc_name) - 1 ? (size_t) top.label.length : sizeof(sc_name) - 1;
+        memcpy(sc_name, s->strbuf.data + top.label.offset, slen);
+        sc_name[slen] = '\0';
+        snprintf(dst, 64, "SCOPE.%s", sc_name);
+        return;
+    }
+
+    snprintf(dst, 64, "%s", diff_tok_tag_name((diff_tok_tag_t) top.tag));
+}
+
 static void diff_compare_tree(diff_summary_t *prism, diff_summary_t *cruby) {
     size_t plen = prism->tree.count;
     size_t clen = cruby->tree.count;
     size_t common = plen < clen ? plen : clen;
+    size_t open_stack[256];
+    size_t open_depth = 0;
 
     for (size_t i = 0; i < common; i++) {
         diff_tree_tok_t pt = prism->tree.items[i];
         diff_tree_tok_t ct = cruby->tree.items[i];
         if (pt.tag == ct.tag && diff_span_equal(prism->strbuf.data, pt.label, cruby->strbuf.data, ct.label)) {
+            if ((diff_tok_tag_t) pt.tag == DIFF_TOK_CLOSE) {
+                if (open_depth > 0) {
+                    open_depth--;
+                }
+            } else if (open_depth < sizeof(open_stack) / sizeof(open_stack[0])) {
+                open_stack[open_depth++] = i;
+            }
             continue;
         }
         const char *sub = (pt.tag != ct.tag) ? "tag" : "label";
@@ -496,24 +623,43 @@ static void diff_compare_tree(diff_summary_t *prism, diff_summary_t *cruby) {
         char pfull[97];
         char cfull[97];
         char prev_tok[97];
+        char ctx_buf[64];
         diff_format_tok_full(prism, pt, pfull);
         diff_format_tok_full(cruby, ct, cfull);
+        diff_format_tree_ctx(prism, open_stack, open_depth, ctx_buf);
         if (i > 0) {
             diff_format_tok_full(prism, prism->tree.items[i - 1], prev_tok);
         } else {
             snprintf(prev_tok, sizeof(prev_tok), "START");
         }
-        const char *phead = (pt.tag != ct.tag) ? ptag : pfull;
-        const char *chead = (pt.tag != ct.tag) ? ctag : cfull;
         char phead_buf[97];
         char chead_buf[97];
-        snprintf(phead_buf, sizeof(phead_buf), "%s", phead);
-        snprintf(chead_buf, sizeof(chead_buf), "%s", chead);
+        if (pt.tag != ct.tag) {
+            snprintf(phead_buf, sizeof(phead_buf), "%s", ptag);
+            snprintf(chead_buf, sizeof(chead_buf), "%s", ctag);
+        } else {
+            diff_format_tok_sig(prism, pt, phead_buf);
+            diff_format_tok_sig(cruby, ct, chead_buf);
+        }
+        bool nested_preexe = prism->has_nested_preexe;
         diff_summary_free(prism);
         diff_summary_free(cruby);
+        if (nested_preexe) {
+            diff_invariant_fail(
+                "INVARIANT[diff_parse_y]: kind=ast_preexe_order_mismatch sub=tree [detail: idx=%zu ctx=%s prev=%s prism_len=%zu cruby_len=%zu prism_tok=%s cruby_tok=%s]\n",
+                i,
+                ctx_buf,
+                prev_tok,
+                plen,
+                clen,
+                pfull,
+                cfull
+            );
+        }
         diff_invariant_fail(
-            "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=%s prism=%s cruby=%s [detail: idx=%zu prev=%s prism_len=%zu cruby_len=%zu prism_tok=%s cruby_tok=%s]\n",
+            "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=%s ctx=%s prism=%s cruby=%s [detail: idx=%zu prev=%s prism_len=%zu cruby_len=%zu prism_tok=%s cruby_tok=%s]\n",
             sub,
+            ctx_buf,
             phead_buf,
             chead_buf,
             i,
@@ -530,6 +676,8 @@ static void diff_compare_tree(diff_summary_t *prism, diff_summary_t *cruby) {
         const char *chead = clen > plen ? diff_tok_tag_name((diff_tok_tag_t) cruby->tree.items[common].tag) : "EOF";
         char pfull[97];
         char cfull[97];
+        char ctx_buf[64];
+        diff_format_tree_ctx(prism, open_stack, open_depth, ctx_buf);
         if (plen > clen) {
             diff_format_tok_full(prism, prism->tree.items[common], pfull);
         } else {
@@ -540,10 +688,23 @@ static void diff_compare_tree(diff_summary_t *prism, diff_summary_t *cruby) {
         } else {
             snprintf(cfull, sizeof(cfull), "EOF");
         }
+        bool nested_preexe = prism->has_nested_preexe;
         diff_summary_free(prism);
         diff_summary_free(cruby);
+        if (nested_preexe) {
+            diff_invariant_fail(
+                "INVARIANT[diff_parse_y]: kind=ast_preexe_order_mismatch sub=tree_len [detail: idx=%zu ctx=%s prism_len=%zu cruby_len=%zu prism_tok=%s cruby_tok=%s]\n",
+                common,
+                ctx_buf,
+                plen,
+                clen,
+                pfull,
+                cfull
+            );
+        }
         diff_invariant_fail(
-            "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=len prism=%s cruby=%s [detail: idx=%zu prism_len=%zu cruby_len=%zu prism_tok=%s cruby_tok=%s]\n",
+            "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=len ctx=%s prism=%s cruby=%s [detail: idx=%zu prism_len=%zu cruby_len=%zu prism_tok=%s cruby_tok=%s]\n",
+            ctx_buf,
             phead,
             chead,
             common,
@@ -656,8 +817,17 @@ void diff_compare_asts(diff_summary_t *prism, diff_summary_t *cruby) {
             size_t plen = diff_copy_span(prism->strbuf.data, ps, pcopy);
             size_t clen = diff_copy_span(cruby->strbuf.data, cs, ccopy);
             const char *sub = diff_block_mismatch_sub(pcopy, plen, ccopy, clen);
+            bool nested_preexe = prism->has_nested_preexe;
             diff_summary_free(prism);
             diff_summary_free(cruby);
+            if (nested_preexe) {
+                diff_invariant_fail(
+                    "INVARIANT[diff_parse_y]: kind=ast_preexe_order_mismatch sub=block_owner [detail: idx=%zu prism=%s cruby=%s]\n",
+                    i,
+                    pcopy,
+                    ccopy
+                );
+            }
             diff_invariant_fail(
                 "INVARIANT[diff_parse_y]: kind=ast_block_owner_mismatch sub=%s [detail: idx=%zu prism=%s cruby=%s]\n",
                 sub,

@@ -204,6 +204,7 @@ typedef struct {
     diff_span_vec_t block_owners;
     diff_tree_tok_vec_t tree;
     size_t counts[DIFF_CNT_LEN];
+    bool has_nested_preexe;
 } diff_summary_t;
 
 void diff_invariant_fail(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));

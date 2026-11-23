@@ -10,6 +10,7 @@
 #include <string.h>
 #define PRISM_FUZZ_ALLOW_STREAM_WITH_IJON 1
 #include "include/fuzz_options.h"
+#include "include/fuzz_serialize_scan.h"
 #ifdef PRISM_FUZZ_IJON
 #include "include/prism_ijon.h"
 #endif
@@ -540,9 +541,37 @@ __attribute__((noinline)) void harness(const uint8_t *input, size_t size) {
         size_t diff64 = 0;
         if (!oracle_compare_be_against_le(buf32_mut, len32, canon_cpool_offset, canon_cpool_size, oracle, oracle_len, &diff32, &diff64)) {
             const char *kind = (len32 != oracle_len) ? "ast_size_mismatch" : "ast_byte_mismatch";
+            char section[32];
+            char node_type[64];
+            size_t eff32 = diff32;
+            size_t eff64 = diff64;
+            fuzz_classify_serialize_diff(
+                buf32_mut, len32, false,
+                oracle, oracle_len, false,
+                diff32,
+                section, sizeof(section),
+                node_type, sizeof(node_type),
+                &eff32, &eff64
+            );
+            if (node_type[0] != '\0') {
+                fuzz_oracle32_fail(
+                    "INVARIANT[" FUZZ_ORACLE_NAMESPACE "]: kind=%s section=%s type=%s stream=%d [detail: " FUZZ_ORACLE_LEN_KEY "=%zu oracle64_len=%zu first_diff=%zu eff_diff=%zu byte32=0x%02x byte64=0x%02x]\n",
+                    kind,
+                    section,
+                    node_type,
+                    opts.stream_mode ? 1 : 0,
+                    len32,
+                    oracle_len,
+                    diff32,
+                    eff32,
+                    eff32 < len32 ? buf32_mut[eff32] : 0U,
+                    eff64 < oracle_len ? oracle[eff64] : 0U
+                );
+            }
             fuzz_oracle32_fail(
-                "INVARIANT[" FUZZ_ORACLE_NAMESPACE "]: kind=%s stream=%d [detail: " FUZZ_ORACLE_LEN_KEY "=%zu oracle64_len=%zu first_diff=%zu byte32=0x%02x byte64=0x%02x]\n",
+                "INVARIANT[" FUZZ_ORACLE_NAMESPACE "]: kind=%s section=%s stream=%d [detail: " FUZZ_ORACLE_LEN_KEY "=%zu oracle64_len=%zu first_diff=%zu byte32=0x%02x byte64=0x%02x]\n",
                 kind,
+                section,
                 opts.stream_mode ? 1 : 0,
                 len32,
                 oracle_len,
@@ -566,9 +595,37 @@ __attribute__((noinline)) void harness(const uint8_t *input, size_t size) {
                 }
             }
             const char *kind = (len32 != oracle_len) ? "ast_size_mismatch" : "ast_byte_mismatch";
+            char section[32];
+            char node_type[64];
+            size_t eff32 = diff_off;
+            size_t eff64 = diff_off;
+            fuzz_classify_serialize_diff(
+                buf32, len32, false,
+                oracle, oracle_len, false,
+                diff_off,
+                section, sizeof(section),
+                node_type, sizeof(node_type),
+                &eff32, &eff64
+            );
+            if (node_type[0] != '\0') {
+                fuzz_oracle32_fail(
+                    "INVARIANT[" FUZZ_ORACLE_NAMESPACE "]: kind=%s section=%s type=%s stream=%d [detail: " FUZZ_ORACLE_LEN_KEY "=%zu oracle64_len=%zu first_diff=%zu eff_diff=%zu byte32=0x%02x byte64=0x%02x]\n",
+                    kind,
+                    section,
+                    node_type,
+                    opts.stream_mode ? 1 : 0,
+                    len32,
+                    oracle_len,
+                    diff_off,
+                    eff32,
+                    eff32 < len32 ? buf32[eff32] : 0U,
+                    eff64 < oracle_len ? oracle[eff64] : 0U
+                );
+            }
             fuzz_oracle32_fail(
-                "INVARIANT[" FUZZ_ORACLE_NAMESPACE "]: kind=%s stream=%d [detail: " FUZZ_ORACLE_LEN_KEY "=%zu oracle64_len=%zu first_diff=%zu byte32=0x%02x byte64=0x%02x]\n",
+                "INVARIANT[" FUZZ_ORACLE_NAMESPACE "]: kind=%s section=%s stream=%d [detail: " FUZZ_ORACLE_LEN_KEY "=%zu oracle64_len=%zu first_diff=%zu byte32=0x%02x byte64=0x%02x]\n",
                 kind,
+                section,
                 opts.stream_mode ? 1 : 0,
                 len32,
                 oracle_len,

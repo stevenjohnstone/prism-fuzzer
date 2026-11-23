@@ -149,6 +149,21 @@ class SankeyTest < Minitest::Test
       doc = REXML::Document.new(File.read(empty_svg))
       assert_equal "svg", doc.root&.name
       assert_path_exists empty_html
+
+      require_relative "../report/lib/sankey/extract"
+      mk_cluster = ->(hl) { { "cluster_id" => "c1", "representative" => { "bucket_id" => "ABRT/x", "headline" => hl } } }
+      assert_equal "c1 · diff: prism_err_cruby_ok (return)",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_err_cruby_ok ctx=return prism=void_expression cruby=ok [detail: nul=0]"))
+      assert_equal "c1 · diff: preexe_order",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[diff_parse_y]: kind=ast_preexe_order_mismatch sub=tree [detail: idx=1]"))
+      assert_equal "c1 · diff: tree TARGET vs MTARGET",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag ctx=FOR.idx prism=TARGET cruby=MTARGET [detail: idx=7]"))
+      assert_equal "c1 · stream_diff: error_loc (array_term)",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[stream_diff]: kind=ast_mismatch sub=error_loc type=array_term [detail: size=11]"))
+      assert_equal "c1 · oracle_arm32: ast: INTEGER",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[oracle_arm32]: kind=ast_size_mismatch section=ast type=PM_INTEGER_NODE stream=0 [detail: first_diff=30]"))
+      assert_equal "c1 · diff_prism: ast: STRING",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[diff_prism]: kind=serialize_mismatch sub=bytes section=ast type=PM_STRING_NODE [detail: a_len=40]"))
     end
   end
 

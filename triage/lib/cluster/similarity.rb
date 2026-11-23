@@ -78,13 +78,14 @@ module FuzzClustering
       return evidence unless fields_a.is_a?(Hash) && fields_b.is_a?(Hash)
 
       if conflict_field?(fields_a["sub"], fields_b["sub"]) ||
-         conflict_field?(fields_a["kind"], fields_b["kind"])
+         conflict_field?(fields_a["kind"], fields_b["kind"]) ||
+         conflict_field?(fields_a["section"], fields_b["section"])
         return evidence * conflict_scale
       end
 
       mismatch = false
       specific_match = false
-      %w[prism cruby node scope].each do |key|
+      %w[prism cruby node scope type ctx].each do |key|
         va = normalize_diff_field(key, fields_a[key])
         vb = normalize_diff_field(key, fields_b[key])
         next unless va && vb
@@ -180,6 +181,9 @@ module FuzzClustering
         loc_a = fa.is_a?(Hash) && fa["kind"] == "locals_count_mismatch"
         loc_b = fb.is_a?(Hash) && fb["kind"] == "locals_count_mismatch"
         sim *= locals_penalty if loc_a != loc_b
+        pre_a = fa.is_a?(Hash) && fa["kind"] == "ast_preexe_order_mismatch"
+        pre_b = fb.is_a?(Hash) && fb["kind"] == "ast_preexe_order_mismatch"
+        sim *= locals_penalty if pre_a != pre_b
       elsif fa.is_a?(Hash) && fb.is_a?(Hash)
         if fa["sub"] == "prism_ok_cruby_err"
           va = normalize_diff_field("cruby", fa["cruby"])

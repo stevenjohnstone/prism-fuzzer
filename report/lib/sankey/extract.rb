@@ -121,8 +121,12 @@ module FuzzSankey
 
     short = case headline
             when /\AINVARIANT\[diff_parse_y\]:\s*kind=syntax_mismatch\s+sub=(\S+)/
-              "diff: #{Regexp.last_match(1)}"
-            when /\AINVARIANT\[diff_parse_y\]:\s*kind=ast_tree_mismatch(?:\s+sub=(\S+))?(?:\s+prism=(\S+)\s+cruby=(\S+))?/
+              sub = Regexp.last_match(1)
+              ctx = headline[/\bctx=([A-Za-z0-9_.:<>+-]+)/, 1]
+              ctx && !%w[top none].include?(ctx) ? "diff: #{sub} (#{ctx})" : "diff: #{sub}"
+            when /\AINVARIANT\[diff_parse_y\]:\s*kind=ast_preexe_order_mismatch/
+              "diff: preexe_order"
+            when /\AINVARIANT\[diff_parse_y\]:\s*kind=ast_tree_mismatch(?:\s+sub=(\S+))?(?:\s+ctx=\S+)?(?:\s+prism=(\S+)\s+cruby=(\S+))?/
               tag = [Regexp.last_match(2), Regexp.last_match(3)].compact.join(" vs ")
               tag.empty? ? "diff: ast_tree (#{Regexp.last_match(1)})" : "diff: tree #{tag}"
             when /\AINVARIANT\[diff_parse_y\]:\s*kind=(\S+)(?:\s+node=(\S+))?/
@@ -133,13 +137,22 @@ module FuzzSankey
               rest = Regexp.last_match(2)
               type_m = rest[/\btype=([A-Za-z0-9_]+)/, 1]
               site_m = rest[/\bsite=([A-Za-z0-9_]+)/, 1]
+              sub_m = rest[/\bsub=([A-Za-z0-9_]+)/, 1]
+              sec_m = rest[/\bsection=([A-Za-z0-9_]+)/, 1]
               kind_m = rest[/\bkind=([A-Za-z0-9_]+)/, 1]
               site_label = if site_m
                              inferred = site_m[/\Apm_([a-z0-9_]+?)_node_(?:[a-z0-9_]+_)?(?:create|new)\z/, 1]
                              inferred ? inferred.upcase : site_m
                            end
-              detail = type_m || site_label || kind_m || rest[0, 32]
-              "#{ns}: #{detail.delete_prefix('PM_').delete_suffix('_NODE')}"
+              clean_type = type_m&.delete_prefix("PM_")&.delete_suffix("_NODE")
+              detail = if ns == "stream_diff" && sub_m
+                         clean_type ? "#{sub_m} (#{clean_type})" : sub_m
+                       elsif (ns.start_with?("oracle_") || ns == "diff_prism") && sec_m
+                         clean_type ? "#{sec_m}: #{clean_type}" : sec_m
+                       else
+                         clean_type || site_label || kind_m || rest[0, 32]
+                       end
+              "#{ns}: #{detail}"
             when /\ASUMMARY:\s*\w+Sanitizer:\s*([^(\n]+)/
               Regexp.last_match(1).strip[0, 34]
             else

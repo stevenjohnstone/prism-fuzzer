@@ -30,6 +30,80 @@ static void prism_diff_fail(fuzz_prism_side_result_t *a, fuzz_prism_side_result_
     abort();
 }
 
+__attribute__((noreturn, noinline))
+static void prism_diff_fail_serialize(fuzz_prism_side_result_t *a, fuzz_prism_side_result_t *b, const char *sub) {
+    size_t min_len = a->serialized_len < b->serialized_len ? a->serialized_len : b->serialized_len;
+    size_t raw_diff = min_len;
+    for (size_t i = 0; i < min_len; i++) {
+        if (a->serialized[i] != b->serialized[i]) {
+            raw_diff = i;
+            break;
+        }
+    }
+
+    fuzz_prism_serialize_loc_t loc_a;
+    fuzz_prism_serialize_loc_t loc_b;
+    fuzz_prism_side_a_locate_serialize(a->serialized, a->serialized_len, raw_diff, &loc_a);
+    fuzz_prism_side_b_locate_serialize(b->serialized, b->serialized_len, raw_diff, &loc_b);
+
+    const char *section = "unknown";
+    const char *node_type = "";
+    size_t eff_a = raw_diff;
+    size_t eff_b = raw_diff;
+
+    if (loc_a.valid && loc_b.valid && raw_diff >= loc_a.meta_end) {
+        size_t ast_len_a = loc_a.cpool_offset - loc_a.ast_start;
+        size_t ast_len_b = loc_b.cpool_offset - loc_b.ast_start;
+        size_t min_ast = ast_len_a < ast_len_b ? ast_len_a : ast_len_b;
+        size_t ast_rel = min_ast;
+        for (size_t i = 0; i < min_ast; i++) {
+            if (a->serialized[loc_a.ast_start + i] != b->serialized[loc_b.ast_start + i]) {
+                ast_rel = i;
+                break;
+            }
+        }
+
+        if (ast_rel < min_ast || ast_len_a != ast_len_b) {
+            eff_a = loc_a.ast_start + ast_rel;
+            eff_b = loc_b.ast_start + ast_rel;
+            loc_a.node_type[0] = '\0';
+            loc_b.node_type[0] = '\0';
+            if (ast_rel < ast_len_a) {
+                fuzz_prism_side_a_locate_serialize(a->serialized, a->serialized_len, eff_a, &loc_a);
+            }
+            if (ast_rel < ast_len_b) {
+                fuzz_prism_side_b_locate_serialize(b->serialized, b->serialized_len, eff_b, &loc_b);
+            }
+            section = "ast";
+            if (loc_a.node_type[0] != '\0' && strcmp(loc_a.node_type, "LAZY_HEADER") != 0) {
+                node_type = loc_a.node_type;
+            } else if (loc_b.node_type[0] != '\0') {
+                node_type = loc_b.node_type;
+            } else {
+                node_type = loc_a.node_type;
+            }
+        } else if (loc_a.cpool_size != loc_b.cpool_size || strcmp(loc_a.section, "cpool_header") == 0) {
+            section = "cpool_table";
+        } else {
+            section = loc_a.section[0] != '\0' ? loc_a.section : loc_b.section;
+        }
+    } else {
+        section = (loc_a.section[0] != '\0' && strcmp(loc_a.section, "unknown") != 0) ? loc_a.section : loc_b.section;
+        node_type = loc_a.node_type[0] != '\0' ? loc_a.node_type : loc_b.node_type;
+    }
+
+    uint8_t ba = eff_a < a->serialized_len ? a->serialized[eff_a] : 0;
+    uint8_t bb = eff_b < b->serialized_len ? b->serialized[eff_b] : 0;
+    if (node_type[0] != '\0') {
+        prism_diff_fail(a, b,
+            "INVARIANT[diff_prism]: kind=serialize_mismatch sub=%s section=%s type=%s [detail: a_len=%zu b_len=%zu first_diff=%zu eff_diff=%zu byte_a=0x%02x byte_b=0x%02x]",
+            sub, section, node_type, a->serialized_len, b->serialized_len, raw_diff, eff_a, ba, bb);
+    }
+    prism_diff_fail(a, b,
+        "INVARIANT[diff_prism]: kind=serialize_mismatch sub=%s section=%s [detail: a_len=%zu b_len=%zu first_diff=%zu byte_a=0x%02x byte_b=0x%02x]",
+        sub, section, a->serialized_len, b->serialized_len, raw_diff, ba, bb);
+}
+
 int LLVMFuzzerTestOneInput(const uint8_t *input, size_t size) {
     if (input == NULL || size < 4) return 0;
 
@@ -100,39 +174,19 @@ int LLVMFuzzerTestOneInput(const uint8_t *input, size_t size) {
     }
 
     if (a.serialized_len != b.serialized_len) {
-        size_t min_len = a.serialized_len < b.serialized_len ? a.serialized_len : b.serialized_len;
-        size_t first_diff = min_len;
-        for (size_t i = 0; i < min_len; i++) {
-            if (a.serialized[i] != b.serialized[i]) {
-                first_diff = i;
-                break;
-            }
-        }
-        uint8_t ba = first_diff < a.serialized_len ? a.serialized[first_diff] : 0;
-        uint8_t bb = first_diff < b.serialized_len ? b.serialized[first_diff] : 0;
-        prism_diff_fail(&a, &b,
-            "INVARIANT[diff_prism]: kind=serialize_mismatch sub=len a_len=%zu b_len=%zu first_diff=%zu byte_a=0x%02x byte_b=0x%02x",
-            a.serialized_len, b.serialized_len, first_diff, ba, bb);
+        prism_diff_fail_serialize(&a, &b, "len");
     }
 
     if (a.serialized_len > 0 && memcmp(a.serialized, b.serialized, a.serialized_len) != 0) {
-        size_t first_diff = 0;
-        for (size_t i = 0; i < a.serialized_len; i++) {
-            if (a.serialized[i] != b.serialized[i]) {
-                first_diff = i;
-                break;
-            }
-        }
-        prism_diff_fail(&a, &b,
-            "INVARIANT[diff_prism]: kind=serialize_mismatch sub=bytes a_len=%zu b_len=%zu first_diff=%zu byte_a=0x%02x byte_b=0x%02x",
-            a.serialized_len, b.serialized_len, first_diff, a.serialized[first_diff], b.serialized[first_diff]);
+        prism_diff_fail_serialize(&a, &b, "bytes");
     }
 
     if (a.prettyprint_len != b.prettyprint_len ||
         (a.prettyprint_len > 0 && memcmp(a.prettyprint, b.prettyprint, a.prettyprint_len) != 0)) {
+        const char *pp_sub = (a.prettyprint_len != b.prettyprint_len) ? "len" : "bytes";
         prism_diff_fail(&a, &b,
-            "INVARIANT[diff_prism]: kind=prettyprint_mismatch a_len=%zu b_len=%zu",
-            a.prettyprint_len, b.prettyprint_len);
+            "INVARIANT[diff_prism]: kind=prettyprint_mismatch sub=%s [detail: a_len=%zu b_len=%zu]",
+            pp_sub, a.prettyprint_len, b.prettyprint_len);
     }
 
     fuzz_prism_side_a_free(&a);

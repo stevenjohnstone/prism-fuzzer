@@ -10,6 +10,7 @@
 
 #define PRISM_FUZZ_ALLOW_STREAM_WITH_IJON 1
 #include "fuzz_options.h"
+#include "fuzz_serialize_scan.h"
 #ifdef PRISM_FUZZ_IJON
 #include "prism_ijon.h"
 #endif
@@ -52,6 +53,35 @@ void fuzz_prism_side_free(fuzz_prism_side_result_t *res) {
     free(res->serialized);
     free(res->prettyprint);
     memset(res, 0, sizeof(*res));
+}
+
+__attribute__((visibility("default")))
+void fuzz_prism_side_locate_serialize(
+    const uint8_t *buf,
+    size_t len,
+    size_t query_off,
+    fuzz_prism_serialize_loc_t *out
+) {
+    if (out == NULL) return;
+    memset(out, 0, sizeof(*out));
+    fuzz_serialize_layout_t layout;
+    bool ok = fuzz_serialize_locate_offset(
+        buf,
+        len,
+        true,
+        query_off,
+        &layout,
+        out->section,
+        sizeof(out->section),
+        out->node_type,
+        sizeof(out->node_type)
+    );
+    out->valid = ok && layout.valid;
+    out->meta_end = layout.meta_end;
+    out->ast_start = layout.ast_start;
+    out->cpool_offset = layout.cpool_offset;
+    out->cpool_size = layout.cpool_size;
+    out->cpool_str_start = layout.cpool_str_start;
 }
 
 __attribute__((visibility("default")))

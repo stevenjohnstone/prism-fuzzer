@@ -70,17 +70,89 @@ static const char diff_fuzz_provenance[] FUZZ_PROVENANCE_ATTR =
     "\truby_release_date=" FUZZ_RUBY_RELEASE_DATE
     "\n";
 
+static void diff_copy_enc_token(const char *raw, char *dst, size_t cap) {
+    if (cap == 0) return;
+    if (raw == NULL || raw[0] == '\0') {
+        snprintf(dst, cap, "UTF-8");
+        return;
+    }
+    size_t out = 0;
+    for (size_t i = 0; raw[i] != '\0' && out + 1 < cap; i++) {
+        char c = raw[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+            dst[out++] = c;
+        }
+    }
+    if (out == 0) {
+        snprintf(dst, cap, "UTF-8");
+    } else {
+        dst[out] = '\0';
+    }
+}
+
+/* Cold-path helper invoked only when syntax_mismatch fires: re-parses `source`
+ * with Prism to locate the deepest structural AST node near the diagnostic or
+ * CRuby `<compiled>:<line>:` error line, adding zero overhead to passing runs. */
+static void diff_resolve_mismatch_prism_context(
+    const uint8_t *source,
+    size_t size,
+    bool prism_ok,
+    uint32_t cruby_err_line,
+    char *out_ctx,
+    size_t ctx_cap
+) {
+    snprintf(out_ctx, ctx_cap, "program");
+    uint8_t *copy = size > 0 ? (uint8_t *) malloc(size) : NULL;
+    if (size > 0 && copy == NULL) return;
+    if (size > 0) memcpy(copy, source, size);
+    const uint8_t *source_buf = (size == 0) ? (const uint8_t *) "" : copy;
+
+    pm_options_t *options = pm_options_new();
+    if (options != NULL && pm_options_version_set(options, "4.1", 3)) {
+        pm_arena_t *arena = pm_arena_new();
+        pm_parser_t *parser = pm_parser_new(arena, source_buf, size, options);
+        pm_node_t *root = pm_parse(parser);
+        uint32_t probe = 0;
+        bool has_probe = false;
+        if (!prism_ok) {
+            const pm_diagnostic_t *first = pm_parser_errors_first(parser);
+            if (first != NULL) {
+                probe = pm_diagnostic_location(first).start;
+                has_probe = true;
+            }
+        } else if (cruby_err_line >= 1) {
+            const pm_line_offset_list_t *lo = pm_parser_line_offsets(parser);
+            if (lo != NULL && lo->size > 0) {
+                size_t idx = (size_t) (cruby_err_line - 1);
+                if (idx >= lo->size) idx = lo->size - 1;
+                probe = lo->offsets[idx];
+                has_probe = true;
+            }
+        }
+        diff_find_prism_ast_context(parser, root, probe, has_probe, out_ctx, ctx_cap);
+        pm_parser_free(parser);
+        pm_arena_free(arena);
+    }
+    if (options != NULL) pm_options_free(options);
+    free(copy);
+}
+
 static void diff_run_prism(
     const uint8_t *source,
     size_t size,
     bool *out_ok,
     size_t *out_err_count,
     const char **out_first_diag,
+    char *out_enc,
+    size_t out_enc_cap,
     diff_summary_t *out_summary
 ) {
     *out_ok = false;
     *out_err_count = 0;
     *out_first_diag = "ok";
+    if (out_enc_cap > 0) {
+        snprintf(out_enc, out_enc_cap, "UTF-8");
+    }
 
     uint8_t *copy = size > 0 ? (uint8_t *) malloc(size) : NULL;
     if (size > 0 && copy == NULL) {
@@ -103,6 +175,7 @@ static void diff_run_prism(
     fuzz_ijon_attach(parser, &ijon_state, 0U);
 #endif
     pm_node_t *root = pm_parse(parser);
+    diff_copy_enc_token(pm_parser_encoding_name(parser), out_enc, out_enc_cap);
 
     size_t err_count = pm_parser_errors_size(parser);
     *out_err_count = err_count;
@@ -180,14 +253,16 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     bool prism_ok = false;
     size_t prism_errs = 0;
     const char *prism_diag = "ok";
+    char prism_enc[48];
     diff_summary_t prism_ast;
     diff_summary_init(&prism_ast);
 
-    diff_run_prism(source, source_size, &prism_ok, &prism_errs, &prism_diag, &prism_ast);
+    diff_run_prism(source, source_size, &prism_ok, &prism_errs, &prism_diag, prism_enc, sizeof(prism_enc), &prism_ast);
 
     bool cruby_ok = false;
     char exc_buf[160];
     char cruby_tag[128];
+    uint32_t cruby_err_line = 0;
     volatile VALUE ast_node = diff_run_cruby(
         (const char *) source,
         source_size,
@@ -195,7 +270,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         exc_buf,
         sizeof(exc_buf),
         cruby_tag,
-        sizeof(cruby_tag)
+        sizeof(cruby_tag),
+        &cruby_err_line
     );
 
     if (!prism_ok && cruby_ok) {
@@ -206,7 +282,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             exc_buf,
             sizeof(exc_buf),
             cruby_tag,
-            sizeof(cruby_tag)
+            sizeof(cruby_tag),
+            &cruby_err_line
         );
     }
 
@@ -215,7 +292,20 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         if (diff_ignore_syntax_mismatch(prism_ok, cruby_ok, cruby_tag, exc_buf)) {
             return 0;
         }
-        diff_fail_syntax_mismatch(source, source_size, prism_ok, prism_errs, prism_diag, cruby_ok, cruby_tag, exc_buf);
+        char ast_ctx[64];
+        diff_resolve_mismatch_prism_context(source, source_size, prism_ok, cruby_err_line, ast_ctx, sizeof(ast_ctx));
+        diff_fail_syntax_mismatch(
+            source,
+            source_size,
+            prism_ok,
+            prism_errs,
+            prism_diag,
+            prism_enc,
+            ast_ctx,
+            cruby_ok,
+            cruby_tag,
+            exc_buf
+        );
     }
 
     if (prism_ok && cruby_ok) {

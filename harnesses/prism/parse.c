@@ -816,6 +816,261 @@ static bool fuzz_has_eof_control_byte(const uint8_t *buf, size_t len, uint64_t a
 }
 
 static void fuzz_assert_serialized_equal(
+    pm_parser_t *stream_parser,
+    pm_node_t *stream_node,
+    pm_parser_t *ref_parser,
+    pm_node_t *ref_node,
+    const pm_buffer_t *stream_buf,
+    const pm_buffer_t *ref_buf,
+    const char *kind,
+    const char *ref_label,
+    size_t parsed_size,
+    size_t size
+);
+
+#if !defined(PRISM_FUZZ_NO_VISIT_NODE) && !defined(PRISM_FUZZ_POINTER_LOCATIONS) && \
+    !defined(PRISM_FUZZ_LIST_ITERATORS) && !defined(PRISM_FUZZ_ITER_OBJS) && \
+    !defined(PRISM_FUZZ_EACH_ITERATORS) && !defined(PRISM_FUZZ_LEGACY_PARSER_LINE_OFFSETS) && \
+    !defined(PRISM_FUZZ_PARSER_NEWLINE_LIST)
+#define FUZZ_STREAM_DIFF_CLASSIFY_MAX_NODES 2048
+
+typedef struct {
+    const pm_node_t *nodes[FUZZ_STREAM_DIFF_CLASSIFY_MAX_NODES];
+    size_t count;
+    bool truncated;
+} fuzz_stream_node_seq_t;
+
+static pm_visit_result_t fuzz_collect_stream_nodes_cb(const pm_node_t *node, void *data) {
+    fuzz_stream_node_seq_t *seq = (fuzz_stream_node_seq_t *) data;
+    if (seq->count < FUZZ_STREAM_DIFF_CLASSIFY_MAX_NODES) {
+        seq->nodes[seq->count++] = node;
+        return PM_VISIT_DESCEND;
+    }
+    seq->truncated = true;
+    return PM_VISIT_STOP;
+}
+
+static void fuzz_classify_stream_divergence(
+    pm_parser_t *stream_parser,
+    pm_node_t *stream_node,
+    pm_parser_t *ref_parser,
+    pm_node_t *ref_node,
+    char *sub_buf,
+    size_t sub_cap,
+    char *type_buf,
+    size_t type_cap
+) {
+    snprintf(sub_buf, sub_cap, "unknown");
+    type_buf[0] = '\0';
+
+    if (stream_parser != NULL && ref_parser != NULL) {
+        if (pm_parser_continuable(stream_parser) != pm_parser_continuable(ref_parser)) {
+            snprintf(sub_buf, sub_cap, "continuable");
+            return;
+        }
+
+        const pm_location_t *sd = pm_parser_data_loc(stream_parser);
+        const pm_location_t *rd = pm_parser_data_loc(ref_parser);
+        bool sd_present = sd != NULL && sd->length > 0;
+        bool rd_present = rd != NULL && rd->length > 0;
+        if (sd_present != rd_present || (sd_present && sd->start != rd->start)) {
+            snprintf(sub_buf, sub_cap, "data_loc");
+            return;
+        }
+
+        if (pm_parser_errors_size(stream_parser) != pm_parser_errors_size(ref_parser)) {
+            snprintf(sub_buf, sub_cap, "error_count");
+            return;
+        }
+        const pm_diagnostic_t *se = pm_parser_errors_first(stream_parser);
+        const pm_diagnostic_t *re = pm_parser_errors_first(ref_parser);
+        while (se != NULL && re != NULL) {
+            const char *st = fuzz_diag_type(se);
+            const char *rt = fuzz_diag_type(re);
+            pm_location_t sl = fuzz_diag_location(se);
+            pm_location_t rl = fuzz_diag_location(re);
+            if (strcmp(st, rt) != 0) {
+                snprintf(sub_buf, sub_cap, "error_type");
+                snprintf(type_buf, type_cap, "%s", st[0] != '\0' ? st : "unknown");
+                return;
+            }
+            if (sl.start != rl.start || sl.length != rl.length) {
+                snprintf(sub_buf, sub_cap, "error_loc");
+                snprintf(type_buf, type_cap, "%s", st[0] != '\0' ? st : "unknown");
+                return;
+            }
+            se = pm_diagnostic_next(se);
+            re = pm_diagnostic_next(re);
+        }
+
+        if (pm_parser_warnings_size(stream_parser) != pm_parser_warnings_size(ref_parser)) {
+            snprintf(sub_buf, sub_cap, "warning_count");
+            return;
+        }
+        const pm_diagnostic_t *sw = pm_parser_warnings_first(stream_parser);
+        const pm_diagnostic_t *rw = pm_parser_warnings_first(ref_parser);
+        while (sw != NULL && rw != NULL) {
+            const char *st = fuzz_diag_type(sw);
+            const char *rt = fuzz_diag_type(rw);
+            pm_location_t sl = fuzz_diag_location(sw);
+            pm_location_t rl = fuzz_diag_location(rw);
+            if (strcmp(st, rt) != 0) {
+                snprintf(sub_buf, sub_cap, "warning_type");
+                snprintf(type_buf, type_cap, "%s", st[0] != '\0' ? st : "unknown");
+                return;
+            }
+            if (sl.start != rl.start || sl.length != rl.length) {
+                snprintf(sub_buf, sub_cap, "warning_loc");
+                snprintf(type_buf, type_cap, "%s", st[0] != '\0' ? st : "unknown");
+                return;
+            }
+            sw = pm_diagnostic_next(sw);
+            rw = pm_diagnostic_next(rw);
+        }
+    }
+
+    if (stream_node != NULL && ref_node != NULL) {
+        fuzz_stream_node_seq_t s_seq = { .count = 0, .truncated = false };
+        fuzz_stream_node_seq_t r_seq = { .count = 0, .truncated = false };
+        pm_visit_node(stream_node, fuzz_collect_stream_nodes_cb, &s_seq);
+        pm_visit_node(ref_node, fuzz_collect_stream_nodes_cb, &r_seq);
+
+        size_t common = s_seq.count < r_seq.count ? s_seq.count : r_seq.count;
+        for (size_t i = 0; i < common; i++) {
+            const pm_node_t *sn = s_seq.nodes[i];
+            const pm_node_t *rn = r_seq.nodes[i];
+            if (sn->type != rn->type) {
+                snprintf(sub_buf, sub_cap, "node_type");
+                snprintf(type_buf, type_cap, "%s", fuzz_safe_node_name(sn->type));
+                return;
+            }
+            if (sn->flags != rn->flags) {
+                snprintf(sub_buf, sub_cap, "node_flags");
+                snprintf(type_buf, type_cap, "%s", fuzz_safe_node_name(sn->type));
+                return;
+            }
+            /* ProgramNode/StatementsNode outer spans inherit trailing child ends,
+             * so continue to the deepest child whose own span diverged first. */
+            if (sn->location.start != rn->location.start || sn->location.length != rn->location.length) {
+                snprintf(sub_buf, sub_cap, "node_loc");
+                snprintf(type_buf, type_cap, "%s", fuzz_safe_node_name(sn->type));
+            }
+        }
+        if (s_seq.count != r_seq.count && !s_seq.truncated && !r_seq.truncated) {
+            const pm_node_t *extra = s_seq.count > r_seq.count ? s_seq.nodes[common] : r_seq.nodes[common];
+            snprintf(sub_buf, sub_cap, "node_count");
+            snprintf(type_buf, type_cap, "%s", fuzz_safe_node_name(extra->type));
+            return;
+        }
+        if (strcmp(sub_buf, "node_loc") == 0) {
+            return;
+        }
+    }
+
+    if (stream_parser != NULL && ref_parser != NULL) {
+        const pm_line_offset_list_t *slo = pm_parser_line_offsets(stream_parser);
+        const pm_line_offset_list_t *rlo = pm_parser_line_offsets(ref_parser);
+        if (slo != NULL && rlo != NULL) {
+            if (slo->size != rlo->size ||
+                (slo->size > 0 && memcmp(slo->offsets, rlo->offsets, slo->size * sizeof(uint32_t)) != 0)) {
+                snprintf(sub_buf, sub_cap, "line_offsets");
+                return;
+            }
+        }
+        if (pm_parser_comments_size(stream_parser) != pm_parser_comments_size(ref_parser)) {
+            snprintf(sub_buf, sub_cap, "comments");
+            return;
+        }
+        const pm_comment_t *sc = pm_parser_comments_first(stream_parser);
+        const pm_comment_t *rc = pm_parser_comments_first(ref_parser);
+        while (sc != NULL && rc != NULL) {
+            pm_location_t sl = fuzz_comment_location(sc);
+            pm_location_t rl = fuzz_comment_location(rc);
+            if (fuzz_comment_type(sc) != fuzz_comment_type(rc) || sl.start != rl.start || sl.length != rl.length) {
+                snprintf(sub_buf, sub_cap, "comments");
+                return;
+            }
+            sc = pm_comment_next(sc);
+            rc = pm_comment_next(rc);
+        }
+        if (pm_parser_magic_comments_size(stream_parser) != pm_parser_magic_comments_size(ref_parser)) {
+            snprintf(sub_buf, sub_cap, "magic_comments");
+            return;
+        }
+    }
+
+    snprintf(sub_buf, sub_cap, "leaf_or_subloc");
+}
+#endif
+
+static void fuzz_fail_classified_stream_diff(
+    const char *kind,
+    pm_parser_t *stream_parser,
+    pm_node_t *stream_node,
+    pm_parser_t *ref_parser,
+    pm_node_t *ref_node,
+    size_t parsed_size,
+    size_t size,
+    const char *len_a_label,
+    size_t len_a,
+    const char *len_b_label,
+    size_t len_b
+) {
+#if !defined(PRISM_FUZZ_NO_VISIT_NODE) && !defined(PRISM_FUZZ_POINTER_LOCATIONS) && \
+    !defined(PRISM_FUZZ_LIST_ITERATORS) && !defined(PRISM_FUZZ_ITER_OBJS) && \
+    !defined(PRISM_FUZZ_EACH_ITERATORS) && !defined(PRISM_FUZZ_LEGACY_PARSER_LINE_OFFSETS) && \
+    !defined(PRISM_FUZZ_PARSER_NEWLINE_LIST)
+    char sub_buf[32];
+    char type_buf[64];
+    fuzz_classify_stream_divergence(stream_parser, stream_node, ref_parser, ref_node, sub_buf, sizeof(sub_buf), type_buf, sizeof(type_buf));
+    if (type_buf[0] != '\0') {
+        fuzz_invariant_fail(
+            "INVARIANT[stream_diff]: kind=%s sub=%s type=%s [detail: parsed_size=%zu size=%zu %s=%zu %s=%zu]\n",
+            kind,
+            sub_buf,
+            type_buf,
+            parsed_size,
+            size,
+            len_a_label,
+            len_a,
+            len_b_label,
+            len_b
+        );
+    }
+    fuzz_invariant_fail(
+        "INVARIANT[stream_diff]: kind=%s sub=%s [detail: parsed_size=%zu size=%zu %s=%zu %s=%zu]\n",
+        kind,
+        sub_buf,
+        parsed_size,
+        size,
+        len_a_label,
+        len_a,
+        len_b_label,
+        len_b
+    );
+#else
+    (void) stream_parser;
+    (void) stream_node;
+    (void) ref_parser;
+    (void) ref_node;
+    fuzz_invariant_fail(
+        "INVARIANT[stream_diff]: kind=%s [detail: parsed_size=%zu size=%zu %s=%zu %s=%zu]\n",
+        kind,
+        parsed_size,
+        size,
+        len_a_label,
+        len_a,
+        len_b_label,
+        len_b
+    );
+#endif
+}
+
+static void fuzz_assert_serialized_equal(
+    pm_parser_t *stream_parser,
+    pm_node_t *stream_node,
+    pm_parser_t *ref_parser,
+    pm_node_t *ref_node,
     const pm_buffer_t *stream_buf,
     const pm_buffer_t *ref_buf,
     const char *kind,
@@ -826,11 +1081,15 @@ static void fuzz_assert_serialized_equal(
     size_t stream_len = pm_buffer_length(stream_buf);
     size_t ref_len = pm_buffer_length(ref_buf);
     if (stream_len != ref_len || memcmp(pm_buffer_value(stream_buf), pm_buffer_value(ref_buf), stream_len) != 0) {
-        fuzz_invariant_fail(
-            "INVARIANT[stream_diff]: kind=%s [detail: parsed_size=%zu size=%zu stream_len=%zu %s=%zu]\n",
+        fuzz_fail_classified_stream_diff(
             kind,
+            stream_parser,
+            stream_node,
+            ref_parser,
+            ref_node,
             parsed_size,
             size,
+            "stream_len",
             stream_len,
             ref_label,
             ref_len
@@ -865,7 +1124,7 @@ static void fuzz_check_stream_diff(
     if (parsed_size == size) {
         if (node != NULL) {
             pm_serialize(ref_parser, ref_node, ref_buf);
-            fuzz_assert_serialized_equal(stream_buf, ref_buf, "serialize_mismatch", "ref_len", parsed_size, size);
+            fuzz_assert_serialized_equal(parser, node, ref_parser, ref_node, stream_buf, ref_buf, "serialize_mismatch", "ref_len", parsed_size, size);
         }
     } else {
         const pm_location_t *stream_data = pm_parser_data_loc(parser);
@@ -925,11 +1184,17 @@ static void fuzz_check_stream_diff(
             size_t ref_pp = pm_buffer_length(ref_buf);
             if (stream_pp != ref_pp || memcmp(pm_buffer_value(stream_pp_buf), pm_buffer_value(ref_buf), stream_pp) != 0) {
                 pm_buffer_free(stream_pp_buf);
-                fuzz_invariant_fail(
-                    "INVARIANT[stream_diff]: kind=ast_mismatch [detail: parsed_size=%zu size=%zu stream_pp=%zu full_pp=%zu]\n",
+                fuzz_fail_classified_stream_diff(
+                    "ast_mismatch",
+                    parser,
+                    node,
+                    ref_parser,
+                    ref_node,
                     parsed_size,
                     size,
+                    "stream_pp",
                     stream_pp,
+                    "full_pp",
                     ref_pp
                 );
             }
@@ -942,7 +1207,7 @@ static void fuzz_check_stream_diff(
             pm_buffer_t *prefix_ser = pm_buffer_new();
             pm_serialize(parser, node, stream_ser);
             pm_serialize(prefix_parser, prefix_node, prefix_ser);
-            fuzz_assert_serialized_equal(stream_ser, prefix_ser, "prefix_serialize_mismatch", "prefix_len", parsed_size, size);
+            fuzz_assert_serialized_equal(parser, node, prefix_parser, prefix_node, stream_ser, prefix_ser, "prefix_serialize_mismatch", "prefix_len", parsed_size, size);
             pm_buffer_free(prefix_ser);
             pm_buffer_free(stream_ser);
             pm_parser_free(prefix_parser);

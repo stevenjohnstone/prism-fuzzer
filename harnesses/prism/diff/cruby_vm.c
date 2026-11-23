@@ -228,13 +228,36 @@ static VALUE diff_iseq_compile_cb(VALUE src_str) {
     return rb_funcall(diff_rb_cISeq, diff_id_compile, 1, src_str);
 }
 
+static uint32_t diff_extract_compiled_line(const char *line) {
+    if (!diff_starts_with(line, "<compiled>:")) {
+        return 0;
+    }
+    const char *p = line + 11;
+    if (*p < '0' || *p > '9') {
+        return 0;
+    }
+    uint64_t val = 0;
+    while (*p >= '0' && *p <= '9') {
+        val = val * 10 + (uint64_t) (*p - '0');
+        if (val > UINT32_MAX) {
+            return UINT32_MAX;
+        }
+        p++;
+    }
+    return (p[0] == ':' && p[1] == ' ') ? (uint32_t) val : 0;
+}
+
 static void diff_format_exception(
     VALUE err,
     char *exc_buf,
     size_t exc_cap,
     char *tag_buf,
-    size_t tag_cap
+    size_t tag_cap,
+    uint32_t *out_err_line
 ) {
+    if (out_err_line != NULL) {
+        *out_err_line = 0;
+    }
     if (NIL_P(err)) {
         if (exc_cap > 0) snprintf(exc_buf, exc_cap, "nil");
         if (tag_cap > 0) snprintf(tag_buf, tag_cap, "nil");
@@ -258,6 +281,9 @@ static void diff_format_exception(
     }
     line[line_len] = '\0';
 
+    if (out_err_line != NULL) {
+        *out_err_line = diff_extract_compiled_line(line);
+    }
     if (exc_cap > 0) {
         int detail_len = (int) (line_len > 96 ? 96 : line_len);
         snprintf(exc_buf, exc_cap, "%s: %.*s", cls_buf, detail_len, line);
@@ -276,8 +302,12 @@ static VALUE diff_run_cruby_callback(
     char *exc_buf,
     size_t exc_cap,
     char *tag_buf,
-    size_t tag_cap
+    size_t tag_cap,
+    uint32_t *out_err_line
 ) {
+    if (out_err_line != NULL) {
+        *out_err_line = 0;
+    }
     if (size > (size_t) LONG_MAX) {
         abort();
     }
@@ -288,7 +318,7 @@ static VALUE diff_run_cruby_callback(
         VALUE err = rb_errinfo();
         rb_set_errinfo(Qnil);
         *out_ok = false;
-        diff_format_exception(err, exc_buf, exc_cap, tag_buf, tag_cap);
+        diff_format_exception(err, exc_buf, exc_cap, tag_buf, tag_cap, out_err_line);
         RB_GC_GUARD(src_str);
         return Qnil;
     }
@@ -307,9 +337,10 @@ VALUE diff_run_cruby(
     char *exc_buf,
     size_t exc_cap,
     char *tag_buf,
-    size_t tag_cap
+    size_t tag_cap,
+    uint32_t *out_err_line
 ) {
-    return diff_run_cruby_callback(diff_ast_parse_cb, source, size, out_ok, exc_buf, exc_cap, tag_buf, tag_cap);
+    return diff_run_cruby_callback(diff_ast_parse_cb, source, size, out_ok, exc_buf, exc_cap, tag_buf, tag_cap, out_err_line);
 }
 
 void diff_run_cruby_compile(
@@ -319,10 +350,35 @@ void diff_run_cruby_compile(
     char *exc_buf,
     size_t exc_cap,
     char *tag_buf,
-    size_t tag_cap
+    size_t tag_cap,
+    uint32_t *out_err_line
 ) {
-    volatile VALUE iseq = diff_run_cruby_callback(diff_iseq_compile_cb, source, size, out_ok, exc_buf, exc_cap, tag_buf, tag_cap);
+    volatile VALUE iseq = diff_run_cruby_callback(diff_iseq_compile_cb, source, size, out_ok, exc_buf, exc_cap, tag_buf, tag_cap, out_err_line);
     RB_GC_GUARD(iseq);
+}
+
+static bool diff_is_encoding_related_mismatch(
+    const char *prism_enc,
+    const char *prism_diag,
+    const char *cruby_tag
+) {
+    if (prism_enc != NULL && prism_enc[0] != '\0' && strcmp(prism_enc, "UTF-8") != 0 && strcmp(prism_enc, "UTF_8") != 0) {
+        return true;
+    }
+    if (prism_diag != NULL && (
+        strstr(prism_diag, "encoding") != NULL ||
+        strstr(prism_diag, "multibyte") != NULL ||
+        strstr(prism_diag, "invalid_symbol") != NULL ||
+        strstr(prism_diag, "unicode") != NULL)) {
+        return true;
+    }
+    if (cruby_tag != NULL && (
+        strstr(cruby_tag, "encoding") != NULL ||
+        strstr(cruby_tag, "multibyte") != NULL ||
+        strstr(cruby_tag, "invalid_symbol") != NULL)) {
+        return true;
+    }
+    return false;
 }
 
 void diff_fail_syntax_mismatch(
@@ -331,6 +387,8 @@ void diff_fail_syntax_mismatch(
     bool prism_ok,
     size_t prism_errs,
     const char *prism_diag,
+    const char *prism_enc,
+    const char *ast_ctx,
     bool cruby_ok,
     const char *cruby_tag,
     const char *exc_buf
@@ -338,13 +396,33 @@ void diff_fail_syntax_mismatch(
     const char *sub = prism_ok ? "prism_ok_cruby_err" : "prism_err_cruby_ok";
     int has_nul = diff_has_nul(source, source_size) ? 1 : 0;
     int valid_utf8 = diff_is_valid_utf8(source, source_size) ? 1 : 0;
+    const char *enc = (prism_enc != NULL && prism_enc[0] != '\0') ? prism_enc : "UTF-8";
+    const char *ctx = (ast_ctx != NULL && ast_ctx[0] != '\0') ? ast_ctx : "program";
+
+    if (diff_is_encoding_related_mismatch(enc, prism_diag, cruby_tag)) {
+        diff_invariant_fail(
+            "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=%s enc=%s ctx=%s prism=%s cruby=%s [detail: nul=%d utf8=%d prism_errs=%zu cruby=%s]\n",
+            sub,
+            enc,
+            ctx,
+            prism_diag,
+            cruby_ok ? "ok" : cruby_tag,
+            has_nul,
+            valid_utf8,
+            prism_errs,
+            cruby_ok ? "ok" : exc_buf
+        );
+    }
+
     diff_invariant_fail(
-        "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=%s nul=%d utf8=%d prism=%s cruby=%s [detail: prism_errs=%zu cruby=%s]\n",
+        "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=%s ctx=%s prism=%s cruby=%s [detail: enc=%s nul=%d utf8=%d prism_errs=%zu cruby=%s]\n",
         sub,
-        has_nul,
-        valid_utf8,
+        ctx,
         prism_diag,
         cruby_ok ? "ok" : cruby_tag,
+        enc,
+        has_nul,
+        valid_utf8,
         prism_errs,
         cruby_ok ? "ok" : exc_buf
     );

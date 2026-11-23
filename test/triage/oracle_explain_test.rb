@@ -492,7 +492,7 @@ class TriageOracleExplainTest < Minitest::Test
     triage_dst = File.join(mock_fuzz, "triage")
     FileUtils.mkdir_p([inc_dst, triage_dst])
 
-    %w[fuzz_invariants.h fuzz_options.h fuzz_json.h].each do |hdr|
+    %w[fuzz_invariants.h fuzz_options.h fuzz_json.h fuzz_serialize_scan.h].each do |hdr|
       FileUtils.cp(repo_path("harnesses/prism/include", hdr), File.join(inc_dst, hdr))
     end
     %w[parse.c mutator_oracle64.c fuzz.c].each do |src|
@@ -572,6 +572,95 @@ class TriageOracleExplainTest < Minitest::Test
     failure = parsed.fetch("failures").first
     assert_equal "café_😀.bin", failure["name"]
     assert_includes failure["headline"].to_s, "café_😀"
+
+    if prism_a_dir && File.directory?(File.join(prism_a_dir, "src")) && File.file?(File.join(prism_a_dir, "config.yml"))
+      gen_dir = File.join(workdir, "scan_gen")
+      FileUtils.mkdir_p(gen_dir)
+      assert_ruby_cmd(
+        repo_path("harnesses/prism/gen_serialize_walk.rb"),
+        File.join(prism_a_dir, "config.yml"),
+        File.join(gen_dir, "node_serialize_walk.inc")
+      )
+      scan_c = File.join(workdir, "scan_test.c")
+      scan_bin = File.join(workdir, "scan_test")
+      File.write(scan_c, <<~'C')
+        #include <assert.h>
+        #include <prism.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <string.h>
+        #include "include/fuzz_serialize_scan.h"
+
+        static void ser_pair_int_grow(pm_buffer_t *ba, pm_buffer_t *bb) {
+            const char *src = "x = 1\n";
+            pm_arena_t *arena = pm_arena_new();
+            pm_parser_t *parser = pm_parser_new(arena, (const uint8_t *) src, strlen(src), NULL);
+            pm_node_t *node = pm_parse(parser);
+            pm_serialize(parser, node, ba);
+
+            pm_program_node_t *prog = (pm_program_node_t *) node;
+            pm_local_variable_write_node_t *lvw = (pm_local_variable_write_node_t *) prog->statements->body.nodes[0];
+            pm_node_t *inum = lvw->value;
+            pm_node_flags_t saved = inum->flags;
+            inum->flags = (pm_node_flags_t) 0x4000U;
+            pm_serialize(parser, node, bb);
+            inum->flags = saved;
+
+            pm_parser_free(parser);
+            pm_arena_free(arena);
+        }
+
+        int main(void) {
+            pm_buffer_t *ba = pm_buffer_new();
+            pm_buffer_t *bb = pm_buffer_new();
+            ser_pair_int_grow(ba, bb);
+            assert(pm_buffer_length(ba) != pm_buffer_length(bb));
+
+            char sec[32], typ[64];
+            size_t ea = 0, eb = 0;
+            fuzz_classify_serialize_diff(
+                (const uint8_t *) pm_buffer_value(ba), pm_buffer_length(ba), true,
+                (const uint8_t *) pm_buffer_value(bb), pm_buffer_length(bb), true,
+                0, sec, sizeof(sec), typ, sizeof(typ), &ea, &eb
+            );
+            printf("AST=%s/%s\n", sec, typ);
+
+            /* Mutate a single constant pool string byte after cpool_str_start */
+            size_t mlen = pm_buffer_length(ba);
+            uint8_t *mut = (uint8_t *) malloc(mlen);
+            assert(mut != NULL);
+            memcpy(mut, pm_buffer_value(ba), mlen);
+            size_t x_pos = mlen - 1;
+            while (x_pos > 0 && mut[x_pos] != 'x') x_pos--;
+            assert(mut[x_pos] == 'x');
+            mut[x_pos] = 'y';
+            fuzz_classify_serialize_diff(
+                (const uint8_t *) pm_buffer_value(ba), mlen, true,
+                mut, mlen, true,
+                x_pos, sec, sizeof(sec), typ, sizeof(typ), &ea, &eb
+            );
+            printf("CPOOL=%s/%s\n", sec, typ);
+
+            free(mut);
+            pm_buffer_free(ba);
+            pm_buffer_free(bb);
+            return 0;
+        }
+      C
+      prism_srcs = Dir.glob(File.join(prism_a_dir, "src/**/*.c")).sort
+      assert_cmd(
+        c_compiler, "-O1", "-std=c99", "-Wall", "-Werror", "-Wextra", "-Wpedantic", "-Wundef", "-Wconversion",
+        "-Wno-missing-braces",
+        "-I#{File.join(prism_a_dir, 'include')}",
+        "-I#{gen_dir}",
+        "-I#{repo_path('harnesses/prism')}",
+        "-DPRISM_EXCLUDE_JSON", "-DPRISM_EXCLUDE_PRETTYPRINT",
+        *prism_srcs, scan_c, "-lm", "-o", scan_bin
+      )
+      scan_out, = assert_cmd(scan_bin)
+      assert_includes scan_out, "AST=ast/PM_INTEGER_NODE\n"
+      assert_includes scan_out, "CPOOL=cpool_strings/\n"
+    end
   end
 
   def write_tar_gz(path, entries)

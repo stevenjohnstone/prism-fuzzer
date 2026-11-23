@@ -20,6 +20,9 @@ class PrismDiffTest < Minitest::Test
   DIVERGE_B_INJECT =
     "    if (parser->end - parser->start >= 9 && memcmp(parser->start, \"DIVERGE_B\", 9) == 0) {\n" \
     "        pm_parser_err(parser, 0, 9, PM_ERR_EXPECT_EXPRESSION_AFTER_OPERATOR);\n" \
+    "    }\n" \
+    "    if (node != NULL && parser->end - parser->start >= 9 && memcmp(parser->start, \"SER_DIV_B\", 9) == 0) {\n" \
+    "        node->flags ^= 1;\n" \
     "    }\n"
 
   def test_build_prism_diff_verify_and_verify_bucket_cache_invalidation
@@ -68,6 +71,13 @@ class PrismDiffTest < Minitest::Test
       assert_equal 1, rep["passed"], "unexpected report: #{rep.inspect}"
       assert_equal 1, rep["failed"], "unexpected report: #{rep.inspect}"
       assert_includes rep.dig("failures", 0, "headline").to_s, "INVARIANT[diff_prism]"
+
+      ser_seed = File.join(workdir, "ser_div.bin")
+      File.binwrite(ser_seed, seed_bytes("SER_DIV_B + 1\n"))
+      ser_out, ser_err, ser_st = run_cmd(verify_bin, "--json", ser_seed)
+      assert_equal 1, ser_st.exitstatus, "expected serialize_mismatch FAIL:\nstdout=#{ser_out}\nstderr=#{ser_err}"
+      ser_hl = JSON.parse(ser_out).dig("failures", 0, "headline").to_s
+      assert_match(/\AINVARIANT\[diff_prism\]: kind=serialize_mismatch sub=(?:bytes|len) section=ast type=PM_PROGRAM_NODE \[detail:/, ser_hl)
 
       if File.file?(File.join(prism_b, "templates/template.rb")) && File.file?(File.join(prism_b, "config.yml"))
         stamp = File.join(vcache, "prism-b/.templates.sha256")

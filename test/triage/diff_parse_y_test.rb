@@ -308,6 +308,113 @@ class TriageDiffParseYTest < Minitest::Test
       assert_equal 0, tighten_rep["failed"], "expected diff_tighten PASS on 4 inputs: #{tighten_rep.inspect}"
       assert_empty tighten_rep["failures"], "expected diff_tighten PASS on 4 inputs: #{tighten_rep.inspect}"
 
+      # Verify summary.c token normalization (<id> vs operators/specials) and nested SLOT -> parent ctx
+      tok_test_c = File.join(workdir, "tok_sig_test.c")
+      tok_test_bin = File.join(workdir, "tok_sig_test")
+      File.write(tok_test_c, <<~'C')
+        #include <assert.h>
+        #include <stdio.h>
+        #include <string.h>
+        #include "diff/summary.h"
+
+        int main(int argc, char **argv) {
+            if (argc < 2) return 2;
+            diff_summary_t a, b;
+            diff_summary_init(&a);
+            diff_summary_init(&b);
+            if (strcmp(argv[1], "call_ident") == 0) {
+                diff_tree_open_cstr(&a, DIFF_TOK_SCOPE, "program");
+                diff_tree_open_cstr(&a, DIFF_TOK_CALL, "foo_bar");
+                diff_tree_close(&a);
+                diff_tree_close(&a);
+
+                diff_tree_open_cstr(&b, DIFF_TOK_SCOPE, "program");
+                diff_tree_open_cstr(&b, DIFF_TOK_CALL, "baz_qux");
+                diff_tree_close(&b);
+                diff_tree_close(&b);
+            } else if (strcmp(argv[1], "call_op") == 0) {
+                diff_tree_open_cstr(&a, DIFF_TOK_CALL, "+");
+                diff_tree_close(&a);
+                diff_tree_open_cstr(&b, DIFF_TOK_CALL, "*");
+                diff_tree_close(&b);
+            } else if (strcmp(argv[1], "nested_slot") == 0) {
+                diff_tree_open_cstr(&a, DIFF_TOK_CALL, "f");
+                diff_tree_open_cstr(&a, DIFF_TOK_SLOT, "args");
+                diff_tree_open_cstr(&a, DIFF_TOK_SLOT, "arg");
+                diff_tree_open_cstr(&a, DIFF_TOK_SPLAT, NULL);
+                diff_tree_close(&a);
+                diff_tree_close(&a);
+                diff_tree_close(&a);
+                diff_tree_close(&a);
+
+                diff_tree_open_cstr(&b, DIFF_TOK_CALL, "f");
+                diff_tree_open_cstr(&b, DIFF_TOK_SLOT, "args");
+                diff_tree_open_cstr(&b, DIFF_TOK_SLOT, "arg");
+                diff_tree_open_cstr(&b, DIFF_TOK_ARRAY, NULL);
+                diff_tree_close(&b);
+                diff_tree_close(&b);
+                diff_tree_close(&b);
+                diff_tree_close(&b);
+            } else if (strcmp(argv[1], "preexe") == 0) {
+                a.has_nested_preexe = true;
+                diff_tree_open_cstr(&a, DIFF_TOK_SCOPE, "program");
+                diff_tree_open_cstr(&a, DIFF_TOK_UNDEF, NULL);
+                diff_tree_close(&a);
+                diff_tree_close(&a);
+
+                diff_tree_open_cstr(&b, DIFF_TOK_SCOPE, "program");
+                diff_tree_open_cstr(&b, DIFF_TOK_INT, NULL);
+                diff_tree_close(&b);
+                diff_tree_close(&b);
+            }
+            diff_compare_asts(&a, &b);
+            diff_summary_free(&a);
+            diff_summary_free(&b);
+            return 0;
+        }
+      C
+      assert_cmd(
+        ENV.fetch("CC", "clang"), "-O1", "-std=c99", "-Wall", "-Werror",
+        "-I#{repo_path('harnesses/prism')}",
+        tok_test_c, repo_path("harnesses/prism/diff/summary.c"),
+        "-o", tok_test_bin
+      )
+      _, err_ident, st_ident = run_cmd(tok_test_bin, "call_ident")
+      refute st_ident.success?
+      assert_includes err_ident, "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=label ctx=SCOPE.program prism=CALL:<id> cruby=CALL:<id> [detail:"
+      assert_includes err_ident, "prism_tok=CALL:foo_bar cruby_tok=CALL:baz_qux"
+
+      _, err_op, st_op = run_cmd(tok_test_bin, "call_op")
+      refute st_op.success?
+      assert_includes err_op, "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=label ctx=ROOT prism=CALL:+ cruby=CALL:* [detail:"
+
+      _, err_slot, st_slot = run_cmd(tok_test_bin, "nested_slot")
+      refute st_slot.success?
+      assert_includes err_slot, "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag ctx=CALL.arg prism=SPLAT cruby=ARRAY [detail:"
+
+      _, err_pre, st_pre = run_cmd(tok_test_bin, "preexe")
+      refute st_pre.success?
+      assert_includes err_pre, "INVARIANT[diff_parse_y]: kind=ast_preexe_order_mismatch sub=tree [detail:"
+
+      # Encoding mismatch surfaces enc=<name> and ctx=<node> while moving utf8/nul into [detail: ...]
+      File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("# encoding: CESU-8\n1 + 2\n"))
+      enc_out, _, enc_st = run_cmd(
+        verify_bucket_sh,
+        "--repo-root", prism_dir,
+        "--fuzz-root", root_dir,
+        "--bucket-dir", diff_bucket,
+        "--profile", "diff_parse_y",
+        "--json",
+        env: { "VERIFY_BUILD_DIR" => diff_verify_build }
+      )
+      if enc_st.exitstatus == 1
+        enc_hl = JSON.parse(enc_out).dig("failures", 0, "headline").to_s
+        assert_match(/\benc=CESU-8\b/, enc_hl)
+        assert_match(/\bctx=program\b/, enc_hl)
+        refute_includes enc_hl.sub(/\s*\[detail:.*$/, ""), "utf8="
+
+      end
+
       # Stress CRuby GC under ASan (both verify_bucket.sh default ASAN_OPTIONS and
       # caller-supplied ASAN_OPTIONS without detect_stack_use_after_return=0) to ensure
       # -fsanitize-address-use-after-return=never + entry-frame ruby_init_stack hold.

@@ -11,6 +11,7 @@ typedef struct {
     const pm_parser_t *parser;
     diff_summary_t *out;
     size_t depth;
+    uint32_t preexe_depth;
 } diff_prism_ctx_t;
 
 static void diff_prism_push_scope(
@@ -795,7 +796,12 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
         }
         case PM_PRE_EXECUTION_NODE: {
             const pm_pre_execution_node_t *pre = (const pm_pre_execution_node_t *) node;
+            if (ctx->preexe_depth > 0) {
+                ctx->out->has_nested_preexe = true;
+            }
+            ctx->preexe_depth++;
             diff_prism_visit_stmt_list(pre->statements, ctx);
+            ctx->preexe_depth--;
             break;
         }
         case PM_POST_EXECUTION_NODE: {
@@ -1776,7 +1782,143 @@ void diff_collect_prism_summary(
     if (root == NULL) {
         return;
     }
-    diff_prism_ctx_t ctx = { .parser = parser, .out = out, .depth = 0 };
+    diff_prism_ctx_t ctx = { .parser = parser, .out = out, .depth = 0, .preexe_depth = 0 };
     diff_prism_visit_expr(root, &ctx, false);
     diff_finalize_summary(out);
+}
+
+typedef struct {
+    uint32_t probe;
+    bool has_probe;
+    pm_node_type_t best_covering;
+    uint32_t best_covering_len;
+    pm_node_type_t nearest_before;
+    uint32_t nearest_before_end;
+    bool has_nearest_before;
+    pm_node_type_t first_construct;
+} diff_ast_ctx_search_t;
+
+static bool diff_is_wrapper_node_type(pm_node_type_t type) {
+    switch (type) {
+        case PM_PROGRAM_NODE:
+        case PM_STATEMENTS_NODE:
+        case PM_ERROR_RECOVERY_NODE:
+        case PM_PARENTHESES_NODE:
+        case PM_SCOPE_NODE:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool diff_is_structural_ctx_node(pm_node_type_t type) {
+    switch (type) {
+        case PM_INTEGER_NODE:
+        case PM_FLOAT_NODE:
+        case PM_RATIONAL_NODE:
+        case PM_IMAGINARY_NODE:
+        case PM_NIL_NODE:
+        case PM_TRUE_NODE:
+        case PM_FALSE_NODE:
+        case PM_SELF_NODE:
+        case PM_STRING_NODE:
+        case PM_SYMBOL_NODE:
+        case PM_LOCAL_VARIABLE_READ_NODE:
+        case PM_INSTANCE_VARIABLE_READ_NODE:
+        case PM_CLASS_VARIABLE_READ_NODE:
+        case PM_GLOBAL_VARIABLE_READ_NODE:
+        case PM_CONSTANT_READ_NODE:
+        case PM_ARGUMENTS_NODE:
+        case PM_PARAMETERS_NODE:
+        case PM_REQUIRED_PARAMETER_NODE:
+            return false;
+        default:
+            return !diff_is_wrapper_node_type(type);
+    }
+}
+
+static pm_visit_result_t diff_ast_ctx_visit_cb(const pm_node_t *node, void *data) {
+    diff_ast_ctx_search_t *s = (diff_ast_ctx_search_t *) data;
+    pm_node_type_t type = node->type;
+    if (diff_is_structural_ctx_node(type)) {
+        if (s->first_construct == 0) {
+            s->first_construct = type;
+        }
+        if (s->has_probe) {
+            uint32_t start = node->location.start;
+            uint32_t len = node->location.length;
+            uint64_t end64 = (uint64_t) start + (uint64_t) len;
+            uint32_t end = end64 > UINT32_MAX ? UINT32_MAX : (uint32_t) end64;
+            if ((uint64_t) s->probe >= (uint64_t) start && (uint64_t) s->probe <= end64) {
+                if (s->best_covering == 0 || len <= s->best_covering_len) {
+                    s->best_covering = type;
+                    s->best_covering_len = len;
+                }
+            } else if (end <= s->probe && (!s->has_nearest_before || end >= s->nearest_before_end)) {
+                s->nearest_before = type;
+                s->nearest_before_end = end;
+                s->has_nearest_before = true;
+            }
+        }
+    }
+    return PM_VISIT_DESCEND;
+}
+
+static void diff_format_short_node_type(pm_node_type_t type, char *dst, size_t cap) {
+    if (cap == 0) return;
+    if (type == 0) {
+        snprintf(dst, cap, "program");
+        return;
+    }
+    const char *raw = pm_node_type(type);
+    if (raw == NULL || raw[0] == '\0') {
+        snprintf(dst, cap, "program");
+        return;
+    }
+    if (strncmp(raw, "PM_", 3) == 0) {
+        raw += 3;
+    }
+    size_t len = strlen(raw);
+    if (len > 5 && strcmp(raw + len - 5, "_NODE") == 0) {
+        len -= 5;
+    }
+    if (len >= cap) {
+        len = cap - 1;
+    }
+    for (size_t i = 0; i < len; i++) {
+        char c = raw[i];
+        dst[i] = (c >= 'A' && c <= 'Z') ? (char) (c + ('a' - 'A')) : c;
+    }
+    dst[len] = '\0';
+}
+
+void diff_find_prism_ast_context(
+    const pm_parser_t *parser,
+    const pm_node_t *root,
+    uint32_t probe_offset,
+    bool has_probe,
+    char *ctx_buf,
+    size_t ctx_cap
+) {
+    (void) parser;
+    if (ctx_cap == 0) return;
+    if (root == NULL) {
+        snprintf(ctx_buf, ctx_cap, "program");
+        return;
+    }
+    diff_ast_ctx_search_t search = {
+        .probe = probe_offset,
+        .has_probe = has_probe,
+        .best_covering = 0,
+        .best_covering_len = UINT32_MAX,
+        .nearest_before = 0,
+        .nearest_before_end = 0,
+        .has_nearest_before = false,
+        .first_construct = 0,
+    };
+    pm_visit_node(root, diff_ast_ctx_visit_cb, &search);
+    pm_node_type_t chosen = search.best_covering != 0
+        ? search.best_covering
+        : (search.nearest_before != 0 ? search.nearest_before : search.first_construct);
+    diff_format_short_node_type(chosen, ctx_buf, ctx_cap);
 }

@@ -503,8 +503,8 @@ build_verify_runner() {
           out << "-DPRISM_FUZZ_LIST_ITERATORS"
         end
       end
-      if !code.match?(/\bpm_node_type\s*\(/) && code.match?(/\bpm_node_type_to_str\s*\(/)
-        out << "-DPRISM_FUZZ_NODE_TYPE_TO_STR"
+      if !code.match?(/\bpm_node_type\s*\(/)
+        out << (code.match?(/\bpm_node_type_to_str\s*\(/) ? "-DPRISM_FUZZ_NODE_TYPE_TO_STR" : "-DPRISM_FUZZ_NO_NODE_TYPE_NAME")
       end
       out << "-DPRISM_FUZZ_NO_VISIT_NODE" unless code.match?(/\bpm_visit_node\b/)
       out << "-DPRISM_FUZZ_LEGACY_VISIT_BOOL" unless code.match?(/\bpm_visit_result_t\b/)
@@ -566,7 +566,14 @@ build_verify_runner() {
           echo "verify_bucket.sh: arm32_oracle verification requires Linux with qemu-arm and arm-linux-gnueabihf-gcc (run './campaigns/default.rb verify -- --bucket ...' or 'make verify BUCKET=...' in Docker)" >&2
           exit 2
         fi
-        flags+=(-Wno-missing-braces -DPRISM_OSS_FUZZ -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT "-fsanitize=address,undefined" -fno-sanitize-recover=all) ;;
+        if [ -f "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" ] && [ -f "$REPO_ROOT/config.yml" ] && \
+           grep -rq 'PM_SCOPE_NODE' "$REPO_ROOT/include" 2>/dev/null && \
+           ruby "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" "$REPO_ROOT/config.yml" "$cache_dir/node_serialize_walk.inc" >/dev/null 2>&1; then
+          flags+=("-I$cache_dir")
+        else
+          flags+=(-DPRISM_FUZZ_NO_SERIALIZE_SCAN)
+        fi
+        flags+=(-Wno-missing-braces "-I$FUZZ_ROOT/harnesses/prism" -DPRISM_OSS_FUZZ -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT "-fsanitize=address,undefined" -fno-sanitize-recover=all) ;;
       ppc_oracle)
         if [ "$(uname -s)" = "Darwin" ] || ! command -v powerpc-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-ppc >/dev/null 2>&1; then
           echo "verify_bucket.sh: ppc_oracle verification requires Linux with qemu-ppc and powerpc-linux-gnu-gcc (run './campaigns/default.rb verify -- --bucket ...' or 'make verify BUCKET=...' in Docker)" >&2
