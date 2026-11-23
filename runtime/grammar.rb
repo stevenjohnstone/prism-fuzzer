@@ -48,10 +48,10 @@ module PrismFuzzer
                else
                  File.expand_path("../tmp/fuzz/build/fuzz-ruby-ext", __dir__)
                end
-      [ws_lib, ws_ext]
+      [ws_lib, ws_ext, topo]
     end
 
-    WORKSPACE_LIB, WORKSPACE_EXT = configure_prism_load_paths!
+    WORKSPACE_LIB, WORKSPACE_EXT, INITIAL_TOPOLOGY = configure_prism_load_paths!
     if File.exist?(File.join(WORKSPACE_EXT, "prism", "prism.so"))
       $LOAD_PATH.unshift(WORKSPACE_EXT, WORKSPACE_LIB)
     end
@@ -111,8 +111,40 @@ module PrismFuzzer
       pack_seed_header(opt_flags: 0x00, cmd_flags: 0x80, start_line: 0xd1),                   # has_limit_opts: INT32_MAX-4, budget=4096
       pack_seed_header(opt_flags: 0x00, cmd_flags: 0x80, start_line: 0x71)                    # has_limit_opts: line=0, budget=0
     ].freeze
-    MAX_INPUT_SIZE = Integer(ENV.fetch("FUZZ_MAX_INPUT_SIZE", "1024"))
-    MAX_SEED_PAYLOAD_BYTES = [MAX_INPUT_SIZE - 4, 1].max
+    def resolve_max_input_size(topo = INITIAL_TOPOLOGY, worker_id: ENV["FUZZ_GRAMMAR_WORKER_ID"])
+      env_val = ENV["FUZZ_MAX_INPUT_SIZE"].to_s.strip
+      return Integer(env_val) unless env_val.empty?
+
+      if topo.is_a?(Hash)
+        wid = worker_id.to_s.strip
+        unless wid.empty?
+          w = Array(topo["workers"]).find { |x| x.is_a?(Hash) && x["id"].to_s == wid }
+          return Integer(w["max_input_size"]) if w && w["max_input_size"]
+
+          g = topo.dig("generators", wid)
+          return Integer(g["max_input_size"]) if g.is_a?(Hash) && g["max_input_size"]
+        end
+        def_max = topo.dig("defaults", "max_input_size")
+        return Integer(def_max) if def_max
+      end
+      1024
+    end
+
+    # MAX_INPUT_SIZE bounds the Ruby source payload; the 4-byte option header is added on top.
+    MAX_INPUT_SIZE = resolve_max_input_size
+    MAX_SEED_PAYLOAD_BYTES = [MAX_INPUT_SIZE, 1].max
+
+    def current_max_payload_bytes
+      Thread.current[:fuzz_max_payload_bytes] || MAX_SEED_PAYLOAD_BYTES
+    end
+
+    def with_max_payload_bytes(bytes)
+      prev = Thread.current[:fuzz_max_payload_bytes]
+      Thread.current[:fuzz_max_payload_bytes] = [Integer(bytes), 1].max
+      yield
+    ensure
+      Thread.current[:fuzz_max_payload_bytes] = prev
+    end
     MAX_PENDING_SEEDS = Integer(ENV.fetch("FUZZ_GRAMMAR_MAX_PENDING", "50000"))
     MAX_SEEN_DIGESTS = 500_000
     PRUNE_INTERVAL_SEC = 10.0
@@ -290,6 +322,7 @@ module PrismFuzzer
     #   zero middle words / multi-word carry)
     # - pm_double_exact truncation past PM_DOUBLE_DIGITS (768 digits)
     LARGE_BIGNUM_LITERALS = [
+      ("987654321" * 9) + ("999999999" * 9),
       "0x1" + ("89abcdef" * 52),
       "0x1" + ("0" * 256) + ("fedcba98" * 32) + ("0" * 256),
       ("987654321" * 18) + ("999999999" * 19),
@@ -298,7 +331,7 @@ module PrismFuzzer
 
     LONG_FLOAT_LITERAL = ("0." + ("123456789" * 87) + "e10").freeze
 
-    def sample_integer_literal(rng, allow_invalid: false)
+    def sample_integer_literal(rng, allow_invalid: false, max_payload_bytes: current_max_payload_bytes)
       return NUMERIC_ERROR_FRAGMENTS.sample(random: rng) if allow_invalid && rng.rand < 0.12
 
       r = rng.rand
@@ -307,13 +340,16 @@ module PrismFuzzer
       elsif r < 0.96
         COMPACT_INTEGERS.sample(random: rng)
       else
-        LARGE_BIGNUM_LITERALS.sample(random: rng)
+        fitting = LARGE_BIGNUM_LITERALS.select { |lit| lit.bytesize + 12 <= max_payload_bytes }
+        fitting.empty? ? COMPACT_INTEGERS.sample(random: rng) : fitting.sample(random: rng)
       end
     end
 
-    def sample_float_literal(rng, allow_invalid: false)
+    def sample_float_literal(rng, allow_invalid: false, max_payload_bytes: current_max_payload_bytes)
       return NUMERIC_ERROR_FRAGMENTS.sample(random: rng) if allow_invalid && rng.rand < 0.10
-      return LONG_FLOAT_LITERAL if rng.rand < 0.04
+      if rng.rand < 0.04 && LONG_FLOAT_LITERAL.bytesize + 12 <= max_payload_bytes
+        return LONG_FLOAT_LITERAL
+      end
 
       FLOAT_LITERALS.sample(random: rng)
     end
@@ -551,7 +587,8 @@ module PrismFuzzer
           node_count = count_prism_nodes(result.value)
           score = 1.0 + Math.log(node_count + 1) * 0.1
           # Preserve `>= 1.0` validity signal while penalizing bloat past AFL++'s seed size cap.
-          code.bytesize > MAX_SEED_PAYLOAD_BYTES ? [1.0, score * (MAX_SEED_PAYLOAD_BYTES.to_f / code.bytesize)].max : score
+          cap = current_max_payload_bytes
+          code.bytesize > cap ? [1.0, score * (cap.to_f / code.bytesize)].max : score
         else
           error_count = result.errors.size
           [0.0, 0.5 - error_count * 0.05].max
@@ -1112,20 +1149,127 @@ module PrismFuzzer
       end
     end
 
+    def max_ast_end_offset(node)
+      max_end = node.location.end_offset
+      stack = [node]
+      until stack.empty?
+        cur = stack.pop
+        e = cur.location.end_offset
+        max_end = e if e > max_end
+        if cur.respond_to?(:closing_loc) && (cl = cur.closing_loc)
+          ce = cl.end_offset
+          max_end = ce if ce > max_end
+        end
+        cur.compact_child_nodes.each { |ch| stack << ch }
+      end
+      max_end
+    end
+
+    # Split oversized Ruby candidates along top-level Prism statement boundaries
+    # (preserving heredoc bodies and optional magic-comment prefixes) or extract
+    # fitting sub-expressions when a single statement exceeds `max_payload_bytes`.
+    def split_candidate_chunks(code, max_payload_bytes, parse_fn, prefix: "")
+      raw = code.b
+      pref = prefix.b
+      return [pref + raw] if pref.bytesize + raw.bytesize <= max_payload_bytes
+
+      budget = max_payload_bytes - pref.bytesize
+      return [] if budget <= 0
+
+      res = parse_fn.call(code)
+      stmts = res&.value&.statements&.body
+      if stmts && stmts.size > 1
+        slices = []
+        prev = 0
+        stmts.each_with_index do |stmt, idx|
+          if idx == stmts.size - 1
+            cut = raw.bytesize
+          else
+            raw_end = max_ast_end_offset(stmt)
+            next_start = stmts[idx + 1].location.start_offset
+            cut = [raw_end, next_start].min
+            nl = raw.index("\n".b, raw_end)
+            cut = nl + 1 if nl && nl < next_start
+          end
+          next if cut <= prev
+
+          slices << raw.byteslice(prev, cut - prev)
+          prev = cut
+        end
+
+        chunks = []
+        cur = +"".b
+        slices.each do |sl|
+          if !cur.empty? && cur.bytesize + sl.bytesize <= budget
+            cur << sl
+          else
+            unless cur.empty?
+              chunks << (pref + cur)
+              cur = +"".b
+            end
+            if sl.bytesize <= budget
+              cur = sl.dup
+            else
+              chunks.concat(extract_fitting_subtrees(sl, budget, parse_fn).map { |sub| pref + sub })
+            end
+          end
+        end
+        chunks << (pref + cur) unless cur.empty?
+        return chunks unless chunks.empty?
+      end
+
+      extract_fitting_subtrees(raw, budget, parse_fn).map { |sub| pref + sub }
+    end
+
+    def extract_fitting_subtrees(raw_bytes, budget, parse_fn)
+      return [raw_bytes] if raw_bytes.bytesize <= budget
+
+      res = parse_fn.call(raw_bytes)
+      root = res&.value
+      return [] unless root
+
+      out = []
+      queue = root.compact_child_nodes.dup
+      while (node = queue.shift) && out.size < 4
+        s = node.location.start_offset
+        e = max_ast_end_offset(node)
+        len = e - s
+        if len > 0 && len <= budget
+          slice = raw_bytes.byteslice(s, len)
+          slice = "#{slice}\n".b if slice.bytesize < budget && !slice.end_with?("\n".b)
+          out << slice
+        else
+          queue.concat(node.compact_child_nodes)
+        end
+      end
+      out
+    end
+
     # Expand a single evolved [code, is_valid] candidate into the exact
     # [header, payload, valid, variant_kind] tuples emitted to the seed queue,
-    # skipping variants that would exceed AFL++'s max_length payload budget.
-    def expand_candidate_variants(code, is_valid, rng, validator, parse_fn, max_payload_bytes: MAX_SEED_PAYLOAD_BYTES)
-      return [] if code.bytesize > max_payload_bytes
-
-      variants = [[default_seed_header(rng), code, is_valid, :raw]]
+    # splitting oversized multi-statement derivations into <= max_payload_bytes chunks.
+    def expand_candidate_variants(code, is_valid, rng, validator, parse_fn, max_payload_bytes: current_max_payload_bytes)
+      variants = []
+      if code.bytesize <= max_payload_bytes
+        variants << [default_seed_header(rng), code, is_valid, :raw]
+      else
+        split_candidate_chunks(code, max_payload_bytes, parse_fn).each do |chunk|
+          variants << [default_seed_header(rng), chunk, validator.call(chunk), :raw]
+        end
+      end
 
       # Rewrite double-quoted strings into heredocs (including multi-heredoc lines
       # and nested heredocs in interpolation) on ~35% of string-bearing candidates.
       if code.include?('"') && rng.rand < 0.35
         heredoc_code = inject_heredocs(code, rng, parse_fn)
-        if heredoc_code && heredoc_code.bytesize <= max_payload_bytes
-          variants << [default_seed_header(rng), heredoc_code, validator.call(heredoc_code), :heredoc]
+        if heredoc_code
+          if heredoc_code.bytesize <= max_payload_bytes
+            variants << [default_seed_header(rng), heredoc_code, validator.call(heredoc_code), :heredoc]
+          else
+            split_candidate_chunks(heredoc_code, max_payload_bytes, parse_fn).each do |chunk|
+              variants << [default_seed_header(rng), chunk, validator.call(chunk), :heredoc]
+            end
+          end
         end
       end
 
@@ -1134,6 +1278,12 @@ module PrismFuzzer
         enc_code = inject_encoding_variant(code, rng)
         if enc_code.bytesize <= max_payload_bytes
           variants << [encoding_variant_header(rng), enc_code, validator.call(enc_code), :encoding]
+        elsif (nl = enc_code.b.index("\n".b))
+          enc_hdr = enc_code.b.byteslice(0, nl + 1)
+          enc_body = enc_code.b.byteslice((nl + 1)..) || "".b
+          split_candidate_chunks(enc_body, max_payload_bytes, parse_fn, prefix: enc_hdr).each do |chunk|
+            variants << [encoding_variant_header(rng), chunk, validator.call(chunk), :encoding]
+          end
         end
       end
 
@@ -1142,6 +1292,22 @@ module PrismFuzzer
         comment_code, is_main_script = inject_comments_variant(code, rng)
         if comment_code.bytesize <= max_payload_bytes
           variants << [comment_variant_header(is_main_script, rng), comment_code, validator.call(comment_code), :comments]
+        else
+          split_candidate_chunks(comment_code, max_payload_bytes, parse_fn).each do |chunk|
+            variants << [comment_variant_header(is_main_script, rng), chunk, validator.call(chunk), :comments]
+          end
+        end
+      end
+
+      # On large-input sessions (>= 4096 B), periodically pad a single line across
+      # pm_source_stream_read's 4096-byte fgets boundary to stress multi-chunk stream reads.
+      if max_payload_bytes >= 4096 && code.bytesize + 64 <= max_payload_bytes && rng.rand < 0.04
+        pad_len = [4096 - [code.bytesize, 64].min, max_payload_bytes - code.bytesize - 2].min
+        if pad_len > 0
+          long_line = "#" + ("a" * pad_len) + "\n" + code
+          if long_line.bytesize <= max_payload_bytes
+            variants << [STREAM_COMMENTS_HEADER, long_line, validator.call(long_line), :comments]
+          end
         end
       end
 
@@ -1574,10 +1740,10 @@ module PrismFuzzer
 
     def run_grammar_supervisor(argv = ARGV)
       afl_arg = (argv[0] && !argv[0].start_with?("-")) ? argv[0] : nil
-      default_ws = if defined?(PrismFuzzer::Topology)
-                     dt = PrismFuzzer::Topology.discover(afl_dir: afl_arg, start_dir: FUZZ_ROOT)
-                     PrismFuzzer::Topology.workspace_paths(dt, fuzz_root: FUZZ_ROOT) if dt
-                   end
+      default_topo = if defined?(PrismFuzzer::Topology)
+                       PrismFuzzer::Topology.discover(afl_dir: afl_arg, start_dir: FUZZ_ROOT)
+                     end
+      default_ws = default_topo ? PrismFuzzer::Topology.workspace_paths(default_topo, fuzz_root: FUZZ_ROOT) : nil
       afl_dir = afl_arg || (default_ws ? default_ws[:afl_dir] : "./tmp/fuzz/afl")
       queue_dir = argv[1] || "/tmp/afl-tmpdir/grammar/seeds"
       work_dir = File.dirname(queue_dir)
@@ -1649,22 +1815,26 @@ module PrismFuzzer
       Signal.trap("INT") { stop_supervisor.call("INT") }
       Signal.trap("TERM") { stop_supervisor.call("TERM") }
 
+      worker_max_payload = [resolve_max_input_size(default_topo, worker_id: worker_id), 1].max
+
       until stopping
         child_pid = Process.fork do
-          run_worker(
-            grammar: grammar,
-            supervisor_pid: supervisor_pid,
-            start_time: start_time,
-            prior_elapsed: prior_elapsed,
-            saved_crashes: saved_crashes,
-            afl_dir: afl_dir,
-            queue_dir: queue_dir,
-            staging_dir: staging_dir,
-            in_flight_path: in_flight_path,
-            stats_path: stats_path,
-            stats_tmp_path: stats_tmp_path,
-            plot_path: plot_path
-          )
+          with_max_payload_bytes(worker_max_payload) do
+            run_worker(
+              grammar: grammar,
+              supervisor_pid: supervisor_pid,
+              start_time: start_time,
+              prior_elapsed: prior_elapsed,
+              saved_crashes: saved_crashes,
+              afl_dir: afl_dir,
+              queue_dir: queue_dir,
+              staging_dir: staging_dir,
+              in_flight_path: in_flight_path,
+              stats_path: stats_path,
+              stats_tmp_path: stats_tmp_path,
+              plot_path: plot_path
+            )
+          end
         end
 
         _, status = Process.wait2(child_pid)

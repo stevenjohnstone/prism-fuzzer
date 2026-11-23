@@ -49,9 +49,18 @@ module PrismFuzzer
       names
     end
 
+    def effective_compiled_max_input_size(plan)
+      base = Integer(plan.dig("defaults", "max_input_size") || 1024)
+      worker_maxes = Array(plan["workers"]).filter_map { |w| w.is_a?(Hash) && w["max_input_size"] ? Integer(w["max_input_size"]) : nil }
+      gen_maxes = (plan["generators"].is_a?(Hash) ? plan["generators"].values : []).filter_map do |g|
+        g.is_a?(Hash) && g["max_input_size"] ? Integer(g["max_input_size"]) : nil
+      end
+      ([base] + worker_maxes + gen_maxes).max
+    end
+
     def common_define_flags(plan, user_flags: parse_user_flags, extra_flags: [])
       defined = normalized_flag_names(user_flags + Array(extra_flags))
-      max_in = plan.dig("defaults", "max_input_size") || 1024
+      max_in = effective_compiled_max_input_size(plan)
       max_alloc = plan.dig("defaults", "max_allocated_mb") || 128
       defaults = {
         "PM_INTEGER_DIVIDE_THRESHOLD" => 8,
@@ -319,7 +328,7 @@ module PrismFuzzer
                File.join(fuzz_root, "runtime", "provenance.rb"),
                afl_stamp
              ]
-      max_in = (plan.dig("defaults", "max_input_size") || 1024).to_s
+      max_in = effective_compiled_max_input_size(plan).to_s
       prov_flags = source_provenance_flags(prism_src)
       env["FUZZ_GIT_COMMIT"] = prov_flags[0].split("=", 2).last
       env["FUZZ_GIT_DIRTY"] = prov_flags[1].split("=", 2).last

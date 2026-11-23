@@ -8,6 +8,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#define FUZZ_HEADER_SIZE 4U
+
 typedef struct {
     int8_t start_line;
     uint8_t cmd_flags;

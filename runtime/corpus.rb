@@ -60,7 +60,34 @@ module PrismFuzzer
       ].compact.find { |d| !d.empty? && File.directory?(d) }
     end
 
-    def split_payload_chunks(bytes, max_len)
+    def prism_available?
+      return @prism_available unless @prism_available.nil?
+
+      @prism_available = begin
+        require "prism"
+        defined?(::Prism) ? true : false
+      rescue LoadError
+        false
+      end
+    end
+
+    def max_node_end_offset(node)
+      max_end = node.location.end_offset
+      stack = [node]
+      until stack.empty?
+        cur = stack.pop
+        e = cur.location.end_offset
+        max_end = e if e > max_end
+        if cur.respond_to?(:closing_loc) && (cl = cur.closing_loc)
+          ce = cl.end_offset
+          max_end = ce if ce > max_end
+        end
+        cur.compact_child_nodes.each { |ch| stack << ch }
+      end
+      max_end
+    end
+
+    def split_line_chunks(bytes, max_len)
       return [bytes] if bytes.bytesize <= max_len
 
       chunks = []
@@ -74,12 +101,72 @@ module PrismFuzzer
         end
 
         window = bytes.byteslice(pos, max_len)
+        para = window.rindex("\n\n".b)
         nl = window.rindex("\n".b)
-        take = nl && nl >= max_len / 2 ? nl + 1 : max_len
+        take = if para && para >= max_len / 3
+                 para + 2
+               elsif nl && nl >= max_len / 3
+                 nl + 1
+               else
+                 max_len
+               end
         chunks << bytes.byteslice(pos, take)
         pos += take
       end
       chunks
+    end
+
+    def split_payload_chunks(bytes, max_len)
+      return [bytes] if bytes.bytesize <= max_len
+
+      if prism_available?
+        stmts = begin
+          ::Prism.parse(bytes).value&.statements&.body
+        rescue StandardError
+          nil
+        end
+        if stmts && stmts.size > 1
+          slices = []
+          prev = 0
+          stmts.each_with_index do |stmt, idx|
+            if idx == stmts.size - 1
+              cut = bytes.bytesize
+            else
+              raw_end = max_node_end_offset(stmt)
+              next_start = stmts[idx + 1].location.start_offset
+              cut = [raw_end, next_start].min
+              nl = bytes.index("\n".b, raw_end)
+              cut = nl + 1 if nl && nl < next_start
+            end
+            next if cut <= prev
+
+            slices << bytes.byteslice(prev, cut - prev)
+            prev = cut
+          end
+
+          chunks = []
+          cur = +"".b
+          slices.each do |sl|
+            if !cur.empty? && cur.bytesize + sl.bytesize <= max_len
+              cur << sl
+            else
+              unless cur.empty?
+                chunks << cur
+                cur = +"".b
+              end
+              if sl.bytesize <= max_len
+                cur = sl.dup
+              else
+                chunks.concat(split_line_chunks(sl, max_len))
+              end
+            end
+          end
+          chunks << cur unless cur.empty?
+          return chunks unless chunks.empty?
+        end
+      end
+
+      split_line_chunks(bytes, max_len)
     end
 
     def parse_options(argv)
@@ -119,8 +206,11 @@ module PrismFuzzer
         corpus_src_dir: corpus_src_dir
       )
       output_dir = File.absolute_path(parsed[:output_dir] || (ws ? ws[:corpus_dir] : File.join(FUZZ_ROOT, "tmp/fuzz/corpus")))
-      max_input_size = Integer(ENV.fetch("FUZZ_MAX_INPUT_SIZE", "1024"))
-      max_payload_size = [max_input_size - 4, 1].max
+      env_max = ENV["FUZZ_MAX_INPUT_SIZE"].to_s.strip
+      topo_max = corp_gen&.dig("max_input_size") || topo&.dig("defaults", "max_input_size")
+      max_input_size = Integer(!env_max.empty? ? env_max : (topo_max || 1024))
+      # max_input_size bounds the Ruby source payload; the 4-byte option header is prepended on top.
+      max_payload_size = [max_input_size, 1].max
 
       default_fuzz_bin = if corpus_fuzzer
                            fspec_bin = topo&.dig("fuzzers", corpus_fuzzer, "binary")
@@ -173,25 +263,47 @@ module PrismFuzzer
             count += 1
           end
 
-          if max_payload_size >= 4200
-            long_stream = ("x" * 4095) + "\nfoo\n__END__\nbar\n"
-            target_filename = File.join(tmpdir, "opt_stream_long_line.rb")
-            File.binwrite(target_filename, "\x40\x00\x03\x01".b + long_stream.b.byteslice(0, max_payload_size))
+          if max_payload_size >= 1024
+            buf_seed = "x = \"" + ("a" * 1017) + "\"\n"
+            target_filename = File.join(tmpdir, "opt_buffer_1024_boundary.rb")
+            File.binwrite(target_filename, DEFAULT_HEADER + buf_seed.b.byteslice(0, max_payload_size))
             puts "✅ Generated: #{target_filename}"
             count += 1
           end
 
+          if max_payload_size >= 2049
+            arena_seed = "x = \"" + ("a" * 2042) + "\"\n"
+            target_filename = File.join(tmpdir, "opt_arena_2049_boundary.rb")
+            File.binwrite(target_filename, DEFAULT_HEADER + arena_seed.b.byteslice(0, max_payload_size))
+            puts "✅ Generated: #{target_filename}"
+            count += 1
+          end
+
+          if max_payload_size >= 4096
+            long_stream = if max_payload_size >= 4120
+                            ("x" * 4095) + "\nfoo\n__END__\nbar\n"
+                          else
+                            ("x" * 4095) + "\n"
+                          end
+            target_filename = File.join(tmpdir, "opt_stream_long_line.rb")
+            File.binwrite(target_filename, "\x40\x00\x03\x01".b + long_stream.b.byteslice(0, max_payload_size))
+            puts "✅ Generated: #{target_filename}"
+            count += 1
+
+            if max_payload_size >= 4112
+              split_end = ("#" * 4095) + "__END__\nx = 1\n"
+              end_filename = File.join(tmpdir, "opt_stream_fgets_split_end.rb")
+              File.binwrite(end_filename, "\x40\x00\x03\x01".b + split_end.b.byteslice(0, max_payload_size))
+              puts "✅ Generated: #{end_filename}"
+              count += 1
+            end
+          end
+
           base_content = <<~RUBY
-            # This acts as a standard variable assignment
-            foo = "Standard: abc"
-
-            # This tests Latin-1/Windows handling
-            bar = "Accents: ü"
-            baz = "Currency: €"
-
-            # This tests multibyte/wide handling
-            qux = "Japanese: あ"
-
+            foo = "abc"
+            bar = "ü"
+            baz = "€"
+            qux = "あ"
             puts [foo, bar, baz, qux]
           RUBY
 

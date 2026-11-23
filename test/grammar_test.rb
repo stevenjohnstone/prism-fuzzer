@@ -351,6 +351,40 @@ class GrammarTest < Minitest::Test
         "--compare", bench_json
       )
       assert_includes cmp_out, "=== Baseline Comparison ==="
+
+      # Verify 256-byte cap splits multi-statement candidates along AST boundaries and produces 0 oversized seeds
+      bench_256 = File.join(dir, "bench_256.json")
+      assert_ruby_cmd(
+        repo_path("runtime/grammar_bench.rb"),
+        "--max-input-size", "256",
+        "--epochs", "1",
+        "--gens", "4",
+        "--variant-trials", "15",
+        "--seed", "7",
+        "--max-seconds", "20",
+        "--json", bench_256
+      )
+      sim_256 = JSON.parse(File.read(bench_256)).fetch("simulation")
+      assert_equal 0, sim_256.dig("oversized", "total").to_i, "expected 0 oversized seeds > 260 B at --max-input-size 256: #{sim_256.inspect}"
+      assert_operator sim_256.dig("throughput", "unique_emitted").to_i, :>, 0
+
+      in_flight_p = File.join(dir, "split_in_flight")
+      File.open(in_flight_p, File::RDWR | File::CREAT | File::BINARY, 0o600) do |io|
+        _fit, val, pfn = PrismFuzzer::Grammar.build_guarded_evaluators(io)
+        long_prog = ([
+          "x = <<~H + 1\n  body\nH\n",
+          "def m(a, b = 2)\n  a + b\nend\n",
+          "y = [1, 2, 3, 4, 5].map { |v| v * 2 }\n"
+        ] * 4).join
+        assert_operator long_prog.bytesize, :>, 256
+        emitted = PrismFuzzer::Grammar.expand_candidate_variants(long_prog, true, Random.new(11), val, pfn, max_payload_bytes: 256)
+        assert_operator emitted.size, :>=, 2
+        emitted.each do |hdr, payload, _valid, _kind|
+          assert_equal 4, hdr.bytesize
+          assert_operator payload.bytesize, :<=, 256
+          assert_operator (hdr.bytesize + payload.bytesize), :<=, 260
+        end
+      end
     end
   end
 

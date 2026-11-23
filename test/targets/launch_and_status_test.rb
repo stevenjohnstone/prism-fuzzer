@@ -863,6 +863,19 @@ class LaunchAndStatusTest < Minitest::Test
       assert plan_b.dig("fuzzers", "fuzz.ijon.prism_diff", "ijon")
       assert_equal 15, plan_b["workers"].size
     end
+
+    ijon_small_camp = repo_path("campaigns/ijon-small.rb")
+    ir_sm, = PrismFuzzer::Topology.load_ir(ijon_small_camp, fuzz_root: root_dir)
+    plan_sm = PrismFuzzer::Topology.compile_plan(ir_sm, fuzz_root: root_dir)
+    lp_sm = PrismFuzzer::Topology.plan_launch(plan_sm, fuzz_root: root_dir)
+    assert_equal "ijon-small-prism-fleet", plan_sm["name"]
+    assert_equal 256, plan_sm.dig("defaults", "max_input_size")
+    assert_equal File.join(root_dir, "tmp/fuzz-ijon-small/afl-ijon"), lp_sm["primary_afl_dir"]
+    assert_equal 256, lp_sm.dig("corpus_population", "max_input_size")
+    scout_sm = lp_sm["workers"].find { |w| w["id"] == "ijon-scout" }
+    gram_sm = lp_sm["workers"].find { |w| w["id"] == "grammar" }
+    assert_includes Shellwords.split(scout_sm["cmd"]).last, "-G 260 "
+    assert_equal "256", gram_sm.dig("env", "FUZZ_MAX_INPUT_SIZE")
   end
 
   private

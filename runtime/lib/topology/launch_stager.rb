@@ -49,6 +49,9 @@ module PrismFuzzer
           end
           c_bin = cands.compact.uniq.find { |p| File.executable?(p) }
           c_env["CORPUS_FUZZ_BIN"] = c_bin if c_bin
+          if cpop["max_input_size"] && ENV["FUZZ_MAX_INPUT_SIZE"].to_s.strip.empty?
+            c_env["FUZZ_MAX_INPUT_SIZE"] = cpop["max_input_size"].to_s
+          end
           run_cmd(RbConfig.ruby, cpop.fetch("corpus_rb"), effective_corpus_dir, env: c_env)
         end
       end

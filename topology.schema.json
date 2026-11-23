@@ -406,6 +406,10 @@
         "fuzzer": {
           "$ref": "#/$defs/identifier"
         },
+        "max_input_size": {
+          "type": "integer",
+          "minimum": 1
+        },
         "color": {
           "type": "string",
           "minLength": 1
@@ -442,6 +446,10 @@
           "minLength": 1
         },
         "ulimit_v_kb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_input_size": {
           "type": "integer",
           "minimum": 1
         },
@@ -873,6 +881,10 @@
           "type": "integer",
           "minimum": 1
         },
+        "max_input_size": {
+          "type": "integer",
+          "minimum": 1
+        },
         "no_trim": {
           "type": "boolean"
         },
@@ -946,6 +958,10 @@
           "$ref": "#/$defs/identifier"
         },
         "ulimit_v_kb": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_input_size": {
           "type": "integer",
           "minimum": 1
         },

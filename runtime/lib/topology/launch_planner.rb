@@ -96,7 +96,8 @@ module PrismFuzzer
           "corpus_rb" => File.join(fuzz_root, "runtime", "corpus.rb"),
           "fixtures_dir" => fixtures_dir,
           "fuzzer_binary_rel" => c_bin_rel,
-          "fuzzer_bin_candidates" => c_bin_candidates
+          "fuzzer_bin_candidates" => c_bin_candidates,
+          "max_input_size" => Integer(corpus_gen["max_input_size"] || max_input_size)
         }.compact
       end
 
@@ -180,12 +181,14 @@ module PrismFuzzer
                                 ""
                               end
 
+          gen_max_input = Integer(w["max_input_size"] || gspec["max_input_size"] || max_input_size)
           env_map = {
             "FUZZ_BIN_DIR" => bin_dir,
             "FUZZ_RUBY_EXT_DIR" => ext_dir,
             "FUZZ_RUBY_LIB_DIR" => lib_dir,
             "FUZZ_GRAMMAR_WORKER_ID" => wid,
-            "FUZZ_INTAKE_STATS_PATH" => intake_stats_path
+            "FUZZ_INTAKE_STATS_PATH" => intake_stats_path,
+            "FUZZ_MAX_INPUT_SIZE" => gen_max_input.to_s
           }
           env_vars = env_map.map { |k, v| "#{k}=#{Shellwords.escape(v)}" }
           if gspec["fuzzer"] && (g_fspec = plan.dig("fuzzers", gspec["fuzzer"].to_s))
@@ -289,6 +292,9 @@ module PrismFuzzer
         aux_bin = nil
         mutator_name = nil
 
+        worker_max_input = Integer(w["max_input_size"] || max_input_size)
+        afl_max_raw = worker_max_input + 4
+
         if fspec["shape"] == "prism_cross_oracle"
           arch_cfg = CROSS_ARCH_CONFIGS.fetch(fspec.fetch("arch"))
           qemu_bin = arch_cfg[:qemu]
@@ -303,7 +309,7 @@ module PrismFuzzer
           env_prefix << "ASAN_OPTIONS=#{asan_opts}" if sans.include?("asan")
           env_prefix << "UBSAN_OPTIONS=#{ubsan_opts}" if sans.include?("ubsan")
 
-          max_env = max_input_size < 1024 ? 262_144 : max_input_size * 256
+          max_env = afl_max_raw < 1028 ? 262_144 : afl_max_raw * 256
           mem_limit = (w["mem_limit"] || "none").to_s
           afl_args_pre = ["-t", "250+", "-m", mem_limit, "-x", dict_file, "-G", max_env.to_s]
           afl_args_post = ["-o", out_dir, w["afl_role"] == "main" ? "-M" : "-S", wid]
@@ -330,7 +336,7 @@ module PrismFuzzer
           mem_limit = w["mem_limit"]&.to_s
           afl_args_pre = ["-t", "250+"]
           afl_args_pre.push("-m", mem_limit) if mem_limit
-          afl_args_pre.push("-x", dict_file, "-G", max_input_size.to_s)
+          afl_args_pre.push("-x", dict_file, "-G", afl_max_raw.to_s)
           if w["cmplog"] && !w["cmplog"].to_s.empty?
             cmplog_fspec = plan.dig("fuzzers", w["cmplog"].to_s)
             cmplog_bin = File.join(bin_dir, File.basename(cmplog_fspec ? cmplog_fspec["binary"] : w["cmplog"].to_s))

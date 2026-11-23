@@ -327,6 +327,56 @@ compute_build_fingerprint() {
   ' "$target_root" "$extra_target_root" "$fuzz_root" "$cc" "$@"
 }
 
+resolve_default_max_input() {
+  ruby -rjson -rzlib -rrubygems/package -e '
+    ws_build, bucket = ARGV
+    max_in = 1024
+    [File.join(ws_build.to_s, "topology.resolved.json"), File.join(File.dirname(ws_build.to_s), "topology.json")].each do |tp|
+      next unless File.file?(tp)
+      t = begin
+        JSON.parse(File.read(tp))
+      rescue StandardError
+        next
+      end
+      d = t.dig("defaults", "max_input_size").to_i
+      max_in = d if d > max_in
+      Array(t["workers"]).each do |w|
+        wm = w.is_a?(Hash) ? w["max_input_size"].to_i : 0
+        max_in = wm if wm > max_in
+      end
+      (t["generators"].is_a?(Hash) ? t["generators"].values : []).each do |g|
+        gm = g.is_a?(Hash) ? g["max_input_size"].to_i : 0
+        max_in = gm if gm > max_in
+      end
+      break
+    end
+    if bucket && !bucket.empty? && File.directory?(bucket)
+      min_f = File.join(bucket, "input.min")
+      if File.file?(min_f)
+        pay = File.size(min_f) - 4
+        max_in = pay if pay > max_in
+      end
+      tgz = File.join(bucket, "inputs.tar.gz")
+      if File.file?(tgz)
+        begin
+          Zlib::GzipReader.open(tgz) do |gz|
+            Gem::Package::TarReader.new(gz) do |tar|
+              tar.each do |entry|
+                next unless entry.file?
+                pay = entry.header.size.to_i - 4
+                max_in = pay if pay > max_in
+              end
+            end
+          end
+        rescue StandardError
+          nil
+        end
+      end
+    end
+    puts max_in
+  ' "$ws_build_dir" "${BUCKET_DIR:-}" 2>/dev/null || echo 1024
+}
+
 build_verify_runner() {
   local profile="$1"
   local cache_dir="${VERIFY_BUILD_DIR:-$ws_build_dir/verify}"
@@ -365,7 +415,10 @@ build_verify_runner() {
   fi
 
   local cc="${CC:-clang}"
-  local max_input="${FUZZ_MAX_INPUT_SIZE:-1024}"
+  local max_input="${FUZZ_MAX_INPUT_SIZE:-}"
+  if [ -z "$max_input" ]; then
+    max_input="$(resolve_default_max_input)"
+  fi
   local max_alloc="${FUZZ_MAX_ALLOCATED:-128}"
   local hard_rss="${FUZZ_HARD_RSS_LIMIT:-$((max_alloc * 16))}"
 

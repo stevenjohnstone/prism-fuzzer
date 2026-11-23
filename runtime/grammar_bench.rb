@@ -475,7 +475,8 @@ module GrammarBench
               raw_sizes[:gram] << code.bytesize
             end
 
-            payload_cap = [opts[:max_input_size] - 4, 1].max
+            payload_cap = [opts[:max_input_size], 1].max
+            wire_cap = payload_cap + 4
             expand_candidate_variants(code, is_valid, rng, validator, parse_fn, max_payload_bytes: payload_cap).each do |hdr, payload, valid, kind|
               payload_b = payload.b
               attempts += 1
@@ -487,7 +488,7 @@ module GrammarBench
                 variant_stats[kind][:valid] += 1 if valid
               end
 
-              over = (hdr.bytesize + payload_b.bytesize) > opts[:max_input_size]
+              over = (hdr.bytesize + payload_b.bytesize) > wire_cap
               if over
                 oversized_total += 1
                 oversized_by_kind[kind == :raw ? source : kind] += 1
@@ -575,7 +576,7 @@ module GrammarBench
         "grammar_bytes_max" => sorted_gram_sz.last || 0
       },
       "oversized" => {
-        "limit_bytes" => opts[:max_input_size],
+        "limit_bytes" => opts[:max_input_size] + 4,
         "total" => oversized_total,
         "total_pct" => pct(oversized_total, attempts),
         "unique" => oversized_unique,
@@ -747,10 +748,12 @@ module GrammarBench
           "parse_y_parse_sec" => parse_sec
         },
         "regexp_audit" => audit_regexp_fragments,
-        "literals_and_terminals" => audit_literals_and_terminals(grammar, [opts[:max_input_size] - 4, 1].max),
+        "literals_and_terminals" => audit_literals_and_terminals(grammar, [opts[:max_input_size], 1].max),
         "heredoc_audit" => audit_heredocs(grammar, audit_rng, parse_fn, validator, trials: opts[:variant_trials]),
         "variants_audit" => audit_variants(audit_rng, validator, trials: opts[:variant_trials]),
-        "simulation" => run_simulation(grammar, opts, in_flight_io, showmap_dir: showmap_dir)
+        "simulation" => with_max_payload_bytes([opts[:max_input_size], 1].max) do
+          run_simulation(grammar, opts, in_flight_io, showmap_dir: showmap_dir)
+        end
       }
     ensure
       begin

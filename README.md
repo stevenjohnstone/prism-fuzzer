@@ -216,7 +216,8 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 │   └── topology.rb                 CLI for validating, syncing, building, and planning topologies
 ├── campaigns
 │   ├── default.rb                  default executable multi-fuzzer campaign script
-│   └── ijon.rb                     IJON-centric fleet campaign (sanitized, slow, MSan, and parse.y IJON hub)
+│   ├── ijon.rb                     IJON-centric fleet campaign (sanitized, slow, MSan, and parse.y IJON hub)
+│   └── ijon-small.rb               256-byte IJON-centric fleet variant (`tmp/fuzz-ijon-small`, `-G 260`)
 ├── dict
 │   └── prism.dict                  AFL++ / libFuzzer Ruby syntax & keyword dictionary
 ├── docker

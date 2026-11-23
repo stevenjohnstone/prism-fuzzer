@@ -711,6 +711,142 @@ class TriageReproTest < Minitest::Test
       long_seed = File.join(corpus_8k, "opt_stream_long_line.rb")
       assert_path_exists long_seed, "expected opt_stream_long_line.rb when FUZZ_MAX_INPUT_SIZE=8192"
       assert File.binread(long_seed).start_with?("\x40\x00\x03\x01".b)
+      assert_path_exists File.join(corpus_8k, "opt_stream_fgets_split_end.rb")
+      assert_equal 1028, File.size(File.join(corpus_8k, "opt_buffer_1024_boundary.rb"))
+      assert_equal 2053, File.size(File.join(corpus_8k, "opt_arena_2049_boundary.rb"))
+
+      # FUZZ_MAX_INPUT_SIZE=4096 accounts for the 4-byte option header (4096 payload + 4 header = 4100 B).
+      corpus_4k = File.join(workdir, "corpus_4k")
+      assert_ruby_cmd(
+        repo_path("runtime/corpus.rb"), "--no-minimize", corpus_4k,
+        env: { "FUZZ_MAX_INPUT_SIZE" => "4096", "PRISM_A_DIR" => prism_a_dir, "CORPUS_FIXTURES_DIR" => nil }
+      )
+      long_4k = File.join(corpus_4k, "opt_stream_long_line.rb")
+      assert_path_exists long_4k
+      assert_equal 4100, File.size(long_4k), "expected 4-byte header + 4096-byte fgets boundary payload"
+
+      # FUZZ_MAX_INPUT_SIZE=256 splits multi-statement + heredoc fixtures along AST boundaries (<= 260 B wire)
+      # and keeps multi-encoding seeds intact without mid-line truncation.
+      mini_fix = File.join(workdir, "mini_fixtures")
+      FileUtils.mkdir_p(mini_fix)
+      heredoc_multi = ([
+        "a = <<~EOF + 1\n  hello_heredoc\nEOF\n",
+        "def alpha(x)\n  x * 2\nend\n",
+        "class Beta\n  y = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]\nend\n"
+      ] * 3).join("\n")
+      assert_operator heredoc_multi.bytesize, :>, 256
+      File.binwrite(File.join(mini_fix, "heredoc_multi.txt"), heredoc_multi)
+
+      corpus_256 = File.join(workdir, "corpus_256")
+      assert_ruby_cmd(
+        repo_path("runtime/corpus.rb"), "--no-minimize", "--fixtures-dir", mini_fix, corpus_256,
+        env: { "FUZZ_MAX_INPUT_SIZE" => "256" }
+      )
+      parts = Dir.glob(File.join(corpus_256, "heredoc_multi.txt.part*.rb")).sort
+      require "prism"
+      assert_operator parts.size, :>=, 2
+      parts.each do |pt|
+        raw = File.binread(pt)
+        assert_operator raw.bytesize, :<=, 260, "expected <= 256 payload + 4 header on #{pt}"
+        assert ::Prism.parse_success?(raw.byteslice(4..)), "expected AST-split chunk to stay valid Ruby: #{raw.byteslice(4..).inspect}"
+      end
+      utf8_seed = File.binread(File.join(corpus_256, "corpus_UTF-8.rb")).byteslice(4..)
+      assert_includes utf8_seed, "puts [foo, bar, baz, qux]"
+      assert ::Prism.parse_success?(utf8_seed)
+
+      # Per-worker max_input_size + 4-byte header in AFL -G + compiled max_input_size ceiling:
+      mixed_ws = File.join(workdir, "mixed_max_ws")
+      mixed_camp = File.join(workdir, "mixed_max_campaign.rb")
+      File.write(mixed_camp, <<~RB)
+        PrismFuzzer.campaign "mixed-max-input" do
+          workspace #{mixed_ws.inspect}
+          defaults max_input_size: 256, max_allocated_mb: 128
+          prism :prism_a, dir: #{(prism_a_dir || root_dir).inspect}, patches: "none", templates: "never"
+          grammar_generator :grammar, source: :prism_a, fuzzer: "fuzz", sync_group: :afl
+          fuzzer "fuzz", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
+          fuzzer "fuzz.slow", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :slow, afl: :lto
+          sync_group :afl, dir: "afl", primary: true
+          worker :main, fuzzer: "fuzz", sync_group: :afl, afl_role: :main do
+            foreign_sync :grammar
+          end
+          worker :grammar, kind: :generator, generator: :grammar
+          worker :slow, fuzzer: "fuzz.slow", sync_group: :afl, afl_role: :secondary do
+            max_input_size 4096
+          end
+        end
+      RB
+      mixed_ir, = PrismFuzzer::Topology.load_ir(mixed_camp, fuzz_root: root_dir)
+      mixed_plan = PrismFuzzer::Topology.compile_plan(mixed_ir, fuzz_root: root_dir, build_dir: File.join(mixed_ws, "build"))
+      assert_equal 4096, PrismFuzzer::Topology.effective_compiled_max_input_size(mixed_plan)
+      lp = PrismFuzzer::Topology.plan_launch(mixed_plan, fuzz_root: root_dir)
+      main_w = lp["workers"].find { |w| w["id"] == "main" }
+      slow_w = lp["workers"].find { |w| w["id"] == "slow" }
+      gram_w = lp["workers"].find { |w| w["id"] == "grammar" }
+      main_inner = Shellwords.split(main_w["cmd"]).last
+      slow_inner = Shellwords.split(slow_w["cmd"]).last
+      assert_includes main_inner, "-G 260 "
+      assert_includes slow_inner, "-G 4100 "
+      assert_equal "256", gram_w.dig("env", "FUZZ_MAX_INPUT_SIZE")
+
+      # Verify verify_bucket.sh auto-detects topology.json defaults.max_input_size and clamps up to
+      # large (> 1024 B) bucket payloads when FUZZ_MAX_INPUT_SIZE is unset in ENV:
+      if prism_a_dir && File.directory?(File.join(prism_a_dir, "src"))
+        cc_log = File.join(workdir, "cc_args.log")
+        fake_cc = File.join(workdir, "fake_cc.sh")
+        File.write(fake_cc, <<~SH)
+          #!/usr/bin/env bash
+          printf '%s\\n' "$*" >> #{Shellwords.escape(cc_log)}
+          for prev in "$@"; do
+            if [ "${want_out:-0}" = "1" ]; then
+              printf '#!/bin/sh\\nexit 0\\n' > "$prev"
+              chmod +x "$prev"
+              exit 0
+            fi
+            [ "$prev" = "-o" ] && want_out=1
+          done
+          exit 0
+        SH
+        File.chmod(0o755, fake_cc)
+
+        big_bucket = File.join(workdir, "big_bucket")
+        FileUtils.mkdir_p(big_bucket)
+        File.binwrite(File.join(big_bucket, "input.min"), "\x00\x00\x03\x01".b + ("x" * 1500))
+        assert_cmd(
+          repo_path("triage/verify_bucket.sh"),
+          "--repo-root", prism_a_dir,
+          "--fuzz-root", root_dir,
+          "--bucket-dir", big_bucket,
+          "--profile", "asan_ubsan",
+          "--build-only",
+          env: {
+            "CC" => fake_cc,
+            "VERIFY_BUILD_DIR" => File.join(workdir, "big_vdir"),
+            "FUZZ_BUILD_DIR" => File.join(workdir, "no_topo_build"),
+            "FUZZ_MAX_INPUT_SIZE" => nil
+          }
+        )
+        assert_includes File.read(cc_log), "-DFUZZ_MAX_INPUT_SIZE=1500"
+
+        File.write(cc_log, "")
+        topo_ws = File.join(workdir, "topo_auto_ws")
+        FileUtils.mkdir_p(File.join(topo_ws, "build"))
+        File.write(File.join(topo_ws, "topology.json"), JSON.generate({ "defaults" => { "max_input_size" => 16_384 } }))
+        assert_cmd(
+          repo_path("triage/verify_bucket.sh"),
+          "--repo-root", prism_a_dir,
+          "--fuzz-root", root_dir,
+          "--bucket-dir", big_bucket,
+          "--profile", "asan_ubsan",
+          "--build-only",
+          env: {
+            "CC" => fake_cc,
+            "VERIFY_BUILD_DIR" => File.join(workdir, "topo_vdir"),
+            "FUZZ_BUILD_DIR" => File.join(topo_ws, "build"),
+            "FUZZ_MAX_INPUT_SIZE" => nil
+          }
+        )
+        assert_includes File.read(cc_log), "-DFUZZ_MAX_INPUT_SIZE=16384"
+      end
 
       run_plan, = assert_cmd(
         "make", "-n", "IN_DOCKER=", "-o", "./build/.fuzz.docker.stamp",

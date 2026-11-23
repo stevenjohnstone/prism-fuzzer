@@ -172,6 +172,7 @@ module PrismFuzzer
           nml = @spec.delete("no_mem_limit")
           @spec["mem_limit"] = "none" if nml
         end
+        @spec["max_input_size"] = Integer(@spec["max_input_size"]) if @spec["max_input_size"]
       end
 
       def id(val) = (@spec["id"] = val.to_s)
@@ -184,6 +185,7 @@ module PrismFuzzer
       def afl_flags(*vals) = (@spec["afl_flags"] = vals.flatten.map(&:to_s))
       def cmplog(val) = (@spec["cmplog"] = val.to_s)
       def loopcount(val) = (@spec["loopcount"] = Integer(val))
+      def max_input_size(val) = (@spec["max_input_size"] = Integer(val))
       def no_trim(flag = true) = (@spec["no_trim"] = !!flag)
       def ulimit_v_kb(val) = (@spec["ulimit_v_kb"] = Integer(val))
       def keep_open_on_exit(flag = true) = (@spec["keep_open_on_exit"] = !!flag)
@@ -392,6 +394,7 @@ module PrismFuzzer
 
         g = CampaignDSL.normalize_value(opts)
         g["kind"] = kind.to_s
+        g["max_input_size"] = Integer(g["max_input_size"]) if g["max_input_size"]
         @generators[gid] = g
       end
 

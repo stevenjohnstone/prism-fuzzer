@@ -236,8 +236,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         diff_oracle_init_with_stack((void *) &ruby_stack_top);
     }
 
-    // Share the 4-byte option header + FUZZ_MAX_INPUT_SIZE cap with parse.c corpus/seeds.
-    if (size < 4 || size > FUZZ_MAX_INPUT_SIZE) {
+    // FUZZ_MAX_INPUT_SIZE bounds the Ruby source payload after the 4-byte option header.
+    if (size < 4 || (size - 4) > (size_t) FUZZ_MAX_INPUT_SIZE) {
         return 0;
     }
 

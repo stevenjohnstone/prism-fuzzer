@@ -413,6 +413,23 @@ class TriageDiffParseYTest < Minitest::Test
         assert_match(/\bctx=program\b/, enc_hl)
         refute_includes enc_hl.sub(/\s*\[detail:.*$/, ""), "utf8="
 
+        # Large (> 1024 B) diff_parse_y crash must auto-clamp FUZZ_MAX_INPUT_SIZE in verify_bucket.sh
+        # instead of silently passing via diff.c's size guard when FUZZ_MAX_INPUT_SIZE is unset:
+        File.binwrite(
+          File.join(diff_bucket, "input.min"),
+          seed_bytes("# encoding: CESU-8\n#{"#" * 1500}\n1 + 2\n")
+        )
+        big_diff_out, big_diff_err, big_diff_st = run_cmd(
+          verify_bucket_sh,
+          "--repo-root", prism_dir,
+          "--fuzz-root", root_dir,
+          "--bucket-dir", diff_bucket,
+          "--profile", "diff_parse_y",
+          "--json",
+          env: { "VERIFY_BUILD_DIR" => diff_verify_build, "FUZZ_MAX_INPUT_SIZE" => nil }
+        )
+        assert_equal 1, big_diff_st.exitstatus,
+                     "expected >1024B diff_parse_y input to reproduce without FUZZ_MAX_INPUT_SIZE env:\nstdout=#{big_diff_out}\nstderr=#{big_diff_err}"
       end
 
       # Stress CRuby GC under ASan (both verify_bucket.sh default ASAN_OPTIONS and

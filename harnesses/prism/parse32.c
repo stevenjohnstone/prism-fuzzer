@@ -470,7 +470,7 @@ __attribute__((noinline)) void harness(const uint8_t *input, size_t size) {
     size_t raw_len = size;
     bool has_oracle = has_oracle64_envelope(input, size, &oracle, &oracle_len, &raw, &raw_len);
 
-    if (raw_len < 4 || raw_len > (size_t) FUZZ_MAX_INPUT_SIZE) return;
+    if (raw_len < 4 || (raw_len - 4) > (size_t) FUZZ_MAX_INPUT_SIZE) return;
 
     fuzz_options_t opts;
     fuzz_options_decode(raw, &opts);

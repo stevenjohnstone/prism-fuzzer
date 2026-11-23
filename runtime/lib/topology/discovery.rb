@@ -262,7 +262,7 @@ module PrismFuzzer
 
     def default_coverage_define_flags(topo)
       defaults = topo.is_a?(Hash) && topo["defaults"].is_a?(Hash) ? topo["defaults"] : {}
-      max_in = defaults["max_input_size"] || 1024
+      max_in = effective_compiled_max_input_size(topo.is_a?(Hash) ? topo : {})
       max_alloc = defaults["max_allocated_mb"] || 128
       [
         "-DPM_INTEGER_DIVIDE_THRESHOLD=8",

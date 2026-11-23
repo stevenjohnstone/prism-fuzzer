@@ -44,11 +44,16 @@
 #endif
 
 #define ORACLE64_MAGIC 0x504D3634U /* "PM64" little-endian */
-#define ORACLE64_MAX_ENVELOPE_SIZE 262144U
 #define ORACLE64_ENV_HEADER_SIZE 8U
 
 #ifndef FUZZ_MAX_INPUT_SIZE
 #define FUZZ_MAX_INPUT_SIZE 1024U
+#endif
+
+#if FUZZ_MAX_INPUT_SIZE > 1024
+#define ORACLE64_MAX_ENVELOPE_SIZE (((size_t) FUZZ_MAX_INPUT_SIZE + 4U) * 256U)
+#else
+#define ORACLE64_MAX_ENVELOPE_SIZE 262144U
 #endif
 
 typedef struct {
@@ -82,7 +87,7 @@ static const uint8_t *oracle64_build_envelope(
     size_t *out_len
 ) {
     *out_len = 0;
-    if (st == NULL || st->ast_buf == NULL || raw == NULL || raw_size < 4 || raw_size > (size_t) FUZZ_MAX_INPUT_SIZE) {
+    if (st == NULL || st->ast_buf == NULL || raw == NULL || raw_size < 4 || (raw_size - 4) > (size_t) FUZZ_MAX_INPUT_SIZE) {
         return NULL;
     }
 

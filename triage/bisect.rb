@@ -151,7 +151,7 @@ module FuzzBisect
       ["ruby", verify_rb, *verify_args]
     else
       tmpfs_flags = Shellwords.split(ENV.fetch("FUZZ_TMPFS_FLAGS", "--tmpfs /tmp:rw,exec,mode=1777"))
-      max_input = ENV.fetch("FUZZ_MAX_INPUT_SIZE", "1024")
+      max_input = ENV["FUZZ_MAX_INPUT_SIZE"].to_s.strip
       max_alloc = ENV.fetch("FUZZ_MAX_ALLOCATED", "128")
       image = ENV.fetch("FUZZ_DOCKER_IMAGE", "prism-fuzzer")
       extra_mounts = []
@@ -165,11 +165,12 @@ module FuzzBisect
         suppress_invert: suppress_invert,
         extra_mounts: extra_mounts
       )
+      env_flags = ["-e", "FUZZ_MAX_ALLOCATED=#{max_alloc}"]
+      env_flags.unshift("-e", "FUZZ_MAX_INPUT_SIZE=#{max_input}") unless max_input.empty?
       [
         "docker", "run", "--rm",
         *tmpfs_flags,
-        "-e", "FUZZ_MAX_INPUT_SIZE=#{max_input}",
-        "-e", "FUZZ_MAX_ALLOCATED=#{max_alloc}",
+        *env_flags,
         "-v", "#{fuzz_root}:/prism-fuzzer",
         "-v", "#{worktree_dir}:/target",
         *extra_mounts,
