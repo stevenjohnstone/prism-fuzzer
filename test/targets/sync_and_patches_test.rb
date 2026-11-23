@@ -417,6 +417,8 @@ class TargetsSyncAndPatchesTest < Minitest::Test
     cache_dir = File.join(workdir, "cache")
     topo_path = File.join(workdir, "topology.rb")
 
+    ruby_ref = File.read(repo_path("docker/Dockerfile"))[/^ARG RUBY_GIT_REF=([0-9a-f]+)/, 1] || "495f3778a4020ecc828083239e945e60c51245ae"
+
     File.write(topo_path, <<~RUBY)
       b_ref = ENV["PRISM_B_REF"].to_s.strip
       b_ref = nil if b_ref.empty?
@@ -427,7 +429,7 @@ class TargetsSyncAndPatchesTest < Minitest::Test
           prism :prism_b, repo: #{upstream[:repo].inspect}, ref: b_ref, patches: "auto", templates: "auto"
         end
         ruby :ruby, repo: "https://example.invalid/ruby.git",
-                    ref: "72d4cf2e9ab72899958450638409ebdc18e9855b",
+                    ref: #{ruby_ref.inspect},
                     dir: ENV["RUBY_DIR"]
 
         fuzzer "fuzz", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true

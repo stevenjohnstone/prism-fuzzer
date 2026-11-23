@@ -695,11 +695,13 @@ class LaunchAndStatusTest < Minitest::Test
         seed_valid = File.join(ws, "corpus/seed_valid")
         File.binwrite(seed_valid, seed_bytes("1 + 2\n"))
 
+        ruby_ref = File.read(repo_path("docker/Dockerfile"))[/^ARG RUBY_GIT_REF=([0-9a-f]+)/, 1] || "495f3778a4020ecc828083239e945e60c51245ae"
+
         File.write(camp, <<~RUBY)
           PrismFuzzer.campaign "real-diff-self-pass-test" do
             workspace #{ws.inspect}
             prism :prism_a, repo: #{upstream[:repo].inspect}, ref: #{upstream[:v1].inspect}, dir: #{pa.inspect}, patches: "none", templates: "never"
-            ruby  :ruby,    repo: "https://example.invalid/ruby.git", ref: "72d4cf2e9ab72899958450638409ebdc18e9855b"
+            ruby  :ruby,    repo: "https://example.invalid/ruby.git", ref: #{ruby_ref.inspect}
             corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz.diff"
             fuzzer "fuzz.diff", shape: :prism_diff_ruby, prism: :prism_a, ruby: :ruby, sanitizers: %i[asan ubsan], afl: :pcguard
             sync_group :afl, dir: "afl", primary: true

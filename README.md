@@ -35,7 +35,7 @@ PrismFuzzer.campaign "prism-hybrid-fleet" do
   after_run { report threads: 4, top: 25; publish run_id: "pr-check" }
 
   prism :prism_a, repo: PrismFuzzer::CampaignDSL::PRISM_DEFAULT_REPO, ref: "main", patches: "auto"
-  ruby  :ruby,    repo: PrismFuzzer::CampaignDSL::RUBY_DEFAULT_REPO,  ref: ENV.fetch("RUBY_REF", "72d4cf2e")
+  ruby  :ruby,    repo: PrismFuzzer::CampaignDSL::RUBY_DEFAULT_REPO,  ref: ENV.fetch("RUBY_REF", "495f3778")
 
   coverage source: :prism_a, fuzzer: "fuzz", diff_fuzzer: "fuzz.diff"
 

@@ -31,7 +31,7 @@ PrismFuzzer.campaign "ijon-state-factory" do
 
   ruby :ruby,
        repo: PrismFuzzer::CampaignDSL::RUBY_DEFAULT_REPO,
-       ref: ENV.fetch("RUBY_REF", "72d4cf2e9ab72899958450638409ebdc18e9855b")
+       ref: ENV.fetch("RUBY_REF", "495f3778a4020ecc828083239e945e60c51245ae")
 
   coverage source: :prism_a, fuzzer: "fuzz.asan", diff_fuzzer: "fuzz.diff"
 
