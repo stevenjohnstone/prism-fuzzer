@@ -1,0 +1,430 @@
+{
+  "schema_version": 1,
+  "run_id": "Test",
+  "published_at": "2026-11-23T15:36:57Z",
+  "versions": {
+    "manifest": {
+      "schema_version": 1,
+      "topology": {
+        "name": "default-prism-fleet",
+        "workspace": {
+          "dir": "tmp/fuzz",
+          "build_dir": "tmp/fuzz/build"
+        },
+        "sources": {
+          "prism_a": {
+            "kind": "prism",
+            "commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d"
+          },
+          "ruby": {
+            "kind": "ruby"
+          }
+        }
+      },
+      "fuzz_repo": {
+        "git_commit": "ccefd274bc870508243cda638442e2ae3fc1e948",
+        "git_short": "ccefd274b",
+        "git_dirty": false
+      },
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+        "git_short": "a1d1d96c3",
+        "git_dirty": true,
+        "source": "embedded",
+        "requested_ref": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+        "applied_patches": [
+          "0001-arena-32bit-alignment.patch",
+          "0002-accel-swar-backend-define.patch",
+          "0003-integer-divide-threshold-guard.patch"
+        ],
+        "commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d"
+      },
+      "ruby_parse_y": {
+        "version": "4.1.0",
+        "revision": "72d4cf2e9ab72899958450638409ebdc18e9855b",
+        "release_date": "2026-11-21",
+        "description": "ruby 4.1.0dev (2026-11-21T06:46:31Z HEAD 72d4cf2e9a) [aarch64-linux]",
+        "oracle_dir": "/opt/ruby"
+      },
+      "container": {
+        "image_id": "sha256:9410b5c46737a87fbf086ef35f3bb41220da7dfe37f1be0db17514179e33d590",
+        "os": "Ubuntu 24.04.4 LTS",
+        "arch": "aarch64",
+        "clang": "Ubuntu clang version 20.1.2 (0ubuntu1~24.04.3)",
+        "llvm_version": "20",
+        "aflplusplus": "afl-fuzz++5.03c",
+        "afl_patch_sha256": "875f1c14288354a333fb5551db68358fda086287bd6e904f6b84ed49ad9631b5",
+        "qemu_arm": "qemu-arm version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "qemu_ppc": "qemu-ppc version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "ruby": "ruby 4.1.0dev (2026-11-21T06:46:31Z HEAD 72d4cf2e9a) +PRISM [aarch64-linux]",
+        "lrama_fuzz": "0.1.0"
+      },
+      "binaries": {
+        "fuzz": {
+          "sha256": "ea828e367f21835065e1de43b78fc3d8b1d4cf8b5ad3964351a17366eafc97fb",
+          "size_bytes": 6561824,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.arm32": {
+          "sha256": "4f474a5d8f6635019981efb9856f9763e88333b7ffaaf9bccbbdc31444ed1647",
+          "size_bytes": 4984304,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.arm32.repro": {
+          "sha256": "326ea9c78eece082f1c1adaefbad526f4bb1837bc88fad47286e02923a501298",
+          "size_bytes": 505760
+        },
+        "fuzz.cmplog": {
+          "sha256": "8b653da98c682f67d62caa96d539d1235a64701f0a7e600f9020bf0f4ab79ab0",
+          "size_bytes": 2762592,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.diff": {
+          "sha256": "eab314c2ed1434c173d9e77728aa4f7789be640424dbc4d9d203a62d500418a7",
+          "size_bytes": 86189472,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            },
+            "ruby_parse_y": {
+              "version": "4.1.0",
+              "revision": "72d4cf2e9ab72899958450638409ebdc18e9855b",
+              "release_date": "2026-11-21"
+            }
+          }
+        },
+        "fuzz.ijon": {
+          "sha256": "b58faaea097f95f5d7bc85f9dc9fecd1953fbcc280f9f37ec5a7e1887ab9630f",
+          "size_bytes": 3345520,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.lsan": {
+          "sha256": "5545039018de0129f9de71acdceb2937e1ce74340685c49cad27da2fb61d990c",
+          "size_bytes": 6319928,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.msan": {
+          "sha256": "0f36cc734655178de568151128bedae95fc236ea7b68d7c37f317aa8a87878e4",
+          "size_bytes": 6693776,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.native": {
+          "sha256": "04b43aa22ce709e06c59aeb23c589c57eddb7024c3b6248c7d856ef357115f7d",
+          "size_bytes": 3334800,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ppc": {
+          "sha256": "a4e75220095497e8f4aca435154d71da8e9816664807faa89526507026ca9981",
+          "size_bytes": 4904264,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ppc.repro": {
+          "sha256": "01c2e2fa88d739b8dd0f4b8352f460d59453bc9908a20ee7ff4080c0e3b0ad28",
+          "size_bytes": 505760
+        },
+        "fuzz.sand": {
+          "sha256": "785daf5573363c032b04c4f4261f20ed9710adbda48360d7d4e917b792ab1905",
+          "size_bytes": 6050064,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.slow": {
+          "sha256": "ddfc1be8cd64dda3cbd3aaca2f3c99cbe3e693b1dac55fe44275f7609441e2ac",
+          "size_bytes": 7794888,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+              "git_short": "a1d1d96c3",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "mutator_oracle64.so": {
+          "sha256": "2a0ce735e34d07a0823d86535e6e84eef87db52a9160f209154e3d95ace6bf3d",
+          "size_bytes": 504128
+        },
+        "fuzz.ids": {
+          "sha256": "f6c23c99a2e3cd5712be1f14f5b8bb297884c737f1496377b2579c18073518cd",
+          "size_bytes": 807348
+        },
+        "fuzz.diff.ids": {
+          "sha256": "569c842033be196f7358bce31c528bd598069921ec16327b3eb4dec95acd3f1b",
+          "size_bytes": 1540312
+        },
+        "fuzz.explain": {
+          "sha256": "8fc105c7547841f03c49b3036fe59a11be20cc360474fed073835308374f5606",
+          "size_bytes": 1063880
+        }
+      },
+      "built_at": "2026-11-23T14:08:05Z",
+      "started_at": "2026-11-23T14:08:06Z",
+      "source_build_dir": "tmp/fuzz/build",
+      "snapshot_bin_dir": "tmp/fuzz/bin",
+      "snapshot_dir": "tmp/fuzz/snapshot",
+      "snapshot_paths": [
+        "bin",
+        "campaigns",
+        "dict",
+        "harnesses",
+        "lib",
+        "runtime",
+        "triage",
+        "topology.schema.json",
+        "topology.json"
+      ]
+    },
+    "prism_a": {
+      "version": "2.1.0",
+      "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+      "git_short": "a1d1d96c3",
+      "git_dirty": true,
+      "source": "embedded",
+      "requested_ref": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+      "applied_patches": [
+        "0001-arena-32bit-alignment.patch",
+        "0002-accel-swar-backend-define.patch",
+        "0003-integer-divide-threshold-guard.patch"
+      ],
+      "commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d"
+    },
+    "ruby": {
+      "version": "4.1.0",
+      "revision": "72d4cf2e9ab72899958450638409ebdc18e9855b",
+      "release_date": "2026-11-21",
+      "description": "ruby 4.1.0dev (2026-11-21T06:46:31Z HEAD 72d4cf2e9a) [aarch64-linux]",
+      "oracle_dir": "/opt/ruby"
+    },
+    "fuzz_repo": {
+      "git_commit": "ccefd274bc870508243cda638442e2ae3fc1e948",
+      "git_short": "ccefd274b",
+      "git_dirty": false
+    },
+    "topology": {
+      "name": "default-prism-fleet",
+      "sources": {
+        "prism_a": {
+          "kind": "prism",
+          "commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d"
+        },
+        "ruby": {
+          "kind": "ruby"
+        }
+      }
+    }
+  },
+  "coverage": {
+    "regions": {
+      "covered": 31229,
+      "count": 34474,
+      "percent": 90.59
+    },
+    "functions": {
+      "covered": 1144,
+      "count": 1158,
+      "percent": 98.79
+    },
+    "lines": {
+      "covered": 35844,
+      "count": 37316,
+      "percent": 96.06
+    },
+    "branches": {
+      "covered": 18059,
+      "count": 19950,
+      "percent": 90.52
+    },
+    "pairs": {
+      "prism_a__native": {
+        "source": "prism_a",
+        "target": "native",
+        "label": "prism_a (native)",
+        "input_count": 123086,
+        "regions": {
+          "covered": 31229,
+          "count": 34474,
+          "percent": 90.59
+        },
+        "functions": {
+          "covered": 1144,
+          "count": 1158,
+          "percent": 98.79
+        },
+        "lines": {
+          "covered": 35844,
+          "count": 37316,
+          "percent": 96.06
+        },
+        "branches": {
+          "covered": 18059,
+          "count": 19950,
+          "percent": 90.52
+        }
+      }
+    }
+  },
+  "triage": {
+    "cluster_count": 26,
+    "bucket_count": 57,
+    "total_occurrences": 1283,
+    "groups": {},
+    "top_clusters": [
+      {
+        "cluster_id": "cluster-01",
+        "group": "prism_flaw",
+        "bucket_count": 2,
+        "occurrences": 6,
+        "headline": "INVARIANT[oracle_arm32]: kind=ast_size_mismatch stream=0 [detail: arm32_len=83 oracle64_len=317 first_diff=30 byte32=0x00 byte64=0x02]"
+      },
+      {
+        "cluster_id": "cluster-02",
+        "group": "prism_flaw",
+        "bucket_count": 2,
+        "occurrences": 2,
+        "headline": "INVARIANT[stream_diff]: kind=ast_mismatch [detail: parsed_size=10 size=11 stream_pp=371 full_pp=371]"
+      },
+      {
+        "cluster_id": "cluster-03",
+        "group": "diff_parse_y",
+        "bucket_count": 5,
+        "occurrences": 676,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_err_cruby_ok nul=0 utf8=1 prism=regexp_parse_error cruby=ok [detail: prism_errs=1 cruby=ok]"
+      },
+      {
+        "cluster_id": "cluster-04",
+        "group": "diff_parse_y",
+        "bucket_count": 2,
+        "occurrences": 134,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_ok_cruby_err nul=0 utf8=1 prism=ok cruby=ArgumentError:unknown_encoding [detail: prism_errs=0 cruby=ArgumentError: unknown encoding name: Windows-31J]"
+      },
+      {
+        "cluster_id": "cluster-05",
+        "group": "diff_parse_y",
+        "bucket_count": 1,
+        "occurrences": 76,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag prism=SYM cruby=DSYM [detail: idx=3 prev=SLOT:elem prism_len=8 cruby_len=10 prism_tok=SYM cruby_tok=DSYM]"
+      },
+      {
+        "cluster_id": "cluster-06",
+        "group": "diff_parse_y",
+        "bucket_count": 1,
+        "occurrences": 73,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_err_cruby_ok nul=0 utf8=1 prism=expect_eol_after_statement cruby=ok [detail: prism_errs=3 cruby=ok]"
+      },
+      {
+        "cluster_id": "cluster-07",
+        "group": "diff_parse_y",
+        "bucket_count": 1,
+        "occurrences": 71,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag prism=REGX cruby=DREGX [detail: idx=1 prev=SCOPE:program prism_len=4 cruby_len=6 prism_tok=REGX cruby_tok=DREGX]"
+      },
+      {
+        "cluster_id": "cluster-08",
+        "group": "diff_parse_y",
+        "bucket_count": 7,
+        "occurrences": 58,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_node_count_mismatch node=case_match [detail: prism=1 cruby=2]"
+      },
+      {
+        "cluster_id": "cluster-09",
+        "group": "diff_parse_y",
+        "bucket_count": 5,
+        "occurrences": 52,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_ok_cruby_err nul=0 utf8=1 prism=ok cruby=SyntaxError:unexpected_integer_literal [detail: prism_errs=0 cruby=SyntaxError: syntax error, unexpected integer literal, expecting 'do' or '{' or '(']"
+      },
+      {
+        "cluster_id": "cluster-10",
+        "group": "diff_parse_y",
+        "bucket_count": 2,
+        "occurrences": 20,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_err_cruby_ok nul=0 utf8=1 prism=expect_singleton_class_delimiter cruby=ok [detail: prism_errs=3 cruby=ok]"
+      }
+    ]
+  },
+  "artifacts": {
+    "report": "report/index.html",
+    "coverage_html": "report/coverage/pairs/prism_a__native/report/index.html",
+    "coverage_summary_txt": "report/coverage/summary.txt",
+    "coverage_coverage_json": "report/coverage/coverage.json",
+    "coverage_lcov_info": "report/coverage/lcov.info",
+    "clusters": "report/triage/clusters.json",
+    "metadata": "report/triage/metadata.json"
+  }
+}
