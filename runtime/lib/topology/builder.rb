@@ -78,7 +78,7 @@ module PrismFuzzer
 
       dirty = "unknown"
       if src_spec["path"] && File.directory?(src_spec["path"])
-        out, st = Open3.capture2e("git", "-C", src_spec["path"], "status", "--porcelain", "--", "src", "include", "templates")
+        out, st = Open3.capture2e("git", "--no-optional-locks", "-C", src_spec["path"], "status", "--porcelain", "--", "src", "include", "templates")
         dirty = st.success? ? (out.strip.empty? ? "0" : "1") : "0"
       end
       ["-DFUZZ_GIT_COMMIT=#{commit}", "-DFUZZ_GIT_DIRTY=#{dirty}"]

@@ -175,7 +175,7 @@ module FuzzProvenance
       end
 
       commit = commit_str
-      status_cmd = ["git", "-C", repo_root, "status", "--porcelain", "--", *paths]
+      status_cmd = ["git", "--no-optional-locks", "-C", repo_root, "status", "--porcelain", "--", *paths]
       status_out, status_st = Open3.capture2e(*status_cmd)
       dirty = status_st.success? ? !utf8_safe(status_out).strip.empty? : nil
 

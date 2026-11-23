@@ -519,8 +519,12 @@ class TriageDiffParseYTest < Minitest::Test
 
   def prepare_mock_diff_prism(workdir, prism_dir)
     mock_diff_prism = File.join(workdir, "mock_diff_prism")
-    FileUtils.cp_r(prism_dir, mock_diff_prism)
-    FileUtils.rm_rf(File.join(mock_diff_prism, ".git"))
+    FileUtils.mkdir_p(mock_diff_prism)
+    Dir.children(prism_dir).each do |entry|
+      next if entry == ".git" || entry == ".fuzz-target-state.json"
+
+      FileUtils.cp_r(File.join(prism_dir, entry), File.join(mock_diff_prism, entry))
+    end
 
     if find_executable("git")
       assert_cmd("git", "-C", mock_diff_prism, "init", "-q")
