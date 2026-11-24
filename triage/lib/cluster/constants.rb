@@ -72,6 +72,11 @@ module FuzzClustering
     pm_token_str
     pm_token_string
     context_human
+    pm_reduction
+    pm_statement_reduction
+    pm_call_reduction
+    pm_chained_call_reduction
+    pm_logical_expression_reduction
   ] + VISITOR_FUNCTIONS).freeze
 
   # Parser option initialization and encoding lookup execute identically for any
@@ -109,7 +114,9 @@ module FuzzClustering
   # uncovered edges across distinct syntax bugs entering or exiting parsing.
   DISPATCHER_FUNCTIONS = %w[
     parser_lex
+    parse_statement
     parse_expression
+    parse_expression_infixes
     pm_parse
   ].freeze
 

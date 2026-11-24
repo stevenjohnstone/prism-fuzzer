@@ -445,6 +445,46 @@ class TargetsSyncAndPatchesTest < Minitest::Test
     end
   end
 
+  def test_gen_api_compat_handles_pattern_matching_newlines_removal
+    pa = prism_a_dir
+    skip "requires synced prism_a include/" unless pa && Dir.exist?(File.join(pa, "include"))
+
+    with_tmpdir("compat-pm-newlines-") do |workdir|
+      inc_copy = File.join(workdir, "include")
+      FileUtils.cp_r(File.join(pa, "include"), inc_copy)
+      parser_h = File.join(inc_copy, "prism", "internal", "parser.h")
+      skip "requires prism/internal/parser.h" unless File.file?(parser_h)
+
+      compat_with = File.join(workdir, "compat_with.h")
+      cflags_with, = assert_ruby_cmd(
+        repo_path("harnesses/prism/gen_api_compat.rb"),
+        "--include-dir", inc_copy,
+        "--no-subloc-check",
+        "--output", compat_with,
+        "--cflags"
+      )
+      if File.read(parser_h).match?(/\bbool\s+pattern_matching_newlines\s*;/)
+        assert_includes File.read(compat_with), "#define PRISM_FUZZ_HAS_PATTERN_MATCHING_NEWLINES 1"
+        assert_includes cflags_with, "-DPRISM_FUZZ_HAS_PATTERN_MATCHING_NEWLINES"
+      end
+      refute_includes cflags_with, "-Wno-implicit-function-declaration"
+
+      # Simulate ruby/prism#4475 removing `bool pattern_matching_newlines;` from struct pm_parser_t
+      File.write(parser_h, File.read(parser_h).gsub(/^\s*bool\s+pattern_matching_newlines\s*;\s*\n/, ""))
+      compat_without = File.join(workdir, "compat_without.h")
+      cflags_without, = assert_ruby_cmd(
+        repo_path("harnesses/prism/gen_api_compat.rb"),
+        "--include-dir", inc_copy,
+        "--no-subloc-check",
+        "--output", compat_without,
+        "--cflags"
+      )
+      refute_includes File.read(compat_without), "PRISM_FUZZ_HAS_PATTERN_MATCHING_NEWLINES"
+      refute_includes cflags_without, "PRISM_FUZZ_HAS_PATTERN_MATCHING_NEWLINES"
+      refute_includes cflags_without, "-Wno-implicit-function-declaration"
+    end
+  end
+
   private
 
   def topo_cli

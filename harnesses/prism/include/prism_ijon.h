@@ -2,6 +2,11 @@
 #define PRISM_FUZZ_IJON_H
 
 #ifdef PRISM_FUZZ_IJON
+#if defined(__has_include)
+#  if __has_include("prism_fuzz_compat.h")
+#    include "prism_fuzz_compat.h"
+#  endif
+#endif
 #include <stdint.h>
 #include "prism/internal/parser.h"
 
@@ -109,12 +114,17 @@ static void fuzz_ijon_lex_callback(pm_parser_t *parser, pm_token_t *token, void 
     }
 
     // 3. Non-CFG parser mode flags and boolean stacks.
+#ifdef PRISM_FUZZ_HAS_PATTERN_MATCHING_NEWLINES
+#define FUZZ_IJON_PM_NEWLINES_BIT(parser_) ((uint32_t) (parser_)->pattern_matching_newlines << 8)
+#else
+#define FUZZ_IJON_PM_NEWLINES_BIT(parser_) 0u
+#endif
     uint32_t mode_flags =
         (uint32_t) (parser->do_loop_stack.top & 0x7u) |
         ((uint32_t) (parser->accepts_block_stack.top & 0x7u) << 3) |
         ((uint32_t) parser->in_keyword_arg << 6) |
         ((uint32_t) parser->in_endless_def_body << 7) |
-        ((uint32_t) parser->pattern_matching_newlines << 8) |
+        FUZZ_IJON_PM_NEWLINES_BIT(parser) |
         ((uint32_t) (parser->lambda_enclosure_nesting >= 0) << 9);
     if (mode_flags != state->prev_state_flags) {
         FUZZ_IJON_SET(salt, mode_flags);

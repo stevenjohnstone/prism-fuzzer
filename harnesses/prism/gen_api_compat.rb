@@ -162,6 +162,9 @@ module PrismFuzzCompat
       macros << "PRISM_FUZZ_NO_STREAM"
     end
     macros << "PRISM_FUZZ_NO_JSON" unless code.match?(/\bpm_dump_json\b/)
+    if code.match?(/\bbool\s+pattern_matching_newlines\s*;/)
+      macros << "PRISM_FUZZ_HAS_PATTERN_MATCHING_NEWLINES"
+    end
 
     macros.uniq!
     {
