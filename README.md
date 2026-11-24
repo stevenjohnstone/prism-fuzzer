@@ -169,6 +169,8 @@ RUBY_REF=v3_4_1 ./campaigns/default.rb build --build-ruby
 ./campaigns/default.rb bisect -- --good <sha> --bad HEAD --cluster cluster-01
 ./campaigns/default.rb publish -- --run-id camp-01 --commit --push # Snapshot all report/coverage/triage artifacts to the gh-pages worktree (`reports/`) and push
 ./campaigns/default.rb clean                           # Remove runtime dirs under <ws>/ while keeping report/triage/ and build/
+make lint                                              # Run ShellCheck, Ruby/AST/RuboCop checks, coding standards & topology validation
+make hooks                                             # Enable the tracked .githooks/pre-commit hook (`SKIP_LINT=1` bypasses once)
 make test                                              # Run dependency-tracked test stages in parallel inside Docker
 make test TEST_FORCE=1                                 # Re-run all test assertions while reusing cached .o/binary artifacts
 make test-triage-cluster                               # Run an individual test stage (`test-targets-<stage>` / `ruby test/run.rb --list`; `test-clean` clears `build/test/`)
@@ -210,9 +212,12 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 
 ```
 .
-├── Makefile                        wrapper targets for Docker, build, run, triage, and tests
+├── .githooks
+│   └── pre-commit                  staged pre-commit hook running ShellCheck, Ruby/AST/RuboCop, and topology checks
+├── Makefile                        wrapper targets for Docker, build, run, triage, lint, hooks, and tests
 ├── bin
 │   ├── campaign.rb                 CLI dispatcher for campaign scripts
+│   ├── lint.rb                     shared static-analysis runner used by `make lint`, pre-commit, and CI
 │   ├── publish.rb                  packages report, coverage HTML, and triage artifacts into the gh-pages worktree (`reports/`)
 │   └── topology.rb                 CLI for validating, syncing, building, and planning topologies
 ├── campaigns

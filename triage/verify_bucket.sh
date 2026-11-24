@@ -453,7 +453,6 @@ build_verify_runner() {
 
   local flags=()
   local probe_arr=()
-  local has_legacy_shims=0
   if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ]; then
     flags=("$profile" "$max_input")
   elif [ "$profile" = "diff_prism" ]; then
@@ -488,11 +487,6 @@ build_verify_runner() {
     for pf in "${probe_arr[@]+"${probe_arr[@]}"}"; do
       [ -n "$pf" ] || continue
       flags+=("$pf")
-      case "$pf" in
-        -Wno-shorten-64-to-32)
-          has_legacy_shims=1
-          ;;
-      esac
     done
 
     case "$profile" in

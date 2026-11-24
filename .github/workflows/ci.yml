@@ -23,95 +23,11 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Check trailing EOF newlines and LF line endings
-        run: |
-          ruby -e '
-            errors = []
-            `git ls-files -z`.split("\0").each do |path|
-              next unless File.file?(path)
-              data = File.binread(path)
-              next if data.empty? || data.include?("\x00")
-              errors << "#{path}: missing trailing newline" unless data.end_with?("\n")
-              errors << "#{path}: contains CRLF" if data.include?("\r\n") && !path.end_with?(".patch")
-            end
-            abort errors.join("\n") unless errors.empty?
-          '
+      - name: Install RuboCop
+        run: gem install --no-document rubocop
 
-      - name: Check Ruby syntax and YAML/JSON config validity
-        run: |
-          while IFS= read -r -d '' f; do
-            ruby -c "$f" >/dev/null || exit 1
-          done < <(git ls-files -z '*.rb')
-          ruby -ryaml -rjson -e '
-            JSON.parse(File.read("topology.schema.json"))
-            YAML.safe_load_file(".rubocop.yml")
-            YAML.safe_load_file(".clang-format")
-            YAML.safe_load_file(".github/workflows/ci.yml")
-          '
-
-      - name: Run ShellCheck across all shell scripts
-        run: |
-          mapfile -d '' -t sh_files < <(git ls-files -z '*.sh')
-          shellcheck -S warning "${sh_files[@]}"
-
-      - name: Enforce coding standards (Object namespace, YAML.safe_load, warning flags)
-        run: |
-          ruby -e '
-            leaks = []
-            `git ls-files "*.rb"`.lines.map(&:strip).each do |f|
-              next if f.start_with?("test/", "campaigns/", "examples/", "patches/")
-              lines = File.readlines(f)
-              defs = lines.each_with_index.select { |l, _| l =~ /^def\s+/ }.map(&:last)
-              consts = lines.each_with_index.select { |l, _| l =~ /^[A-Z][A-Z0-9_]*\s*=/ }.map(&:last)
-              leaks << "#{f} defs=#{defs} consts=#{consts}" unless defs.empty? && consts.empty?
-            end
-            abort "Top-level Object namespace leaks:\n#{leaks.join("\n")}" unless leaks.empty?
-
-            yaml_unsafe = `git grep -nE "YAML\\.load(_file)?\\b" -- "*.rb"`.lines.map(&:strip)
-            abort "Unsafe YAML.load usage:\n#{yaml_unsafe.join("\n")}" unless yaml_unsafe.empty?
-
-            cflags_bad = `git grep -n -- "-Wno-implicit-function-declaration\\|-Wno-shorten-64-to-32" -- runtime/ harnesses/ oss-fuzz/ Makefile`.lines.map(&:strip)
-            abort "Unexpected global C warning suppression:\n#{cflags_bad.join("\n")}" unless cflags_bad.empty?
-          '
-
-      - name: Enforce RuboCop lint and security rules
-        run: |
-          gem install --no-document rubocop
-          mapfile -d '' -t rb_files < <(git ls-files -z '*.rb')
-          rubocop --config .rubocop.yml --format simple \
-            --only Security/YAMLLoad,Security/Eval,Style/TopLevelMethodDefinition,Lint/RescueException,Style/RescueModifier,Layout/TrailingEmptyLines,Layout/EndOfLine,Style/GlobalVars \
-            "${rb_files[@]}"
-
-      - name: Validate campaign, example topologies, and clean library requires
-        run: |
-          for camp in campaigns/*.rb; do
-            ruby bin/campaign.rb validate -c "$camp"
-            ruby bin/campaign.rb plan-launch --no-stage -c "$camp" >/dev/null
-          done
-          for ex in examples/*.rb; do
-            ruby bin/campaign.rb validate -c "$ex"
-          done
-          ruby -Ilib -ryaml -rdigest -rtempfile -rjson -e '
-            # Pre-load stdlib helpers that add Kernel/Object methods (Digest, DelegateClass, to_yaml)
-            # before checking that repository libraries define zero top-level methods/constants.
-            before_priv = Object.private_instance_methods(false)
-            before_pub = Object.public_instance_methods(false)
-            %w[
-              lib/prism_fuzzer lib/ruby_fuzz runtime/common runtime/fuzz_header runtime/provenance
-              runtime/corpus runtime/status triage/triage triage/bisect triage/cluster
-              triage/explain triage/inspect triage/match triage/retriage triage/verify
-              harnesses/prism/gen_diff_ids harnesses/prism/gen_node_locations
-              harnesses/prism/gen_api_compat harnesses/prism/gen_serialize_walk
-              report/report report/sankey bin/publish
-            ].each { |lib| require File.expand_path(lib) }
-            new_priv = Object.private_instance_methods(false) - before_priv
-            new_pub = Object.public_instance_methods(false) - before_pub
-            raise "unexpected private Object methods: #{new_priv.inspect}" unless new_priv.empty?
-            raise "unexpected public Object methods: #{new_pub.inspect}" unless new_pub.empty?
-            %i[PRISM_LOUPE_BASE_URL STATUS_TOPOLOGY DEFAULT_HEADER PrismComposer].each do |const|
-              raise "unexpected top-level constant #{const}" if Object.const_defined?(const, false)
-            end
-          '
+      - name: Run repository linters, coding standards, topology & require checks
+        run: ruby bin/lint.rb --require-shellcheck --require-rubocop
 
       - name: Run host-native Minitest suite and runner smoke check
         run: |

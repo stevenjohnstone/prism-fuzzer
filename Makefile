@@ -348,9 +348,16 @@ endif
 test-oss-fuzz-docker:
 	$(Q) TEST_OSS_FUZZ_DOCKER=1 ruby test/run.rb --docker-only --suite oss_fuzz
 
+lint:
+	$(Q) ruby ./bin/lint.rb
+
+hooks:
+	$(Q) git config core.hooksPath .githooks
+	$(ECHO) "Configured git core.hooksPath -> .githooks"
+
 clean:
 	$(ECHO) "Removing runtime files under $(_WS_DIR_REL)/ (preserving report/triage/, build/)"
 	$(Q) ruby -r./runtime/campaign -e 'PrismFuzzer::Campaign.clean_preserving_paths(ARGV[0], ARGV[1..])' "$(FUZZ_DIR)" "$(FUZZ_BUILD_DIR)" "$(FUZZ_TRIAGE_DIR)"
 	$(ECHO) "done"
 
-.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage clean
+.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean

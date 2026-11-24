@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${SKIP_LINT:-0}" = "1" ]; then
+  echo "pre-commit: skipping linters (SKIP_LINT=1)" >&2
+  exit 0
+fi
+
+for dir in /opt/homebrew/bin /usr/local/bin; do
+  if [ -d "$dir" ] && [[ ":$PATH:" != *":$dir:"* ]]; then
+    PATH="$dir:$PATH"
+  fi
+done
+export PATH
+
+repo_root="$(git rev-parse --show-toplevel)"
+if ! ruby "$repo_root/bin/lint.rb" --staged --quiet; then
+  echo "" >&2
+  echo "pre-commit: lint checks failed (fix offenses above, or bypass once with SKIP_LINT=1 or git commit --no-verify)" >&2
+  exit 1
+fi
