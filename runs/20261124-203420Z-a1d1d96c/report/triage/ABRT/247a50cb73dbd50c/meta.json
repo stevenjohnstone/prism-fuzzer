@@ -1,0 +1,978 @@
+{
+  "schema_version": 1,
+  "bucket_id": "ABRT/247a50cb73dbd50c",
+  "reason": "ABRT",
+  "signature": "247a50cb73dbd50c",
+  "reproducible": true,
+  "timed_out": false,
+  "reproduced_by": "fuzz",
+  "verify_profile": "asan_ubsan",
+  "occurrences": {
+    "count": 12,
+    "by_fuzzer": {
+      "afl-ijon": 12
+    },
+    "by_worker": {
+      "ijon": 12
+    },
+    "by_queue": {
+      "crashes": 12
+    },
+    "first_seen": "2026-11-23T16:15:38Z",
+    "first_elapsed_ms": 651301,
+    "last_seen": "2026-11-23T16:17:25Z",
+    "sample_crashes": [
+      {
+        "sha256": "a37caede06349e34a8c1a812ac2c53c2aeae8b8f5a20db6312ba521bc1aae57e",
+        "fuzzer": "afl-ijon",
+        "worker": "ijon",
+        "path": "/prism-fuzzer/tmp/fuzz/afl-ijon/ijon/crashes/id:000000,sig:06,src:026304,time:651301,execs:23051539,op:havoc,rep:4",
+        "mtime": "2026-11-23T16:15:38Z"
+      },
+      {
+        "sha256": "a2538006244a202d0d17731f18effcecd67ce941a02de0c383b7ae676cb99c06",
+        "fuzzer": "afl-ijon",
+        "worker": "ijon",
+        "path": "/prism-fuzzer/tmp/fuzz/afl-ijon/ijon/crashes/id:000001,sig:06,src:026304,time:651302,execs:23051540,op:havoc,rep:4",
+        "mtime": "2026-11-23T16:15:38Z"
+      },
+      {
+        "sha256": "4d2e7021aaa9e4d9c44ee0fe8f332717cd9a79b5a2f23416fa796a680b99e4c5",
+        "fuzzer": "afl-ijon",
+        "worker": "ijon",
+        "path": "/prism-fuzzer/tmp/fuzz/afl-ijon/ijon/crashes/id:000002,sig:06,src:026304,time:651370,execs:23051700,op:havoc,rep:4",
+        "mtime": "2026-11-23T16:15:38Z"
+      },
+      {
+        "sha256": "f945a76a18d6f40ae155903efeaca2b2fe4fa0f883da5112766ba962f55805ce",
+        "fuzzer": "afl-ijon",
+        "worker": "ijon",
+        "path": "/prism-fuzzer/tmp/fuzz/afl-ijon/ijon/crashes/id:000003,sig:06,src:026304,time:651371,execs:23051701,op:havoc,rep:4",
+        "mtime": "2026-11-23T16:15:38Z"
+      },
+      {
+        "sha256": "e336d112c80b8c595ba902d2378f02e23f0fd29ec324fb0251325872171db62a",
+        "fuzzer": "afl-ijon",
+        "worker": "ijon",
+        "path": "/prism-fuzzer/tmp/fuzz/afl-ijon/ijon/crashes/id:000004,sig:06,src:026304,time:651633,execs:23052511,op:havoc,rep:11",
+        "mtime": "2026-11-23T16:15:38Z"
+      }
+    ]
+  },
+  "archive": {
+    "file": "inputs.tar.gz",
+    "count": 12,
+    "total_bytes": 11860,
+    "archive_bytes": 1409
+  },
+  "input": {
+    "raw_size_bytes": 1024,
+    "raw_sha256": "a37caede06349e34a8c1a812ac2c53c2aeae8b8f5a20db6312ba521bc1aae57e",
+    "min_size_bytes": 351,
+    "min_sha256": "0dc4a0c3a076d2dddd23b03c9a88e7cac7425377dd1eeac4d9735f088b7204fd",
+    "payload_size_bytes": 347,
+    "payload_sha256": "75092c13300f70c5134e9076acbb7ad08d83aa1c582e8771750f593d506d52b5",
+    "source_preview": "((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((b== == == == == == == == == == == =...",
+    "header_bytes": [
+      0,
+      0,
+      3,
+      1
+    ],
+    "header_hex": "00000301",
+    "valid_header": true,
+    "has_shebang_prefix": false,
+    "minimized_matches_signature": true,
+    "loupe_url": "https://stevenjohnstone.github.io/prism-loupe/?code=KCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKChiPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0gPT0%3D&ruby_ver=4.1"
+  },
+  "options": {
+    "ruby_version": "4.1",
+    "start_line": 1,
+    "start_line_expr": null,
+    "encoding": null,
+    "encoding_locked": false,
+    "freeze": false,
+    "partial_script": false,
+    "attach_comments": false,
+    "main_script": false,
+    "stream_mode": false,
+    "frozen_string_literal": null,
+    "command_line_flags": [],
+    "filepath": null,
+    "shebang_callback": false,
+    "stack_budget": "SIZE_MAX",
+    "scopes_count": 0,
+    "forwarding_scope": null,
+    "forwarding_flags": []
+  },
+  "symptom": {
+    "headline": "INVARIANT[recursion_depth]: type=PM_CALL_NODE kind=depth_exceeded [detail: depth=321 limit=320 max=128]",
+    "summary": "AddressSanitizer: ABRT (/lib/aarch64-linux-gnu/libc.so.6+0x874d8) (BuildId: 54ae5337044aaabab70d65e0c3444f7e4735e059)",
+    "preamble_lines": [
+      "INVARIANT[recursion_depth]: type=PM_CALL_NODE kind=depth_exceeded [detail: depth=321 limit=320 max=128]",
+      "AddressSanitizer:DEADLYSIGNAL",
+      "=================================================================",
+      "==65789==ERROR: AddressSanitizer: ABRT on unknown address 0x03e8000100fd (pc 0xffffa78874d8 bp 0xffffed1daad0 sp 0xffffed1daac0 T0)"
+    ],
+    "invariant": {
+      "namespace": "recursion_depth",
+      "fields": {
+        "type": "PM_CALL_NODE",
+        "kind": "depth_exceeded"
+      },
+      "detail": {
+        "depth": 321,
+        "limit": 320,
+        "max": 128
+      }
+    },
+    "ubsan": null,
+    "sanitizer": {
+      "tool": "AddressSanitizer",
+      "kind": "ABRT"
+    },
+    "assertion": null
+  },
+  "frames": [
+    {
+      "depth": 0,
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x874d8",
+      "scope": "external"
+    },
+    {
+      "depth": 1,
+      "func": "raise",
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x3cb38",
+      "scope": "external"
+    },
+    {
+      "depth": 2,
+      "func": "abort",
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x27dfc",
+      "scope": "external"
+    },
+    {
+      "depth": 3,
+      "func": "fuzz_invariant_fail",
+      "file": "harnesses/prism/parse.c",
+      "line": 195,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 4,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 750,
+      "col": 9,
+      "scope": "harness"
+    },
+    {
+      "depth": 5,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 6,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 7,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 8,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 9,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    },
+    {
+      "depth": 10,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 11,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 12,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 712,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 13,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 14,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 15,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 16,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 17,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 18,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    },
+    {
+      "depth": 19,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 20,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 21,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 712,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 22,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 23,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 24,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 25,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 26,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 27,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    },
+    {
+      "depth": 28,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 29,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 30,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 712,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 31,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 32,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 33,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 34,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 35,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 36,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    },
+    {
+      "depth": 37,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 38,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 39,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 712,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 40,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 41,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 42,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 43,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 44,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 45,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    },
+    {
+      "depth": 46,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 47,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 48,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 712,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 49,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 50,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 51,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 52,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 53,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 54,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    },
+    {
+      "depth": 55,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 56,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 57,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 712,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 58,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 59,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 60,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1723,
+      "col": 22,
+      "scope": "prism"
+    },
+    {
+      "depth": 61,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 768,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 62,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 511,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 63,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 1574,
+      "col": 40,
+      "scope": "prism"
+    }
+  ],
+  "coverage": {
+    "available": true,
+    "binary": "tmp/fuzz/bin/fuzz",
+    "build_id": "90d2e8456e6e2df088da8da7e4699365da8878cbca281638952781a6d630a2b1",
+    "edge_count": 245,
+    "edges": {
+      "6": 2,
+      "11": 7,
+      "13": 7,
+      "17": 7,
+      "18": 7,
+      "20": 1,
+      "24": 7,
+      "25": 1,
+      "368": 2,
+      "383": 7,
+      "384": 7,
+      "406": 7,
+      "415": 7,
+      "417": 2,
+      "418": 8,
+      "421": 7,
+      "426": 8,
+      "427": 2,
+      "430": 8,
+      "431": 1,
+      "432": 8,
+      "1548": 1,
+      "1566": 2,
+      "1567": 6,
+      "1590": 7,
+      "1604": 7,
+      "1605": 4,
+      "1606": 7,
+      "1608": 1,
+      "1611": 1,
+      "1614": 7,
+      "1619": 7,
+      "1620": 4,
+      "1621": 7,
+      "2214": 7,
+      "2215": 4,
+      "2234": 7,
+      "2235": 4,
+      "2270": 8,
+      "2271": 5,
+      "2366": 7,
+      "2367": 4,
+      "2393": 1,
+      "2399": 3,
+      "2400": 2,
+      "2401": 3,
+      "2402": 2,
+      "2407": 1,
+      "2412": 1,
+      "2413": 6,
+      "2415": 4,
+      "2416": 1,
+      "2418": 1,
+      "2419": 1,
+      "2421": 1,
+      "2426": 1,
+      "2439": 1,
+      "2441": 1,
+      "2444": 1,
+      "2451": 1,
+      "2464": 1,
+      "2481": 1,
+      "2485": 1,
+      "2489": 1,
+      "2503": 2,
+      "2506": 2,
+      "2546": 1,
+      "2549": 1,
+      "2552": 1,
+      "2583": 1,
+      "2584": 1,
+      "2588": 1,
+      "2594": 1,
+      "2599": 3,
+      "2607": 1,
+      "2612": 3,
+      "2614": 1,
+      "2635": 1,
+      "2639": 7,
+      "2646": 7,
+      "2707": 1,
+      "2718": 8,
+      "2719": 8,
+      "2721": 1,
+      "2722": 7,
+      "2723": 7,
+      "2725": 7,
+      "2727": 1,
+      "2761": 7,
+      "3087": 1,
+      "3090": 1,
+      "3097": 1,
+      "3102": 1,
+      "3104": 1,
+      "3112": 1,
+      "3126": 1,
+      "3138": 1,
+      "3153": 1,
+      "3158": 1,
+      "3160": 1,
+      "3180": 8,
+      "3207": 1,
+      "3209": 1,
+      "3238": 7,
+      "3240": 7,
+      "3241": 1,
+      "3242": 7,
+      "3243": 1,
+      "3244": 7,
+      "3342": 7,
+      "3344": 7,
+      "3349": 1,
+      "3350": 7,
+      "3352": 7,
+      "3803": 1,
+      "3806": 1,
+      "3810": 1,
+      "3814": 1,
+      "3819": 1,
+      "4089": 1,
+      "4093": 1,
+      "4095": 1,
+      "4099": 1,
+      "4130": 7,
+      "4138": 7,
+      "4175": 7,
+      "4196": 1,
+      "4199": 1,
+      "4200": 1,
+      "4212": 1,
+      "4221": 7,
+      "4266": 1,
+      "4297": 4,
+      "4298": 7,
+      "4299": 7,
+      "4303": 1,
+      "4304": 8,
+      "4329": 1,
+      "4333": 7,
+      "4336": 7,
+      "4347": 7,
+      "4349": 7,
+      "4385": 7,
+      "4386": 7,
+      "4387": 7,
+      "4389": 7,
+      "4404": 7,
+      "4405": 7,
+      "4407": 7,
+      "4411": 7,
+      "4428": 1,
+      "4429": 1,
+      "4436": 1,
+      "4450": 1,
+      "4590": 7,
+      "4591": 1,
+      "4592": 7,
+      "4593": 7,
+      "4597": 1,
+      "4603": 8,
+      "4604": 7,
+      "4607": 1,
+      "4611": 7,
+      "4634": 7,
+      "4968": 7,
+      "5209": 7,
+      "5210": 1,
+      "5219": 1,
+      "5223": 1,
+      "5232": 1,
+      "5237": 1,
+      "5246": 7,
+      "5247": 7,
+      "5248": 7,
+      "5249": 7,
+      "5250": 8,
+      "5302": 1,
+      "5304": 7,
+      "5453": 7,
+      "5454": 7,
+      "5455": 8,
+      "5456": 7,
+      "5457": 8,
+      "5522": 7,
+      "5523": 4,
+      "5672": 2,
+      "5675": 1,
+      "5680": 1,
+      "5689": 1,
+      "5774": 2,
+      "5776": 2,
+      "7392": 7,
+      "7398": 7,
+      "7399": 8,
+      "7419": 1,
+      "7420": 7,
+      "7689": 8,
+      "7725": 7,
+      "7734": 7,
+      "7735": 7,
+      "7747": 8,
+      "7750": 7,
+      "7751": 7,
+      "7754": 7,
+      "7756": 7,
+      "7757": 7,
+      "7759": 7,
+      "7761": 7,
+      "8323": 1,
+      "8324": 1,
+      "8329": 1,
+      "8331": 1,
+      "9125": 7,
+      "9128": 1,
+      "9132": 7,
+      "9134": 1,
+      "9135": 7,
+      "9154": 1,
+      "9155": 7,
+      "9158": 7,
+      "9164": 1,
+      "9166": 7,
+      "9653": 7,
+      "9684": 1,
+      "11816": 7,
+      "11846": 7,
+      "12037": 1,
+      "12051": 1,
+      "12054": 1,
+      "12117": 1,
+      "12129": 1,
+      "12131": 1,
+      "12134": 1,
+      "12136": 1,
+      "12170": 1,
+      "12261": 7,
+      "12266": 7,
+      "12276": 7,
+      "12281": 8,
+      "12283": 8,
+      "12284": 1,
+      "12462": 1,
+      "12464": 1,
+      "12649": 1,
+      "12650": 1
+    }
+  },
+  "target": {
+    "id": "fuzz.ijon",
+    "shape": "prism_parse",
+    "binary": "tmp/fuzz/build/fuzz.ijon",
+    "sources": {
+      "source": "prism_a"
+    }
+  },
+  "versions": {
+    "prism": {
+      "version": "2.1.0",
+      "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+      "git_short": "a1d1d96c3",
+      "git_dirty": true,
+      "source": "embedded",
+      "target_ruby_version": "4.1"
+    },
+    "container": {
+      "image_id": "sha256:7c8e160d48a883275f28a5f2e5d16020f9b8b59c5b67caa9137e21cd1f05377a",
+      "os": "Ubuntu 24.04.4 LTS",
+      "arch": "aarch64",
+      "clang": "Ubuntu clang version 20.1.2 (0ubuntu1~24.04.3)",
+      "llvm_version": "20",
+      "aflplusplus": "afl-fuzz++5.03c",
+      "afl_patch_sha256": "875f1c14288354a333fb5551db68358fda086287bd6e904f6b84ed49ad9631b5",
+      "qemu_arm": "qemu-arm version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+      "qemu_ppc": "qemu-ppc version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+      "ruby": "ruby 4.1.0dev (2026-11-23T15:36:02Z HEAD e10a8eea54) +PRISM [aarch64-linux]",
+      "lrama_fuzz": "0.1.0"
+    },
+    "fuzz": {
+      "binary": "/prism-fuzzer/tmp/fuzz/bin/fuzz.ijon",
+      "build_id": "469398d397c1afcf53d0a78a1b339a4ee44e34a54d131494c8671f6aed86d01f",
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+        "git_short": "a1d1d96c3",
+        "git_dirty": true,
+        "source": "embedded",
+        "target_ruby_version": "4.1"
+      }
+    },
+    "triage": {
+      "binary": "/prism-fuzzer/tmp/fuzz/bin/fuzz",
+      "build_id": "90d2e8456e6e2df088da8da7e4699365da8878cbca281638952781a6d630a2b1",
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "a1d1d96c368d49b752d06e361823a098b54f9a9d",
+        "git_short": "a1d1d96c3",
+        "git_dirty": true,
+        "source": "embedded"
+      },
+      "workspace_git": {
+        "git_commit": "59495132abc79460d1445ef8339e7f91459886cb",
+        "git_short": "59495132a",
+        "git_dirty": false
+      }
+    }
+  },
+  "digest": {
+    "parsed_size": 347,
+    "encoding": "UTF-8",
+    "stream_mode": false,
+    "continuable": false,
+    "errors": 468,
+    "warnings": 75,
+    "top_errors": [
+      "expect_expression_after_operator",
+      "non_associative_operator",
+      "expect_eol_after_statement",
+      "unexpected_token_ignore",
+      "expect_rparen"
+    ],
+    "anomaly_count": 1,
+    "anomalies": [
+      {
+        "category": "recursion_depth",
+        "kind": "depth_exceeded",
+        "node": "PM_CALL_NODE"
+      }
+    ]
+  }
+}

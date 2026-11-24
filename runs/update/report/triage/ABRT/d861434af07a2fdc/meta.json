@@ -1,0 +1,459 @@
+{
+  "schema_version": 1,
+  "bucket_id": "ABRT/d861434af07a2fdc",
+  "reason": "ABRT",
+  "signature": "d861434af07a2fdc",
+  "reproducible": true,
+  "timed_out": false,
+  "reproduced_by": "fuzz.ijon.msan",
+  "verify_profile": "msan_slow",
+  "occurrences": {
+    "count": 4,
+    "by_fuzzer": {
+      "afl-8k": 3,
+      "afl-small": 1
+    },
+    "by_worker": {
+      "8k-msan": 2,
+      "8k-slow": 1,
+      "small-slow": 1
+    },
+    "by_queue": {
+      "crashes": 4
+    },
+    "first_seen": "2026-11-24T20:31:00Z",
+    "first_elapsed_ms": 95206,
+    "last_seen": "2026-11-24T20:38:21Z",
+    "sample_crashes": [
+      {
+        "sha256": "510eae6d8f4cfeda5f33698a753b53b4fb75dd00c21566a90586be54204b1555",
+        "fuzzer": "afl-8k",
+        "worker": "8k-msan",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-msan/crashes/id:000016,sig:06,src:000064,time:95206,execs:738176,op:havoc,rep:9",
+        "mtime": "2026-11-24T20:31:00Z"
+      },
+      {
+        "sha256": "26aa207a39a6f004a6ad8a5006e4cad34cfe85b1864c7361fd02fcfeeaa20d57",
+        "fuzzer": "afl-8k",
+        "worker": "8k-msan",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-msan/crashes/id:000017,sig:06,src:000064,time:96525,execs:756780,op:havoc,rep:5",
+        "mtime": "2026-11-24T20:31:02Z"
+      },
+      {
+        "sha256": "a429da33067f7725446dab11ef318f252876ce71b1914c7e2b1fc77f680cf4ea",
+        "fuzzer": "afl-small",
+        "worker": "small-slow",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-small/small-slow/crashes/id:000085,sig:06,src:012253,time:518939,execs:3520985,op:havoc,rep:8",
+        "mtime": "2026-11-24T20:38:04Z"
+      },
+      {
+        "sha256": "5687ec7a74f70db73f1236b994774978d0dc20443d7e966c3a6858bc5a1302df",
+        "fuzzer": "afl-8k",
+        "worker": "8k-slow",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-slow/crashes/id:000220,sig:06,src:002629,time:535895,execs:4839518,op:havoc,rep:2",
+        "mtime": "2026-11-24T20:38:21Z"
+      }
+    ]
+  },
+  "archive": {
+    "file": "inputs.tar.gz",
+    "count": 4,
+    "total_bytes": 324,
+    "archive_bytes": 522
+  },
+  "input": {
+    "raw_size_bytes": 104,
+    "raw_sha256": "510eae6d8f4cfeda5f33698a753b53b4fb75dd00c21566a90586be54204b1555",
+    "min_size_bytes": 19,
+    "min_sha256": "bb9a95495a58f753ad3ab1cd5b2446c6df73eca153a77bf60ff6b5b1d6d36a1c",
+    "payload_size_bytes": 15,
+    "payload_sha256": "f20ce3d6c32baa63bf6c0d2cf56a42ad325bfd1418f82f3af0fa72e23e624cf6",
+    "source_preview": "__END__\\n#!ruby ",
+    "header_bytes": [
+      64,
+      32,
+      3,
+      1
+    ],
+    "header_hex": "40200301",
+    "valid_header": true,
+    "has_shebang_prefix": false,
+    "minimized_matches_signature": true,
+    "loupe_url": "https://stevenjohnstone.github.io/prism-loupe/?code=X19FTkRfXwojIXJ1Ynkg&ruby_ver=4.1&cmd=x&stream=1"
+  },
+  "options": {
+    "ruby_version": "4.1",
+    "start_line": 1,
+    "start_line_expr": null,
+    "encoding": null,
+    "encoding_locked": false,
+    "freeze": false,
+    "partial_script": false,
+    "attach_comments": false,
+    "main_script": false,
+    "stream_mode": true,
+    "frozen_string_literal": null,
+    "command_line_flags": [
+      "x"
+    ],
+    "filepath": null,
+    "shebang_callback": false,
+    "stack_budget": "SIZE_MAX",
+    "scopes_count": 0,
+    "forwarding_scope": null,
+    "forwarding_flags": []
+  },
+  "symptom": {
+    "headline": "INVARIANT[stream_diff]: kind=data_loc_mismatch [detail: stream_start=0 stream_len=8 full_start=0 full_len=0 parsed_size=8 size=15]",
+    "summary": "MemorySanitizer: ABRT (/lib/aarch64-linux-gnu/libc.so.6+0x874d8) (BuildId: 54ae5337044aaabab70d65e0c3444f7e4735e059)",
+    "preamble_lines": [
+      "INVARIANT[stream_diff]: kind=data_loc_mismatch [detail: stream_start=0 stream_len=8 full_start=0 full_len=0 parsed_size=8 size=15]",
+      "MemorySanitizer:DEADLYSIGNAL",
+      "==35516==ERROR: MemorySanitizer: ABRT on unknown address 0x03e800008abc (pc 0xffffbddc74d8 bp 0xffffe91513c0 sp 0xffffe91513b0 T35516)"
+    ],
+    "invariant": {
+      "namespace": "stream_diff",
+      "fields": {
+        "kind": "data_loc_mismatch"
+      },
+      "detail": {
+        "stream_start": 0,
+        "stream_len": 8,
+        "full_start": 0,
+        "full_len": 0,
+        "parsed_size": 8,
+        "size": 15
+      }
+    },
+    "ubsan": null,
+    "sanitizer": {
+      "tool": "MemorySanitizer",
+      "kind": "ABRT"
+    },
+    "assertion": null
+  },
+  "frames": [
+    {
+      "depth": 0,
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x874d8",
+      "scope": "external"
+    },
+    {
+      "depth": 1,
+      "func": "raise",
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x3cb38",
+      "scope": "external"
+    },
+    {
+      "depth": 2,
+      "func": "abort",
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x27dfc",
+      "scope": "external"
+    },
+    {
+      "depth": 3,
+      "func": "fuzz_invariant_fail",
+      "file": "harnesses/prism/parse.c",
+      "line": 200,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 4,
+      "func": "fuzz_check_stream_diff",
+      "file": "harnesses/prism/parse.c",
+      "line": 1151,
+      "col": 13,
+      "scope": "harness"
+    },
+    {
+      "depth": 5,
+      "func": "harness_parse",
+      "file": "harnesses/prism/parse.c",
+      "line": 1464,
+      "col": 9,
+      "scope": "harness"
+    },
+    {
+      "depth": 6,
+      "func": "harness",
+      "file": "harnesses/prism/parse.c",
+      "line": 1547,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 7,
+      "func": "LLVMFuzzerTestOneInput",
+      "file": "harnesses/prism/fuzz.c",
+      "line": 197,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 8,
+      "func": "ExecuteFilesOnyByOne",
+      "file": "/AFLplusplus/utils/aflpp_driver/aflpp_driver.c",
+      "line": 300,
+      "col": 7,
+      "scope": "external"
+    },
+    {
+      "depth": 9,
+      "func": "LLVMFuzzerRunDriver",
+      "file": "/AFLplusplus/utils/aflpp_driver/aflpp_driver.c",
+      "scope": "external"
+    },
+    {
+      "depth": 10,
+      "func": "main",
+      "file": "/AFLplusplus/utils/aflpp_driver/aflpp_driver.c",
+      "line": 360,
+      "col": 10,
+      "scope": "external"
+    },
+    {
+      "depth": 11,
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x284c0",
+      "scope": "external"
+    },
+    {
+      "depth": 12,
+      "func": "__libc_start_main",
+      "module": "/lib/aarch64-linux-gnu/libc.so.6+0x28594",
+      "scope": "external"
+    },
+    {
+      "depth": 13,
+      "func": "_start",
+      "module": "/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.msan+0xb02ac",
+      "scope": "external"
+    }
+  ],
+  "coverage": {
+    "available": true,
+    "binary": "tmp/fuzz-ijon-funnel/bin/fuzz",
+    "build_id": "1b43b740061b1e6f604d4067cf6284c54513212fea426a919206fc900ab21c10",
+    "edge_count": 137,
+    "edges": {
+      "6": 2,
+      "11": 4,
+      "13": 3,
+      "17": 3,
+      "18": 3,
+      "20": 2,
+      "22": 2,
+      "23": 1,
+      "25": 3,
+      "108": 1,
+      "113": 1,
+      "145": 1,
+      "413": 2,
+      "476": 1,
+      "477": 1,
+      "480": 1,
+      "1737": 1,
+      "1755": 1,
+      "1757": 4,
+      "1761": 4,
+      "1766": 3,
+      "1767": 2,
+      "1769": 2,
+      "1770": 1,
+      "1771": 5,
+      "1773": 3,
+      "1833": 1,
+      "1845": 1,
+      "2343": 1,
+      "2381": 1,
+      "2747": 1,
+      "2749": 1,
+      "2754": 1,
+      "2828": 1,
+      "2847": 1,
+      "2848": 1,
+      "2849": 1,
+      "2850": 1,
+      "2856": 1,
+      "2857": 6,
+      "2859": 1,
+      "2860": 1,
+      "2862": 1,
+      "2863": 1,
+      "2865": 1,
+      "2870": 1,
+      "2883": 1,
+      "2885": 1,
+      "2888": 1,
+      "2894": 1,
+      "2897": 1,
+      "2911": 1,
+      "2917": 1,
+      "2919": 1,
+      "2920": 1,
+      "2925": 1,
+      "2931": 1,
+      "2935": 1,
+      "2939": 1,
+      "3017": 1,
+      "3019": 1,
+      "3023": 1,
+      "3024": 1,
+      "3052": 1,
+      "3054": 1,
+      "3058": 1,
+      "3064": 1,
+      "3069": 1,
+      "3083": 1,
+      "3084": 1,
+      "3101": 1,
+      "3186": 1,
+      "3187": 1,
+      "3191": 1,
+      "3196": 1,
+      "3554": 1,
+      "3561": 3,
+      "3562": 4,
+      "3563": 3,
+      "3564": 1,
+      "3565": 4,
+      "3570": 1,
+      "3574": 1,
+      "3576": 1,
+      "3586": 1,
+      "3596": 1,
+      "3613": 1,
+      "3618": 1,
+      "3626": 1,
+      "3634": 1,
+      "3651": 1,
+      "3671": 1,
+      "3675": 1,
+      "3678": 1,
+      "3679": 1,
+      "4600": 1,
+      "4705": 1,
+      "4708": 1,
+      "4709": 1,
+      "4721": 1,
+      "4801": 1,
+      "4832": 2,
+      "4839": 1,
+      "12401": 1,
+      "12464": 1,
+      "14339": 4,
+      "14341": 1,
+      "14353": 1,
+      "14709": 1,
+      "14717": 1,
+      "14724": 1,
+      "14738": 1,
+      "14739": 1,
+      "14743": 1,
+      "14744": 1,
+      "14750": 1,
+      "14760": 1,
+      "14774": 1,
+      "14775": 1,
+      "14791": 1,
+      "14804": 1,
+      "14806": 1,
+      "14809": 1,
+      "14811": 1,
+      "14836": 4,
+      "14837": 1,
+      "14841": 1,
+      "14936": 2,
+      "14941": 2,
+      "14951": 2,
+      "14961": 2,
+      "15014": 1,
+      "15017": 1,
+      "15128": 1,
+      "15140": 2,
+      "15324": 1,
+      "15325": 1
+    }
+  },
+  "target": {
+    "id": "fuzz.ijon.msan",
+    "shape": "prism_parse",
+    "binary": "tmp/fuzz-ijon-funnel/build/fuzz.ijon.msan",
+    "sources": {
+      "source": "prism_a"
+    }
+  },
+  "versions": {
+    "prism": {
+      "version": "2.1.0",
+      "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+      "git_short": "d4b9e07ed",
+      "git_dirty": true,
+      "source": "embedded",
+      "target_ruby_version": "4.1"
+    },
+    "container": {
+      "image_id": "sha256:73d0e4fa1d6a556eaf70223ecc075b93ad1592bf097a3dc89a6393779ffe41f8",
+      "os": "Ubuntu 24.04.4 LTS",
+      "arch": "aarch64",
+      "clang": "Ubuntu clang version 20.1.2 (0ubuntu1~24.04.3)",
+      "llvm_version": "20",
+      "aflplusplus": "afl-fuzz++5.03c",
+      "afl_patch_sha256": "875f1c14288354a333fb5551db68358fda086287bd6e904f6b84ed49ad9631b5",
+      "qemu_arm": "qemu-arm version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+      "qemu_ppc": "qemu-ppc version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+      "ruby": "ruby 4.1.0dev (2026-11-24T20:24:03Z HEAD 89f7ea9a17) +PRISM [aarch64-linux]",
+      "lrama_fuzz": "0.1.0"
+    },
+    "fuzz": {
+      "binary": "/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.msan",
+      "build_id": "5af7cc97e9ea1ee489b8ae3f1add4047e149461aaa60dca0503177b8fcaee6d1",
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": true,
+        "source": "embedded",
+        "target_ruby_version": "4.1"
+      }
+    },
+    "triage": {
+      "binary": "/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.msan",
+      "build_id": "5af7cc97e9ea1ee489b8ae3f1add4047e149461aaa60dca0503177b8fcaee6d1",
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": true,
+        "source": "embedded"
+      },
+      "workspace_git": {
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": false
+      }
+    }
+  },
+  "digest": {
+    "parsed_size": 8,
+    "encoding": "UTF-8",
+    "stream_mode": true,
+    "continuable": true,
+    "errors": 1,
+    "warnings": 0,
+    "top_errors": [
+      "script_not_found"
+    ],
+    "anomaly_count": 0,
+    "stream_compare": {
+      "parsed_size": [
+        15,
+        8
+      ],
+      "prettyprint_equal": true,
+      "serialize_equal": false,
+      "serialize_diff_offset": 16
+    },
+    "anomalies": []
+  }
+}

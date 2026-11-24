@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "run_id": "update",
+  "published_at": "2026-11-24T20:42:44Z",
+  "versions": {
+    "manifest": {
+      "schema_version": 1,
+      "topology": {
+        "name": "ijon-funnel-prism-fleet",
+        "workspace": {
+          "build_dir": "tmp/fuzz-ijon-funnel/build",
+          "dir": "tmp/fuzz-ijon-funnel"
+        },
+        "sources": {
+          "prism_a": {
+            "kind": "prism",
+            "commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de"
+          },
+          "ruby": {
+            "kind": "ruby"
+          }
+        }
+      },
+      "fuzz_repo": {
+        "git_commit": "29ee471b97ceb3ebcda05b0fc6b26015473fb8bd",
+        "git_short": "29ee471b9",
+        "git_dirty": true
+      },
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": true,
+        "source": "embedded",
+        "requested_ref": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "applied_patches": [
+          "0001-arena-32bit-alignment.patch",
+          "0002-accel-swar-backend-define.patch",
+          "0003-integer-divide-threshold-guard.patch",
+          "0004-ijon-source-guidance.patch",
+          "0005-inline-span-assertions.patch"
+        ],
+        "commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de"
+      },
+      "ruby_parse_y": {
+        "version": "4.1.0",
+        "revision": "89f7ea9a17c8fbb9f136cdf64746b587834b52a0",
+        "release_date": "2026-11-24",
+        "description": "ruby 4.1.0dev (2026-11-24T20:24:03Z HEAD 89f7ea9a17) [aarch64-linux]",
+        "oracle_dir": "/opt/ruby"
+      },
+      "container": {
+        "image_id": "sha256:73d0e4fa1d6a556eaf70223ecc075b93ad1592bf097a3dc89a6393779ffe41f8",
+        "os": "Ubuntu 24.04.4 LTS",
+        "arch": "aarch64",
+        "clang": "Ubuntu clang version 20.1.2 (0ubuntu1~24.04.3)",
+        "llvm_version": "20",
+        "aflplusplus": "afl-fuzz++5.03c",
+        "afl_patch_sha256": "875f1c14288354a333fb5551db68358fda086287bd6e904f6b84ed49ad9631b5",
+        "qemu_arm": "qemu-arm version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "qemu_ppc": "qemu-ppc version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+        "ruby": "ruby 4.1.0dev (2026-11-24T20:24:03Z HEAD 89f7ea9a17) +PRISM [aarch64-linux]",
+        "lrama_fuzz": "0.1.0"
+      },
+      "binaries": {
+        "fuzz": {
+          "sha256": "1b43b740061b1e6f604d4067cf6284c54513212fea426a919206fc900ab21c10",
+          "size_bytes": 7099120,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.arm32": {
+          "sha256": "e00a85e0a4a385e9dba3cd293f4f14995dfb2152016f3ef924fd447ca1b0f3c9",
+          "size_bytes": 5321068,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.arm32.repro": {
+          "sha256": "ac40ababf8cdb6299d348bc14722d42894e402cf6cf9a5059903e6fc3f24f94d",
+          "size_bytes": 573056
+        },
+        "fuzz.cmplog": {
+          "sha256": "842961b3f3ab813a0a205ff623fcaba8cddc1b4def9e592c784eeb2f8e0004b8",
+          "size_bytes": 2834016,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.diff": {
+          "sha256": "76ce5e26956905626f1172843200a440fd155b460a8af120811cc84a9d51d5eb",
+          "size_bytes": 86787664,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            },
+            "ruby_parse_y": {
+              "version": "4.1.0",
+              "revision": "89f7ea9a17c8fbb9f136cdf64746b587834b52a0",
+              "release_date": "2026-11-24"
+            }
+          }
+        },
+        "fuzz.ijon": {
+          "sha256": "8a30a1b71e4c82bc2e4b18441d9a75d939698cb76da80c11abb6258e23d67d94",
+          "size_bytes": 4132856,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ijon.asan": {
+          "sha256": "ff35108cd0f0bd877fd497f880bb738dee1563e2f1c43587a58c1a2c63b4fd62",
+          "size_bytes": 7112248,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ijon.diff": {
+          "sha256": "524649863b3c01e9d699a43d25660e7400d6f53bd9d846f48e1f51495f221cd7",
+          "size_bytes": 86779472,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            },
+            "ruby_parse_y": {
+              "version": "4.1.0",
+              "revision": "89f7ea9a17c8fbb9f136cdf64746b587834b52a0",
+              "release_date": "2026-11-24"
+            }
+          }
+        },
+        "fuzz.ijon.lsan": {
+          "sha256": "943bd5d5cc3392b9624dbb928763520897d461858ddc63cac42ac7712c7a37ef",
+          "size_bytes": 7279744,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ijon.msan": {
+          "sha256": "5af7cc97e9ea1ee489b8ae3f1add4047e149461aaa60dca0503177b8fcaee6d1",
+          "size_bytes": 7838152,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ijon.slow": {
+          "sha256": "4c368bf5da8a47b328493388bb8abd279a7bba65f4f52975ee0759098ea7c221",
+          "size_bytes": 8396840,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.lsan": {
+          "sha256": "a251b1a11c169517e708178a6058bee76ae93d67770eb82816ddf6381019384e",
+          "size_bytes": 7264760,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ppc": {
+          "sha256": "e4bb1a91f2da1255be45327a77c0239334824109de1345660716b71df889a9e1",
+          "size_bytes": 5196224,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "fuzz.ppc.repro": {
+          "sha256": "7c5281ff3f3bb320ed287c76a02d03367f6edd00b7cac3cb328d51dfba597b5c",
+          "size_bytes": 573056
+        },
+        "fuzz.sand": {
+          "sha256": "c790d7d8bb7febb90dccbcea7bcc727dfe14c502749fa99d782aee835ef663ab",
+          "size_bytes": 6473152,
+          "embedded": {
+            "prism": {
+              "version": "2.1.0",
+              "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+              "git_short": "d4b9e07ed",
+              "git_dirty": true,
+              "source": "embedded"
+            }
+          }
+        },
+        "mutator_oracle64.so": {
+          "sha256": "9b61a57d41813694270f59c9c9ecc956b62fa26c8fdce045ec949fd14dc2cc36",
+          "size_bytes": 571408
+        },
+        "fuzz.ids": {
+          "sha256": "37ea8115053976b3d32398081b864776db3c03759dc3a83e3e17fbf6c7984c8c",
+          "size_bytes": 954413
+        },
+        "fuzz.diff.ids": {
+          "sha256": "bf68cd2f0846af32f92f4bcdc1a5581390db969d2e377fc0cbb9195402ebda14",
+          "size_bytes": 1588912
+        },
+        "fuzz.explain": {
+          "sha256": "4b5ba32adcc9f9efb6ecd0ec5dde55b38bbb29419b589777a53031222dfee87b",
+          "size_bytes": 1133744
+        },
+        "fuzz.ijon.diff.ids": {
+          "sha256": "2a1aeeb9db5902af1c7f9f6eadd79fe1c6c9b6bebf3e4d55598cc934a325c27b",
+          "size_bytes": 1597004
+        }
+      },
+      "built_at": "2026-11-24T20:29:05Z",
+      "started_at": "2026-11-24T20:29:07Z",
+      "source_build_dir": "tmp/fuzz-ijon-funnel/build",
+      "snapshot_bin_dir": "tmp/fuzz-ijon-funnel/bin",
+      "snapshot_dir": "tmp/fuzz-ijon-funnel/snapshot",
+      "snapshot_paths": [
+        "bin",
+        "campaigns",
+        "dict",
+        "harnesses",
+        "lib",
+        "runtime",
+        "triage",
+        "topology.schema.json",
+        "topology.json"
+      ]
+    },
+    "prism_a": {
+      "version": "2.1.0",
+      "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+      "git_short": "d4b9e07ed",
+      "git_dirty": true,
+      "source": "embedded",
+      "requested_ref": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+      "applied_patches": [
+        "0001-arena-32bit-alignment.patch",
+        "0002-accel-swar-backend-define.patch",
+        "0003-integer-divide-threshold-guard.patch",
+        "0004-ijon-source-guidance.patch",
+        "0005-inline-span-assertions.patch"
+      ],
+      "commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de"
+    },
+    "ruby": {
+      "version": "4.1.0",
+      "revision": "89f7ea9a17c8fbb9f136cdf64746b587834b52a0",
+      "release_date": "2026-11-24",
+      "description": "ruby 4.1.0dev (2026-11-24T20:24:03Z HEAD 89f7ea9a17) [aarch64-linux]",
+      "oracle_dir": "/opt/ruby"
+    },
+    "fuzz_repo": {
+      "git_commit": "29ee471b97ceb3ebcda05b0fc6b26015473fb8bd",
+      "git_short": "29ee471b9",
+      "git_dirty": true
+    },
+    "topology": {
+      "name": "ijon-funnel-prism-fleet",
+      "sources": {
+        "prism_a": {
+          "kind": "prism",
+          "commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de"
+        },
+        "ruby": {
+          "kind": "ruby"
+        }
+      }
+    }
+  },
+  "triage": {
+    "cluster_count": 13,
+    "bucket_count": 80,
+    "total_occurrences": 2405,
+    "groups": {},
+    "top_clusters": [
+      {
+        "cluster_id": "cluster-01",
+        "group": "prism_flaw",
+        "bucket_count": 1,
+        "occurrences": 1610,
+        "headline": "INVARIANT[node_location]: site=parser_lex op=token_end kind=length_underflow"
+      },
+      {
+        "cluster_id": "cluster-02",
+        "group": "prism_flaw",
+        "bucket_count": 6,
+        "occurrences": 69,
+        "headline": "INVARIANT[stream_diff]: kind=ast_mismatch sub=error_loc type=unexpected_token_close_context [detail: parsed_size=14 size=15 stream_pp=1526 full_pp=1526]"
+      },
+      {
+        "cluster_id": "cluster-03",
+        "group": "prism_flaw",
+        "bucket_count": 1,
+        "occurrences": 2,
+        "headline": "INVARIANT[node_location]: site=parse_pattern_primitive type=PM_HASH_PATTERN_NODE kind=length_underflow [detail: op=length_set_token start=12 end=4 length=4294967288]"
+      },
+      {
+        "cluster_id": "cluster-04",
+        "group": "diff_parse_y",
+        "bucket_count": 7,
+        "occurrences": 433,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_err_cruby_ok ctx=embedded_statements prism=regexp_parse_error cruby=ok [detail: enc=UTF-8 nul=0 utf8=1 prism_errs=1 cruby=ok]"
+      },
+      {
+        "cluster_id": "cluster-05",
+        "group": "diff_parse_y",
+        "bucket_count": 4,
+        "occurrences": 162,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag ctx=SCOPE.program prism=REGX cruby=DREGX [detail: idx=1 prev=SCOPE:program prism_len=4 cruby_len=6 prism_tok=REGX cruby_tok=DREGX]"
+      },
+      {
+        "cluster_id": "cluster-06",
+        "group": "diff_parse_y",
+        "bucket_count": 48,
+        "occurrences": 83,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_ok_cruby_err enc=Windows-31J ctx=match_write prism=ok cruby=ArgumentError:unknown_encoding [detail: nul=0 utf8=0 prism_errs=0 cruby=ArgumentError: unknown encoding name: sjis]"
+      },
+      {
+        "cluster_id": "cluster-07",
+        "group": "diff_parse_y",
+        "bucket_count": 6,
+        "occurrences": 36,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag ctx=FOR.idx prism=TARGET cruby=MTARGET [detail: idx=13 prev=SLOT:idx prism_len=34 cruby_len=40 prism_tok=TARGET:attr cruby_tok=MTARGET]"
+      },
+      {
+        "cluster_id": "cluster-08",
+        "group": "diff_parse_y",
+        "bucket_count": 2,
+        "occurrences": 4,
+        "headline": "INVARIANT[diff_parse_y]: kind=syntax_mismatch sub=prism_ok_cruby_err ctx=call prism=ok cruby=SyntaxError:other [detail: enc=UTF-8 nul=0 utf8=1 prism_errs=0 cruby=SyntaxError: void value expression]"
+      },
+      {
+        "cluster_id": "cluster-09",
+        "group": "diff_parse_y",
+        "bucket_count": 1,
+        "occurrences": 2,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_preexe_order_mismatch sub=tree [detail: idx=1 ctx=SCOPE.program prev=SCOPE:program prism_len=6 cruby_len=6 prism_tok=HASH cruby_tok=INT]"
+      },
+      {
+        "cluster_id": "cluster-10",
+        "group": "diff_parse_y",
+        "bucket_count": 1,
+        "occurrences": 1,
+        "headline": "INVARIANT[diff_parse_y]: kind=ast_tree_mismatch sub=tag ctx=SCOPE.block prism=SLOT cruby=PARAMS [detail: idx=8 prev=SCOPE:block prism_len=40 cruby_len=40 prism_tok=SLOT:body cruby_tok=PARAMS]"
+      }
+    ]
+  },
+  "artifacts": {
+    "report": "report/index.html",
+    "clusters": "report/triage/clusters.json",
+    "metadata": "report/triage/metadata.json"
+  }
+}
