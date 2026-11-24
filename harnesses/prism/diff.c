@@ -401,7 +401,7 @@ __attribute__((visibility("default"))) extern const char *__asan_default_options
 __attribute__((visibility("default"))) extern const char *__ubsan_default_options(void);
 
 const char *__asan_default_options(void) {
-    return "detect_leaks=0:detect_stack_use_after_return=0:abort_on_error=1:handle_abort=1";
+    return "detect_leaks=0:detect_stack_use_after_return=0:abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1";
 }
 
 const char *__ubsan_default_options(void) {

@@ -245,8 +245,19 @@ static inline void fuzz_options_populate(
 #endif
 
     if (opts->has_encoding_opts) {
+#ifdef PRISM_FUZZ_LEGACY_ENCODING_SET_LEN
+        {
+            const char *enc_name = fuzz_option_encoding_name(opts->aux_byte);
+            pm_options_encoding_set(options, enc_name, strlen(enc_name));
+        }
+#else
         pm_options_encoding_set(options, fuzz_option_encoding_name(opts->aux_byte));
+#endif
+#ifdef PRISM_FUZZ_LEGACY_FILEPATH_SET_LEN
+        pm_options_filepath_set(options, "fuzz.rb", sizeof("fuzz.rb") - 1);
+#else
         pm_options_filepath_set(options, "fuzz.rb");
+#endif
 #ifndef PRISM_FUZZ_NO_SHEBANG_CALLBACK
         if ((opts->aux_byte & 0x08) != 0) {
             pm_options_shebang_callback_set(options, fuzz_shebang_cb, NULL);

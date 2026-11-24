@@ -36,6 +36,25 @@ module FuzzTriage
       end
     end
 
+    SANITIZER_INTERCEPTOR_FUNC_RE = /\A(?:__(?:asan|msan|lsan|ubsan|sanitizer|interceptor)_|malloc|free|calloc|realloc|abort|raise|gsignal|pthread_kill)\b/
+
+    def normalize_sanitizer_headline(raw_headline, frames)
+      return raw_headline unless raw_headline =~ /\A==\d+==ERROR:\s*(AddressSanitizer|MemorySanitizer|LeakSanitizer|UndefinedBehaviorSanitizer):\s*(detected memory leaks|[^\s:(]+)/
+
+      tool = Regexp.last_match(1)
+      kind = Regexp.last_match(2)
+      target_frame = frames.find { |f| f["scope"] == "prism" && f["func"] } ||
+                     frames.find { |f| f["scope"] == "harness" && f["func"] } ||
+                     frames.find { |f| f["func"] && !f["func"].match?(SANITIZER_INTERCEPTOR_FUNC_RE) }
+      return "ERROR: #{tool}: #{kind}" unless target_frame
+
+      loc = if target_frame["file"]
+              target_frame["line"] ? "#{target_frame['file']}:#{target_frame['line']}" : target_frame["file"]
+            end
+      loc_suffix = loc ? " (#{loc})" : ""
+      "ERROR: #{tool}: #{kind} in #{target_frame['func']}#{loc_suffix}"
+    end
+
     # Extracts structured symptom, invariant, sanitizer, assertion, and full stack
     # frames from raw sanitizer/abort output so downstream clustering never needs
     # to scrape raw bucket artifacts or re-run testcases.
@@ -161,7 +180,8 @@ module FuzzTriage
         end
       end
 
-      headline = preamble_lines.find { |l| !l.start_with?("====") && l != "AddressSanitizer:DEADLYSIGNAL" } || summary || preamble_lines.first
+      raw_headline = preamble_lines.find { |l| !l.start_with?("====") && l != "AddressSanitizer:DEADLYSIGNAL" } || summary || preamble_lines.first
+      headline = normalize_sanitizer_headline(raw_headline, frames)
 
       {
         "symptom" => {
@@ -179,7 +199,7 @@ module FuzzTriage
 
     def infer_crash_reason(clean_output, sig_name = nil, default_reason: "unknown")
       reason = default_reason == "hang" ? "unknown" : default_reason
-      clean_output.match(/SUMMARY: (Memory|UndefinedBehavior|Address|Leak)Sanitizer: ([[:alpha:]-]*) .*/) do |m|
+      clean_output.match(/SUMMARY: (Memory|UndefinedBehavior|Address|Leak)Sanitizer: ([[:alpha:]-]+)(?:\s|\z)/) do |m|
         reason = m.captures[1]
       end
       if reason == "unknown"
@@ -190,6 +210,8 @@ module FuzzTriage
         elsif clean_output.include?("Assertion `") || clean_output.include?("INVARIANT[")
           reason = "ABRT"
         elsif clean_output =~ /^CRASH\[[^\]]+\]:\s*signal=SIG([A-Z0-9_]+)/
+          reason = Regexp.last_match(1)
+        elsif clean_output =~ /ERROR: (?:Address|Memory)Sanitizer: ([[:alpha:]-]+)\b/ && Regexp.last_match(1) != "detected"
           reason = Regexp.last_match(1)
         elsif sig_name && !sig_name.empty?
           reason = sig_name

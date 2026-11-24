@@ -1,5 +1,11 @@
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _DARWIN_C_SOURCE
+#define _DARWIN_C_SOURCE 1
 #endif
 
 #include <errno.h>
@@ -431,8 +437,21 @@ void diff_fail_syntax_mismatch(
 int diff_oracle_initialized = 0;
 static volatile sig_atomic_t diff_print_backtrace_enabled = 1;
 
+#if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
+#define DIFF_ASAN_ACTIVE 1
+#else
+#define DIFF_ASAN_ACTIVE 0
+#endif
+
 static const int diff_crash_signals[] = { SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGTRAP, SIGPIPE };
+#if DIFF_ASAN_ACTIVE
+/* Keep ASan's SA_ONSTACK deadly-signal handler on SIGSEGV/SIGBUS/SIGFPE so stack
+ * overflows emit AddressSanitizer diagnostics instead of double-faulting. */
+static const int diff_fatal_signals[] = { SIGILL, SIGTRAP };
+#else
 static const int diff_fatal_signals[] = { SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE };
+static uint8_t diff_signal_altstack[65536];
+#endif
 #define DIFF_CRASH_SIGNAL_COUNT (sizeof(diff_crash_signals) / sizeof(diff_crash_signals[0]))
 
 static void diff_write_stderr_str(const char *s, size_t len) {
@@ -494,12 +513,24 @@ static void diff_restore_signals(const struct sigaction saved[DIFF_CRASH_SIGNAL_
 }
 
 static void diff_install_fatal_signal_handlers(void) {
+#if !DIFF_ASAN_ACTIVE
+    stack_t cur_ss;
+    memset(&cur_ss, 0, sizeof(cur_ss));
+    if (sigaltstack(NULL, &cur_ss) == 0 && (cur_ss.ss_flags & SS_DISABLE) != 0) {
+        stack_t ss;
+        memset(&ss, 0, sizeof(ss));
+        ss.ss_sp = diff_signal_altstack;
+        ss.ss_size = sizeof(diff_signal_altstack);
+        ss.ss_flags = 0;
+        (void) sigaltstack(&ss, NULL);
+    }
+#endif
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = diff_fatal_signal_handler;
     sigemptyset(&sa.sa_mask);
     /* Reset to SIG_DFL and unmask on delivery so raise(sig) kills with WTERMSIG == sig. */
-    sa.sa_flags = SA_RESETHAND | SA_NODEFER;
+    sa.sa_flags = SA_RESETHAND | SA_NODEFER | SA_ONSTACK;
     for (size_t i = 0; i < sizeof(diff_fatal_signals) / sizeof(diff_fatal_signals[0]); i++) {
         sigaction(diff_fatal_signals[i], &sa, NULL);
     }

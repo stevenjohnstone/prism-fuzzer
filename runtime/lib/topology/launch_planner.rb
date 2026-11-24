@@ -66,7 +66,7 @@ module PrismFuzzer
       max_input_size = Integer(plan.dig("defaults", "max_input_size") || 1024)
       max_alloc_mb = Integer(plan.dig("defaults", "max_allocated_mb") || 128)
       hard_rss = max_alloc_mb * 16
-      asan_opts = "abort_on_error=1:handle_abort=1:detect_leaks=0:quarantine_size_mb=16:malloc_context_size=0:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"
+      asan_opts = "abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1:detect_leaks=0:quarantine_size_mb=16:malloc_context_size=0:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"
       ubsan_opts = "abort_on_error=1:symbolize=0"
       msan_opts = "exit_code=86:abort_on_error=1:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"
       lsan_opts = "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"

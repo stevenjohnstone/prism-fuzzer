@@ -640,8 +640,10 @@ elif [ "$MODE" = "verify" ]; then
   "${COMPILE_RUNNER[@]}" \
     -O1 -fno-omit-frame-pointer -ggdb3 -gdwarf-4 -std=gnu99 \
     -Wall -Wextra -Wno-unused-parameter -fPIE \
+    ${ASAN_UAR_FLAGS[@]+"${ASAN_UAR_FLAGS[@]}"} \
     ${HARDEN_CFLAGS[@]+"${HARDEN_CFLAGS[@]}"} \
     ${HARNESS_SAN_FLAGS[@]+"${HARNESS_SAN_FLAGS[@]}"} \
+    ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
     -c "$FUZZ_ROOT/triage/verify_runner.c" -o "$RUNNER_OBJ"
 
   tmp_out="$OUTPUT.tmp.$$"

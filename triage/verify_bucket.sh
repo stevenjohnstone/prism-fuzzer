@@ -26,7 +26,7 @@ usage() {
 Usage: verify_bucket.sh [--repo-root DIR] [--fuzz-root DIR] [--bucket-dir DIR] [OPTIONS]
   --repo-root DIR           Target Prism source directory (alias: --target DIR; default: PRISM_A_DIR or build/targets/prism_a)
   --fuzz-root DIR           prism-fuzzer root containing harnesses/prism (default: script repo)
-  --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_prism | arm32_oracle | ppc_oracle
+  --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_parse_y_asan | diff_prism | arm32_oracle | ppc_oracle
   --runner PATH             Use a precompiled verify_runner binary
   --build-only              Build (if stale) and print the runner binary path
   --rebuild-verifiers       Force recompilation of verify_runner (bypasses source fingerprint cache)
@@ -377,8 +377,37 @@ resolve_default_max_input() {
   ' "$ws_build_dir" "${BUCKET_DIR:-}" 2>/dev/null || echo 1024
 }
 
+diff_bucket_needs_asan() {
+  local bucket="$1"
+  if [ "${VERIFY_DIFF_ASAN:-}" = "1" ]; then
+    return 0
+  elif [ "${VERIFY_DIFF_ASAN:-}" = "0" ]; then
+    return 1
+  fi
+  [ -n "$bucket" ] && [ -f "$bucket/meta.json" ] || return 1
+  ruby -rjson -e '
+    m = JSON.parse(File.read(ARGV[0]))
+    tool = m.dig("symptom", "sanitizer", "tool").to_s
+    reason = m["reason"].to_s
+    headline = m.dig("symptom", "headline").to_s.strip
+    asan_reasons = %w[
+      stack-overflow heap-buffer-overflow stack-buffer-overflow global-buffer-overflow
+      heap-use-after-free stack-use-after-scope stack-use-after-return
+      dynamic-stack-buffer-overflow intra-object-overflow container-overflow
+      initialization-order-fiasco bad-free double-free alloc-dealloc-mismatch
+    ]
+    needs = tool == "AddressSanitizer" ||
+            asan_reasons.include?(reason) ||
+            (reason == "SEGV" && headline.empty?)
+    exit(needs ? 0 : 1)
+  ' "$bucket/meta.json" >/dev/null 2>&1
+}
+
 build_verify_runner() {
   local profile="$1"
+  if [ "$profile" = "diff_parse_y" ] && diff_bucket_needs_asan "${BUCKET_DIR:-}"; then
+    profile="diff_parse_y_asan"
+  fi
   local cache_dir="${VERIFY_BUILD_DIR:-$ws_build_dir/verify}"
   if ! mkdir -p "$cache_dir" 2>/dev/null || [ ! -w "$cache_dir" ]; then
     local target_key
@@ -425,8 +454,8 @@ build_verify_runner() {
   local flags=()
   local probe_arr=()
   local has_legacy_shims=0
-  if [ "$profile" = "diff_parse_y" ]; then
-    flags=("diff_parse_y" "$max_input")
+  if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ]; then
+    flags=("$profile" "$max_input")
   elif [ "$profile" = "diff_prism" ]; then
     flags=("diff_prism" "$max_input" "$prism_b")
   else
@@ -495,6 +524,8 @@ build_verify_runner() {
       out << "-DPRISM_FUZZ_NO_ATTACH_COMMENTS" unless code.match?(/\bpm_options_attach_comments_set\b/)
       out << "-DPRISM_FUZZ_NO_ENCODING_LOCKED" unless code.match?(/\bpm_options_encoding_locked_set\b/)
       out << "-DPRISM_FUZZ_NO_VERSION_SET" unless code.match?(/\bpm_options_version_set\b/)
+      out << "-DPRISM_FUZZ_LEGACY_ENCODING_SET_LEN" if code.match?(/\bpm_options_encoding_set\s*\([^)]*size_t/)
+      out << "-DPRISM_FUZZ_LEGACY_FILEPATH_SET_LEN" if code.match?(/\bpm_options_filepath_set\s*\([^)]*size_t/)
       out << "-DPRISM_FUZZ_NO_FROZEN_STRING_LITERAL" unless code.match?(/\bpm_options_frozen_string_literal_set\b/)
       out << "-DPRISM_FUZZ_NO_SHEBANG_CALLBACK" unless code.match?(/\bpm_options_shebang_callback_set\b/)
       out << "-DPRISM_FUZZ_NO_STACK_BUDGET" unless code.match?(/\bpm_options_stack_budget_set\b/)
@@ -677,7 +708,11 @@ build_verify_runner() {
     if [ "$JSON_MODE" -eq 0 ] && [ "$BUILD_ONLY" -eq 0 ]; then
       echo "Building verify_runner ($profile)..." >&2
     fi
-    if [ "$profile" = "diff_parse_y" ]; then
+    if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ]; then
+      local diff_extra_args=()
+      if [ "$profile" = "diff_parse_y_asan" ]; then
+        diff_extra_args=(--cflag -fsanitize=address)
+      fi
       if ! "$FUZZ_ROOT/harnesses/prism/build_diff.sh" \
           --mode verify \
           --prism-root "$REPO_ROOT" \
@@ -685,6 +720,7 @@ build_verify_runner() {
           --oracle-dir "$cache_dir/diff-oracle" \
           --cc "$cc" \
           --max-input-size "$max_input" \
+          ${diff_extra_args[@]+"${diff_extra_args[@]}"} \
           --output "$tmp_bin"; then
         rm -f "$tmp_bin"
         echo "verify_bucket.sh: failed to compile verify_runner ($profile) against '$REPO_ROOT'" >&2
@@ -906,10 +942,10 @@ if [ "$SYMBOLIZE" != "1" ]; then
   sym_flag=":symbolize=0"
 fi
 leak_flag=""
-if [ "$PROFILE" = "diff_parse_y" ]; then
+if [ "$PROFILE" = "diff_parse_y" ] || [ "$PROFILE" = "diff_parse_y_asan" ]; then
   leak_flag=":detect_leaks=0:detect_stack_use_after_return=0"
 fi
-export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:handle_abort=1${leak_flag}:max_allocation_size_mb=${max_alloc}:hard_rss_limit_mb=${hard_rss}${sym_flag}}"
+export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1${leak_flag}:max_allocation_size_mb=${max_alloc}:hard_rss_limit_mb=${hard_rss}${sym_flag}}"
 export UBSAN_OPTIONS="${UBSAN_OPTIONS:-abort_on_error=1:print_stacktrace=1${sym_flag}}"
 export MSAN_OPTIONS="${MSAN_OPTIONS:-abort_on_error=1:handle_abort=1:max_allocation_size_mb=${max_alloc}:hard_rss_limit_mb=${hard_rss}${sym_flag}}"
 export LSAN_OPTIONS="${LSAN_OPTIONS:-handle_abort=1:max_allocation_size_mb=${max_alloc}:hard_rss_limit_mb=${hard_rss}${sym_flag}}"

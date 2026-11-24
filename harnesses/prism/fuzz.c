@@ -176,7 +176,7 @@ extern const char *__ubsan_default_options(void);
 
 
 const char* __asan_default_options(void) {
-    return "abort_on_error=1:handle_abort=1:max_allocation_size_mb=" FUZZ_STR(FUZZ_MAX_ALLOCATED) ":hard_rss_limit_mb=" FUZZ_STR(FUZZ_HARD_RSS_LIMIT);
+    return "abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1:max_allocation_size_mb=" FUZZ_STR(FUZZ_MAX_ALLOCATED) ":hard_rss_limit_mb=" FUZZ_STR(FUZZ_HARD_RSS_LIMIT);
 }
 
 const char* __ubsan_default_options(void) {

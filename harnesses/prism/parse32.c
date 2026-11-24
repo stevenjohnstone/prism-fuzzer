@@ -45,7 +45,7 @@ __attribute__((visibility("default"))) extern const char *__ubsan_default_option
 
 __attribute__((visibility("default")))
 const char *__asan_default_options(void) {
-    return "detect_leaks=0:abort_on_error=1:handle_abort=1:symbolize=0:max_allocation_size_mb="
+    return "detect_leaks=0:abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1:symbolize=0:max_allocation_size_mb="
            ORACLE32_STR(FUZZ_MAX_ALLOCATED) ":hard_rss_limit_mb=" ORACLE32_STR(FUZZ_HARD_RSS_LIMIT);
 }
 

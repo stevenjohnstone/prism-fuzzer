@@ -636,7 +636,17 @@ module FuzzInspect
       elsif rep["has_shebang_prefix"]
         lines << "  options:  shebang_prefix"
       end
-      lines << "  headline: #{rep['headline']}" unless rep["headline"].to_s.empty?
+      if !rep["headline"].to_s.empty?
+        lines << "  headline: #{rep['headline']}"
+      else
+        r0 = Array(c["reasons"]&.keys).first.to_s
+        repro = rep["reproduced_by"].to_s
+        if r0 == "hang"
+          lines << "  headline: #{repro.empty? ? 'Timeout / hang (no stderr output)' : "Timeout / hang in #{repro} (no stderr output)"}"
+        elsif !r0.empty? && r0 != "unknown"
+          lines << "  headline: #{repro.empty? ? "Fatal signal #{r0} (no stderr output)" : "Fatal signal #{r0} in #{repro} (no stderr output)"}"
+        end
+      end
 
       trace = Array(rep["prism_trace"]).reject(&:empty?)
       if !trace.empty?

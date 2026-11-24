@@ -157,16 +157,25 @@ module PrismFuzzerReport
                       group = c["group"].to_s.empty? ? "prism_flaw" : c["group"].to_s
                       rep = c["representative"].is_a?(Hash) ? c["representative"] : {}
                       headline = rep["headline"].to_s.gsub(/\s*\[detail:.*$/, "").strip
-                      headline = "(no headline)" if headline.empty?
+                      reasons = Array(c["reasons"]&.keys)
+                      reasons = Array(c["buckets"]).filter_map { |b| b["reason"] }.uniq if reasons.empty?
+                      if headline.empty?
+                        r0 = reasons.first.to_s
+                        repro = rep["reproduced_by"].to_s
+                        headline = if r0 == "hang"
+                                     repro.empty? ? "Timeout / hang (no stderr output)" : "Timeout / hang in #{repro} (no stderr output)"
+                                   elsif !r0.empty? && r0 != "unknown"
+                                     repro.empty? ? "Fatal signal #{r0} (no stderr output)" : "Fatal signal #{r0} in #{repro} (no stderr output)"
+                                   else
+                                     "(no headline)"
+                                   end
+                      end
                       top_frame = rep["top_prism_frame"].to_s
                       digest_line = defined?(FuzzInspect) ? FuzzInspect.format_cluster_digest_line(c, rep) : ""
                       preview = rep["source_preview"].to_s
                       occ = c["occurrences"].to_i
                       bcnt = c["bucket_count"].to_i
                       first_str = (defined?(FuzzInspect) && !c["first_elapsed_ms"].nil?) ? FuzzInspect.format_elapsed(c["first_elapsed_ms"]) : "-"
-
-                      reasons = Array(c["reasons"]&.keys)
-                      reasons = Array(c["buckets"]).filter_map { |b| b["reason"] }.uniq if reasons.empty?
                       reason_badges = reasons.first(3).map { |r| %(<span class="sched-pill">#{CGI.escapeHTML(r.to_s)}</span>) }.join(" ")
 
                       workers_map = if c["by_worker"].is_a?(Hash) && !c["by_worker"].empty?

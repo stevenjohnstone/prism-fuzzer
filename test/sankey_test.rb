@@ -164,6 +164,27 @@ class SankeyTest < Minitest::Test
                    FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[oracle_arm32]: kind=ast_size_mismatch section=ast type=PM_INTEGER_NODE stream=0 [detail: first_diff=30]"))
       assert_equal "c1 · diff_prism: ast: STRING",
                    FuzzSankey.concise_cluster_title(mk_cluster.call("INVARIANT[diff_prism]: kind=serialize_mismatch sub=bytes section=ast type=PM_STRING_NODE [detail: a_len=40]"))
+      assert_equal "c1 · stack-overflow (parser_lex)",
+                   FuzzSankey.concise_cluster_title(mk_cluster.call("ERROR: AddressSanitizer: stack-overflow in parser_lex (src/prism.c:10179)"))
+      assert_equal "c1 · stack-overflow (parser_lex)",
+                   FuzzSankey.concise_cluster_title({
+                     "cluster_id" => "c1",
+                     "representative" => {
+                       "bucket_id" => "stack-overflow/abc",
+                       "headline" => "==7==ERROR: AddressSanitizer: stack-overflow on address 0xffffc19be9f0",
+                       "top_prism_frame" => "parser_lex@src/prism.c:10179"
+                     }
+                   })
+      assert_equal "c1 · SEGV (fuzz.ijon.diff)",
+                   FuzzSankey.concise_cluster_title({
+                     "cluster_id" => "c1",
+                     "reasons" => { "SEGV" => 1 },
+                     "representative" => {
+                       "bucket_id" => "SEGV/ef46db3751d8e999",
+                       "reproduced_by" => "fuzz.ijon.diff",
+                       "headline" => ""
+                     }
+                   })
     end
   end
 

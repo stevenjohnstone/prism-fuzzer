@@ -483,6 +483,7 @@ class TriageReproTest < Minitest::Test
     assert_equal "AddressSanitizer", parsed_asan.dig("symptom", "sanitizer", "tool")
     assert_equal "heap-buffer-overflow", parsed_asan.dig("symptom", "sanitizer", "kind")
     assert_equal({ "op" => "READ", "size" => 4 }, parsed_asan.dig("symptom", "sanitizer", "access"))
+    assert_equal "ERROR: AddressSanitizer: heap-buffer-overflow in pm_parser_lex (src/prism.c:1234)", parsed_asan.dig("symptom", "headline")
     assert_equal "AddressSanitizer: heap-buffer-overflow /prism/src/prism.c:1234:9 in pm_parser_lex", parsed_asan.dig("symptom", "summary")
     assert_equal "src/prism.c", parsed_asan["frames"][0]["file"]
     assert_equal 1234, parsed_asan["frames"][0]["line"]
@@ -495,8 +496,31 @@ class TriageReproTest < Minitest::Test
     parsed_lsan = FuzzTriage.parse_crash_output(lsan_out)
     assert_equal "LeakSanitizer", parsed_lsan.dig("symptom", "sanitizer", "tool")
     assert_equal "detected-memory-leaks", parsed_lsan.dig("symptom", "sanitizer", "kind")
+    assert_equal "ERROR: LeakSanitizer: detected memory leaks in pm_arena_alloc (src/arena.c:42)", parsed_lsan.dig("symptom", "headline")
     assert_equal "src/arena.c", parsed_lsan["frames"][1]["file"]
     assert_equal "memory-leak", FuzzTriage.infer_crash_reason(lsan_out)
+
+    so_out = "AddressSanitizer:DEADLYSIGNAL\n" \
+             "=================================================================\n" \
+             "==7==ERROR: AddressSanitizer: stack-overflow on address 0xffffc19be9f0 (pc 0xaaaaac541d14 bp 0xffffc19bf200 sp 0xffffc19be9f0 T0)\n" \
+             "    #0 0xaaaaac541d14 in __asan_memcpy (/prism/bin/fuzz.ijon.diff+0x1c1d14)\n" \
+             "    #1 0xaaaaac65c3a8 in parser_lex /prism/src/prism.c:10179:32\n" \
+             "    #2 0xaaaaac63d120 in parse_parentheses /prism/src/prism.c:15000:9\n" \
+             "SUMMARY: AddressSanitizer: stack-overflow (/prism/bin/fuzz.ijon.diff+0x1c1d14) in __asan_memcpy\n" \
+             "==7==ABORTING\n"
+    parsed_so = FuzzTriage.parse_crash_output(so_out)
+    assert_equal "stack-overflow", FuzzTriage.infer_crash_reason(so_out, "SEGV")
+    assert_equal "stack-overflow", FuzzTriage.infer_crash_reason(so_out.lines.first(5).join, "SEGV")
+    assert_equal({ "tool" => "AddressSanitizer", "kind" => "stack-overflow" }, parsed_so.dig("symptom", "sanitizer"))
+    assert_equal "ERROR: AddressSanitizer: stack-overflow in parser_lex (src/prism.c:10179)", parsed_so.dig("symptom", "headline")
+    require_relative "../../triage/cluster"
+    so_bucket = {
+      "verify_profile" => "diff_parse_y",
+      "reason" => "stack-overflow",
+      "symptom" => parsed_so["symptom"],
+      "frames" => parsed_so["frames"]
+    }
+    assert_equal "crash_or_inv", FuzzClustering.oracle_family(so_bucket)
   end
 
   def test_compiled_harness_slow_invariants_with_mock_wraps

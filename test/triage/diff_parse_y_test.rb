@@ -267,6 +267,48 @@ class TriageDiffParseYTest < Minitest::Test
                stdlock_fail["output"].to_s.include?("mock_ruby_yyparse"),
              "expected async-signal-safe SIGSEGV CRASH[diff_parse_y] under held stderr lock, got: #{stdlock_rep.inspect}"
 
+      # Stack overflow in non-ASan diff_parse_y runs on diff_signal_altstack (SA_ONSTACK)
+      # rather than double-faulting with 0 bytes of stderr.
+      File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("MOCK_DIFF_STACK_OVERFLOW"))
+      so_nonasan_out, so_nonasan_err, so_nonasan_st = run_cmd_with_timeout(
+        10,
+        mock_verify_sh,
+        "--repo-root", prism_dir,
+        "--fuzz-root", mock_diff_fuzz,
+        "--bucket-dir", diff_bucket,
+        "--json",
+        env: { "VERIFY_BUILD_DIR" => mock_fuzz_verify_build }
+      )
+      assert_equal 1, so_nonasan_st.exitstatus,
+                   "expected non-ASan stack-overflow FAIL exit 1, got #{so_nonasan_st.exitstatus}\nstdout=#{so_nonasan_out}\nstderr=#{so_nonasan_err}"
+      so_nonasan_fail = JSON.parse(so_nonasan_out).dig("failures", 0)
+      assert so_nonasan_fail &&
+               so_nonasan_fail["signal"] == 11 &&
+               so_nonasan_fail["output"].to_s.start_with?("CRASH[diff_parse_y]: signal=SIGSEGV (11)"),
+             "expected non-ASan stack-overflow to report CRASH[diff_parse_y] via sigaltstack, got: #{so_nonasan_out}"
+
+      # ASan diff_parse_y buckets (including silent legacy SEGV buckets) automatically build
+      # verify_runner.diff_parse_y_asan and keep ASan's SA_ONSTACK stack-overflow handler active.
+      asan_so_bucket = File.join(workdir, "diff_triage_test/SEGV/silent_stack_overflow")
+      FileUtils.mkdir_p(asan_so_bucket)
+      File.binwrite(File.join(asan_so_bucket, "input.min"), seed_bytes("MOCK_DIFF_STACK_OVERFLOW"))
+      File.write(File.join(asan_so_bucket, "meta.json"), "{\"verify_profile\":\"diff_parse_y\",\"reason\":\"SEGV\",\"symptom\":{\"headline\":null}}\n")
+      so_asan_out, so_asan_err, so_asan_st = run_cmd_with_timeout(
+        60,
+        mock_verify_sh,
+        "--repo-root", prism_dir,
+        "--fuzz-root", mock_diff_fuzz,
+        "--bucket-dir", asan_so_bucket,
+        "--json",
+        env: { "VERIFY_BUILD_DIR" => mock_fuzz_verify_build }
+      )
+      assert_equal 1, so_asan_st.exitstatus,
+                   "expected ASan stack-overflow FAIL exit 1, got #{so_asan_st.exitstatus}\nstdout=#{so_asan_out}\nstderr=#{so_asan_err}"
+      so_asan_fail = JSON.parse(so_asan_out).dig("failures", 0)
+      assert so_asan_fail &&
+               so_asan_fail["output"].to_s.include?("AddressSanitizer: stack-overflow"),
+             "expected ASan stack-overflow diagnostic from diff_parse_y_asan, got: #{so_asan_out}"
+
       # Valid `1 + 2` passes diff_parse_y verification.
       File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("1 + 2"))
       pass_out, = assert_cmd(
@@ -535,10 +577,12 @@ class TriageDiffParseYTest < Minitest::Test
     diff_san = FuzzTriage.env_sanitizer_env(executable: "/tmp/ws/bin/fuzz.diff")
     assert_includes diff_san.fetch("ASAN_OPTIONS"), "detect_leaks=0"
     assert_includes diff_san.fetch("ASAN_OPTIONS"), "detect_stack_use_after_return=0"
+    assert_includes diff_san.fetch("ASAN_OPTIONS"), "handle_segv=2:use_sigaltstack=1"
 
     prism_san = FuzzTriage.env_sanitizer_env(executable: "/tmp/ws/bin/fuzz")
     refute_includes prism_san.fetch("ASAN_OPTIONS"), "detect_leaks=0"
     refute_includes prism_san.fetch("ASAN_OPTIONS"), "detect_stack_use_after_return=0"
+    assert_includes prism_san.fetch("ASAN_OPTIONS"), "handle_segv=2:use_sigaltstack=1"
 
     with_tmpdir("triage-diff-lsan-") do |workdir|
       tdir = File.join(workdir, "triage")
@@ -699,9 +743,11 @@ class TriageDiffParseYTest < Minitest::Test
     patched =
       src[0...idx] +
       "__attribute__((noinline)) void mock_ruby_yyparse(void) { volatile int *volatile p = (volatile int *) 0; *p = 1; }\n" +
+      "__attribute__((noinline)) int mock_deep_stack(int n) { volatile char buf[4096]; buf[0] = (char) n; buf[4095] = (char) (n ^ 0x55); int r = (n > 0) ? mock_deep_stack(n - 1) : 0; return r + buf[0] + buf[4095]; }\n" +
       src[idx...(brace_idx + 2)] +
       "    if (size >= 14 && memcmp(source, \"MOCK_DIFF_SEGV\", 14) == 0) { mock_ruby_yyparse(); }\n" +
       "    if (size >= 22 && memcmp(source, \"MOCK_DIFF_STDLOCK_SEGV\", 22) == 0) { flockfile(stderr); mock_ruby_yyparse(); }\n" +
+      "    if (size >= 24 && memcmp(source, \"MOCK_DIFF_STACK_OVERFLOW\", 24) == 0) { (void) mock_deep_stack(4096); }\n" +
       src[(brace_idx + 2)..]
     File.write(cruby_vm_path, patched)
     mock_diff_fuzz

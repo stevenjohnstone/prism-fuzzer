@@ -259,13 +259,21 @@ module FuzzSankey
                          clean_type || site_label || kind_m || rest[0, 32]
                        end
               "#{ns}: #{detail}"
+            when /\A(?:==\d+==)?ERROR:\s*\w+Sanitizer:\s*(detected memory leaks|[A-Za-z0-9_-]+)(?:\s+in\s+([A-Za-z0-9_]+))?/
+              kind = Regexp.last_match(1).tr(" ", "-")
+              fn = Regexp.last_match(2) || rep["top_prism_frame"].to_s.split("@", 2).first
+              fn && !fn.empty? ? "#{kind} (#{fn})" : kind
             when /\ASUMMARY:\s*\w+Sanitizer:\s*([^(\n]+)/
               Regexp.last_match(1).strip[0, 34]
             else
               headline[0, 34]
             end
 
-    short = rep["bucket_id"].to_s if short.nil? || short.empty?
+    if short.nil? || short.empty?
+      r0 = Array(cluster["reasons"]&.keys).first.to_s
+      repro = rep["reproduced_by"].to_s
+      short = (!r0.empty? && !repro.empty?) ? "#{r0} (#{repro})" : rep["bucket_id"].to_s
+    end
     short = "#{short[0, 33]}..." if short.length > 36
     "#{cid} · #{short}"
   end

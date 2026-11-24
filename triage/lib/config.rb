@@ -68,7 +68,7 @@ module FuzzTriage
     META_SCHEMA_VERSION = 1
 
     SANITIZER_ENV = {
-      "ASAN_OPTIONS" => "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{MAX_ALLOCATED_MB}:hard_rss_limit_mb=#{HARD_RSS_LIMIT_MB}",
+      "ASAN_OPTIONS" => "abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1:max_allocation_size_mb=#{MAX_ALLOCATED_MB}:hard_rss_limit_mb=#{HARD_RSS_LIMIT_MB}",
       "UBSAN_OPTIONS" => "abort_on_error=1:print_stacktrace=1",
       "MSAN_OPTIONS" => "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{MAX_ALLOCATED_MB}:hard_rss_limit_mb=#{HARD_RSS_LIMIT_MB}",
       "LSAN_OPTIONS" => "handle_abort=1:max_allocation_size_mb=#{MAX_ALLOCATED_MB}:hard_rss_limit_mb=#{HARD_RSS_LIMIT_MB}"
@@ -108,7 +108,7 @@ module FuzzTriage
       diff_opts = disable_leaks ? ":detect_leaks=0:detect_stack_use_after_return=0" : ""
       sym_opt = symbolize ? "" : ":symbolize=0"
       env = {
-        "ASAN_OPTIONS" => "abort_on_error=1:handle_abort=1#{diff_opts}:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}",
+        "ASAN_OPTIONS" => "abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1#{diff_opts}:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}",
         "UBSAN_OPTIONS" => "abort_on_error=1:print_stacktrace=1#{sym_opt}",
         "MSAN_OPTIONS" => "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}",
         "LSAN_OPTIONS" => "handle_abort=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}"
