@@ -398,6 +398,11 @@ class BuildAndCrossTest < Minitest::Test
       repro_calls = calls.select { |c| c.include?("-DORACLE64_REPLAY_MAIN") }
       assert_equal 3, repro_calls.size, "expected 3 oracle_repro compile invocations, got #{repro_calls.inspect}"
 
+      prism_c_count = PrismFuzzer::Topology.prism_c_sources(up[:repo]).size
+      prism_obj_compiles = calls.count { |c| c.include?("-c") && c.any? { |tok| tok.to_s.start_with?(File.join(up[:repo], "src/")) } }
+      assert_equal prism_c_count, prism_obj_compiles,
+                   "expected 64-bit Prism C sources compiled once across all 3 oracle helpers (#{prism_c_count}), got #{prism_obj_compiles}"
+
       arm_ijon_call = repro_calls.find { |c| c.last.start_with?(File.join(bdir, "fuzz.arm32.ijon.repro")) }
       ppc_ijon_call = repro_calls.find { |c| c.last.start_with?(File.join(bdir, "fuzz.ppc.ijon.repro")) }
       auto_call = repro_calls.find { |c| c.last.start_with?(File.join(bdir, "fuzz.arm32.auto.repro")) }
@@ -744,6 +749,72 @@ class BuildAndCrossTest < Minitest::Test
     end
   end
 
+  def test_build_pool_concurrency_cap_and_ccache_namespace_isolation
+    pool = PrismFuzzer::Topology::BuildPool.new(3)
+    active = 0
+    peak = 0
+    mu = Mutex.new
+    out = pool.parallel_map((1..12).to_a, max_threads: 8) do |n|
+      pool.with_slot do
+        mu.synchronize do
+          active += 1
+          peak = active if active > peak
+        end
+        sleep 0.01
+        mu.synchronize { active -= 1 }
+        n * 2
+      end
+    end
+    assert_equal((1..12).map { |n| n * 2 }, out)
+    assert_operator peak, :<=, 3, "BuildPool exceeded slot limit (peak=#{peak})"
+    assert_operator peak, :>=, 2, "BuildPool did not execute concurrently (peak=#{peak})"
+
+    with_tmpdir("ccache-ns-") do |workdir|
+      fake_bin = File.join(workdir, "bin")
+      cdir = File.join(workdir, "ccache")
+      afl_stamp = File.join(workdir, ".fuzz.afl.stamp")
+      FileUtils.mkdir_p([fake_bin, cdir])
+      write_executable(File.join(fake_bin, "ccache"), "#!/bin/sh\nexec \"$@\"\n")
+      File.write(afl_stamp, "stamp\n")
+
+      with_env("PATH" => "#{fake_bin}:#{ENV['PATH']}", "CCACHE_DIR" => cdir, "FUZZ_CCACHE" => nil, "FUZZ_IMAGE_ID" => "sha256:abc123456789") do
+        PrismFuzzer::Topology.instance_variable_set(:@ccache_cached_path_env, nil)
+        cmd_msan, env_msan = PrismFuzzer::Topology.ccache_compile_wrapper(
+          "afl-clang-lto", { "AFL_USE_MSAN" => "1", "AFL_LLVM_IJON" => "1" },
+          fuzz_root: root_dir, afl_stamp: afl_stamp
+        )
+        cmd_lsan, env_lsan = PrismFuzzer::Topology.ccache_compile_wrapper(
+          "afl-clang-lto", { "AFL_USE_LSAN" => "1", "AFL_LLVM_IJON" => "1" },
+          fuzz_root: root_dir, afl_stamp: afl_stamp
+        )
+        assert_equal [File.join(fake_bin, "ccache"), "afl-clang-lto"], cmd_msan
+        assert_equal [File.join(fake_bin, "ccache"), "afl-clang-lto"], cmd_lsan
+        assert_equal cdir, env_msan["CCACHE_DIR"]
+        assert_equal "1", env_msan["CCACHE_NOHASHDIR"]
+        refute_equal env_msan["CCACHE_NAMESPACE"], env_lsan["CCACHE_NAMESPACE"],
+                     "MSan and LSan must have distinct CCACHE_NAMESPACE values"
+        assert_includes env_msan["CCACHE_NAMESPACE"], "AFL_USE_MSAN=1"
+        assert_includes env_lsan["CCACHE_NAMESPACE"], "AFL_USE_LSAN=1"
+      end
+
+      with_env("FUZZ_CCACHE" => "0") do
+        cmd_off, = PrismFuzzer::Topology.ccache_compile_wrapper("clang", nil, fuzz_root: root_dir)
+        assert_equal ["clang"], cmd_off
+      end
+      PrismFuzzer::Topology.instance_variable_set(:@ccache_cached_path_env, nil)
+
+      ctx = PrismFuzzer::Campaign.resolve_context(campaign_path: repo_path("campaigns/default.rb"), fuzz_root: root_dir)
+      with_env("FUZZ_CCACHE" => nil, "CCACHE_DIR" => nil) do
+        dcmd = PrismFuzzer::Campaign.docker_cmd_for(ctx, ["true"])
+        assert_includes dcmd, "prism-fuzzer-ccache:/ccache"
+      end
+      with_env("FUZZ_CCACHE" => "0") do
+        dcmd_off = PrismFuzzer::Campaign.docker_cmd_for(ctx, ["true"])
+        refute dcmd_off.any? { |t| t.include?(":/ccache") }
+      end
+    end
+  end
+
   private
 
   def build_custom_repro_campaign(workdir, ws, up)
@@ -763,12 +834,15 @@ class BuildAndCrossTest < Minitest::Test
   end
 
   def stub_run_cmd_recording(recorded, &block)
+    rec_lock = Mutex.new
     impl = lambda do |*cmd, env: nil, chdir: nil, allow_fail: false|
-      recorded << { cmd: cmd, env: env || {}, chdir: chdir, allow_fail: allow_fail }
       o_idx = cmd.index("--output") || cmd.index("-o")
       if o_idx && cmd[o_idx + 1]
         FileUtils.mkdir_p(File.dirname(cmd[o_idx + 1]))
         File.write(cmd[o_idx + 1], "stub\n")
+      end
+      rec_lock.synchronize do
+        recorded << { cmd: cmd, env: env || {}, chdir: chdir, allow_fail: allow_fail }
       end
       ["", "", nil]
     end

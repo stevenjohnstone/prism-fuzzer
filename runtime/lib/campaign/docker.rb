@@ -247,6 +247,10 @@ module PrismFuzzer
         cmd.push("--label", "prism_fuzzer.workspace=#{ctx.dig(:ws, :fuzz_dir)}") if ctx.dig(:ws, :fuzz_dir)
       end
       cmd.concat(default_tmpfs_flags)
+      if ENV["FUZZ_CCACHE"].to_s.strip != "0" && ENV["CCACHE_DIR"].to_s.strip.empty?
+        ccache_vol = ENV.fetch("FUZZ_CCACHE_VOLUME", DEFAULT_CCACHE_VOLUME).to_s.strip
+        cmd.push("-v", "#{ccache_vol}:/ccache") unless ccache_vol.empty?
+      end
 
       host_forwarded_env(ctx, extra_env).each do |k, v|
         cmd.push("-e", "#{k}=#{v}")

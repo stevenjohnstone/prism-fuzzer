@@ -53,10 +53,37 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 mkdir -p "$WORK_DIR" "$(dirname "$OUTPUT")"
 
+PDIFF_TMP_WORK="$(mktemp -d "${TMPDIR:-/tmp}/pf-pdiff.XXXXXX")"
+cleanup_pdiff_tmp() {
+  rm -rf "$PDIFF_TMP_WORK"
+}
+trap cleanup_pdiff_tmp EXIT
+
+SUB_JOBS="${FUZZ_SUB_JOBS:-${JOBS:-8}}"
+case "$SUB_JOBS" in
+  ''|*[!0-9]*|0) SUB_JOBS=4 ;;
+esac
+
 if [ "$MODE" = "fuzz" ]; then
   PRISM_CC=(env "AFL_PATH=$AFL_PATH_ARG" "AFL_LLVM_INSTRUMENT=PCGUARD" afl-clang-fast)
 else
   PRISM_CC=("$CC_BIN")
+fi
+
+COMPILE_RUNNER=("${PRISM_CC[@]}")
+if [ "${FUZZ_CCACHE:-1}" != "0" ] && command -v ccache >/dev/null 2>&1; then
+  for cand in "${CCACHE_DIR:-}" "/ccache" "$FUZZ_ROOT/.cache/ccache" "${TMPDIR:-/tmp}/prism-fuzzer-ccache-$(id -u)"; do
+    [ -n "$cand" ] || continue
+    if mkdir -p "$cand" 2>/dev/null && [ -w "$cand" ]; then
+      ns="pdiff|mode=$MODE|img=${FUZZ_IMAGE_ID:-}|ijon=${AFL_LLVM_IJON:-0}|asan=${AFL_USE_ASAN:-0}|ubsan=${AFL_UBSAN_VERBOSE:-0}|msan=${AFL_USE_MSAN:-0}|lsan=${AFL_USE_LSAN:-0}"
+      if [ "${PRISM_CC[0]}" = "env" ]; then
+        COMPILE_RUNNER=("env" "CCACHE_DIR=$cand" "CCACHE_NOHASHDIR=1" "CCACHE_NAMESPACE=$ns" "${PRISM_CC[@]:1:2}" "ccache" "${PRISM_CC[@]:3}")
+      else
+        COMPILE_RUNNER=("env" "CCACHE_DIR=$cand" "CCACHE_NOHASHDIR=1" "CCACHE_NAMESPACE=$ns" "ccache" "${PRISM_CC[@]}")
+      fi
+      break
+    fi
+  done
 fi
 
 # Note: Mac/BSD nm/objcopy vs Linux ELF llvm-objcopy/objcopy compatibility:
@@ -104,8 +131,8 @@ fi
 build_isolated_side() {
   local side_tag=$1
   local prism_root=$2
-  local side_dir="$WORK_DIR/side_${side_tag}"
-  local out_archive="$WORK_DIR/libprism_side_${side_tag}.a"
+  local side_dir="$PDIFF_TMP_WORK/side_${side_tag}"
+  local out_archive="$PDIFF_TMP_WORK/libprism_side_${side_tag}.a"
   rm -rf "$side_dir" "$out_archive"
   mkdir -p "$side_dir/objs" "$side_dir/gen"
 
@@ -129,8 +156,6 @@ build_isolated_side() {
     -fPIC -fvisibility=hidden
     "-I$prism_root/include"
     "-I$FUZZ_ROOT/harnesses/prism/include"
-    "-DFUZZ_GIT_COMMIT=$git_commit"
-    "-DFUZZ_GIT_DIRTY=$git_dirty"
     "-DFUZZ_IJON_SIDE_SALT=$([ "$side_tag" = "a" ] && printf 0x13579bdfU || printf 0x2468ace0U)"
     ${ASAN_NO_DEAD_STRIP[@]+"${ASAN_NO_DEAD_STRIP[@]}"}
   )
@@ -140,15 +165,32 @@ build_isolated_side() {
   common_flags+=(${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"})
 
   local objs=()
+  local pids=()
+  local cmd_rc=0
   for src in "${srcs[@]}"; do
     local rel="${src#"$prism_root/src/"}"
     local obj="$side_dir/objs/${rel%.c}.o"
     mkdir -p "$(dirname "$obj")"
-    "${PRISM_CC[@]}" "${common_flags[@]}" -c "$src" -o "$obj"
+    (
+      "${COMPILE_RUNNER[@]}" "${common_flags[@]}" -c "$src" -o "$obj"
+    ) &
+    pids+=("$!")
     objs+=("$obj")
+    if [ "${#pids[@]}" -ge "$SUB_JOBS" ]; then
+      wait "${pids[0]}" || cmd_rc=1
+      pids=("${pids[@]:1}")
+    fi
   done
+  local pid
+  for pid in "${pids[@]+"${pids[@]}"}"; do
+    wait "$pid" || cmd_rc=1
+  done
+  [ "$cmd_rc" -eq 0 ] || exit 1
 
-  local side_scan_flags=()
+  local side_scan_flags=(
+    "-DFUZZ_GIT_COMMIT=$git_commit"
+    "-DFUZZ_GIT_DIRTY=$git_dirty"
+  )
   if [ -f "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" ] && [ -f "$prism_root/config.yml" ] && \
      grep -rq 'PM_SCOPE_NODE' "$prism_root/include" 2>/dev/null && \
      ruby "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" "$prism_root/config.yml" "$side_dir/gen/node_serialize_walk.inc" >/dev/null 2>&1; then
@@ -158,7 +200,7 @@ build_isolated_side() {
   fi
 
   local side_obj="$side_dir/objs/prism_diff_side.o"
-  "${PRISM_CC[@]}" "${common_flags[@]}" "${side_scan_flags[@]}" -c "$FUZZ_ROOT/harnesses/prism/prism_diff_side.c" -o "$side_obj"
+  "${COMPILE_RUNNER[@]}" "${common_flags[@]}" "${side_scan_flags[@]}" -c "$FUZZ_ROOT/harnesses/prism/prism_diff_side.c" -o "$side_obj"
   objs+=("$side_obj")
 
   ar rcs "$out_archive" "${objs[@]}"
@@ -188,9 +230,9 @@ build_isolated_side() {
 build_isolated_side "a" "$PRISM_A_ROOT"
 build_isolated_side "b" "$PRISM_B_ROOT"
 
-LIB_A="$WORK_DIR/libprism_side_a.a"
-LIB_B="$WORK_DIR/libprism_side_b.a"
-DRIVER_OBJ="$WORK_DIR/prism_diff.o"
+LIB_A="$PDIFF_TMP_WORK/libprism_side_a.a"
+LIB_B="$PDIFF_TMP_WORK/libprism_side_b.a"
+DRIVER_OBJ="$PDIFF_TMP_WORK/prism_diff.o"
 
 DRIVER_SRC="$FUZZ_ROOT/harnesses/prism/prism_diff.c"
 DRIVER_FLAGS=(-Wall -Wextra -Werror)
@@ -198,19 +240,19 @@ if [ "$MODE" = "verify" ]; then
   DRIVER_FLAGS+=(-DPRISM_PRISM_DIFF_NO_MAIN)
 fi
 
-"${PRISM_CC[@]}" -O1 -g -fno-omit-frame-pointer -std=c99 \
+"${COMPILE_RUNNER[@]}" -O1 -g -fno-omit-frame-pointer -std=c99 \
   "${DRIVER_FLAGS[@]}" \
   "-I$FUZZ_ROOT/harnesses/prism" \
   ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
   -c "$DRIVER_SRC" -o "$DRIVER_OBJ"
 
 tmp_out="$OUTPUT.tmp.$$"
-tmp_map="$OUTPUT.map.$$"
+tmp_map="$PDIFF_TMP_WORK/link.map"
 tmp_ids="$OUTPUT.ids.tmp.$$"
 rm -f "$tmp_out" "$tmp_map" "$tmp_ids"
 if [ "$MODE" = "verify" ]; then
-  RUNNER_OBJ="$WORK_DIR/verify_runner.o"
-  "${PRISM_CC[@]}" -O1 -g -fno-omit-frame-pointer -std=c99 -Wall -Wextra \
+  RUNNER_OBJ="$PDIFF_TMP_WORK/verify_runner.o"
+  "${COMPILE_RUNNER[@]}" -O1 -g -fno-omit-frame-pointer -std=c99 -Wall -Wextra \
     ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \
     -c "$FUZZ_ROOT/triage/verify_runner.c" -o "$RUNNER_OBJ"
   "${PRISM_CC[@]}" -O1 -g ${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"} \

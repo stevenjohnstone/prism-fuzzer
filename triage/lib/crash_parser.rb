@@ -319,14 +319,26 @@ module FuzzTriage
       [o.b, crashed, timed_out]
     end
 
+    def run_testcase_supports_symbolize?
+      method(:run_testcase).parameters.any? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+    end
+
+    def invoke_run_testcase(executable, input_file, symbolize: true)
+      if symbolize || !run_testcase_supports_symbolize?
+        run_testcase(executable, input_file)
+      else
+        run_testcase(executable, input_file, symbolize: false)
+      end
+    end
+
     def run_crash_testcase(executable, input_file, symbolize: true)
       crash_timeout = env_crash_timeout_seconds
-      out, crashed, timed_out = with_testcase_timeout(crash_timeout) { run_testcase(executable, input_file, symbolize: symbolize) }
+      out, crashed, timed_out = with_testcase_timeout(crash_timeout) { invoke_run_testcase(executable, input_file, symbolize: symbolize) }
       return [out, crashed, timed_out] unless !crashed && timed_out
 
       # Retry once on transient wall-clock timeouts (e.g. parallel fuzz.diff DWARF backtrace contention)
       retry_timeout = [crash_timeout * 2, 30].max
-      with_testcase_timeout(retry_timeout) { run_testcase(executable, input_file, symbolize: symbolize) }
+      with_testcase_timeout(retry_timeout) { invoke_run_testcase(executable, input_file, symbolize: symbolize) }
     end
 
     def classify_crash_execution(crash_dir, crash_input, executable, triage_dir: TESTCASES_DIR)
@@ -420,7 +432,7 @@ module FuzzTriage
       # Non-INVARIANT crashes rely on symbolized frame names for signature hashing;
       # INVARIANT[...] signatures use only the INVARIANT line, deferring symbolization
       # until the single winning leader input per new bucket is published.
-      if crashed && !invariant_line_present?(testcase_output)
+      if crashed && !invariant_line_present?(testcase_output) && run_testcase_supports_symbolize?
         sym_out, sym_crashed, sym_timed_out = run_crash_testcase(executable, crash_input, symbolize: true)
         if sym_crashed
           testcase_output = sym_out

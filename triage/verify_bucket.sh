@@ -727,22 +727,49 @@ build_verify_runner() {
         "$FUZZ_ROOT/harnesses/prism/fuzz.c"
         "$FUZZ_ROOT/triage/verify_runner.c"
       )
-      local obj_dir="$cache_dir/.cross_objs.$$"
+      local obj_dir
+      obj_dir="$(mktemp -d "${TMPDIR:-/tmp}/pf-verify-cross.XXXXXX")"
       local tmp_cross="$bin$cross_suffix.tmp.$$"
-      rm -rf "$obj_dir" "$tmp_cross"
-      mkdir -p "$obj_dir"
+      rm -f "$tmp_cross"
+      local vjobs="${JOBS:-8}"
+      case "$vjobs" in ''|*[!0-9]*|0) vjobs=4 ;; esac
+      local cc_wrap=("$cc")
+      if [ "${FUZZ_CCACHE:-1}" != "0" ] && command -v ccache >/dev/null 2>&1; then
+        for cand in "${CCACHE_DIR:-}" "/ccache" "$FUZZ_ROOT/.cache/ccache" "${TMPDIR:-/tmp}/prism-fuzzer-ccache-$(id -u)"; do
+          [ -n "$cand" ] || continue
+          if mkdir -p "$cand" 2>/dev/null && [ -w "$cand" ]; then
+            cc_wrap=("env" "CCACHE_DIR=$cand" "CCACHE_NOHASHDIR=1" "CCACHE_NAMESPACE=verify|$profile|${FUZZ_IMAGE_ID:-}" "ccache" "$cc")
+            break
+          fi
+        done
+      fi
       local objs=()
-      local src obj
+      local pids=()
+      local c_rc=0
+      local src obj idx=0
       for src in "${cross_srcs[@]}"; do
-        obj="$obj_dir/$(printf '%s' "$src" | tr '/.' '__').o"
-        if ! "$cc" --target="$cross_triplet" -isystem "/usr/$cross_triplet/include" \
-            "${flags[@]}" -c "$src" -o "$obj"; then
-          rm -rf "$obj_dir" "$tmp_cross" "$tmp_bin"
-          echo "verify_bucket.sh: failed to compile 32-bit verify_runner ($profile) against '$REPO_ROOT'" >&2
-          exit 125
-        fi
+        obj="$obj_dir/${idx}_$(basename "$src" .c).o"
+        idx=$((idx + 1))
+        (
+          "${cc_wrap[@]}" --target="$cross_triplet" -isystem "/usr/$cross_triplet/include" \
+            "${flags[@]}" -c "$src" -o "$obj"
+        ) &
+        pids+=("$!")
         objs+=("$obj")
+        if [ "${#pids[@]}" -ge "$vjobs" ]; then
+          wait "${pids[0]}" || c_rc=1
+          pids=("${pids[@]:1}")
+        fi
       done
+      local pid
+      for pid in "${pids[@]+"${pids[@]}"}"; do
+        wait "$pid" || c_rc=1
+      done
+      if [ "$c_rc" -ne 0 ]; then
+        rm -rf "$obj_dir" "$tmp_cross" "$tmp_bin"
+        echo "verify_bucket.sh: failed to compile 32-bit verify_runner ($profile) against '$REPO_ROOT'" >&2
+        exit 125
+      fi
       if ! "$cross_gcc" -no-pie -fsanitize=address,undefined "${objs[@]}" ${cross_ldflags[@]+"${cross_ldflags[@]}"} -o "$tmp_cross"; then
         rm -rf "$obj_dir" "$tmp_cross" "$tmp_bin"
         echo "verify_bucket.sh: failed to link 32-bit verify_runner ($profile) against '$REPO_ROOT'" >&2
@@ -773,11 +800,34 @@ build_verify_runner() {
       if [ "$has_legacy_shims" -eq 1 ]; then
         proxy_flags+=("${probe_arr[@]}" -Wno-shorten-64-to-32 -Wno-implicit-function-declaration)
       fi
-      if ! "$cc" "${proxy_flags[@]}" "${proxy_srcs[@]}" -o "$tmp_bin"; then
-        rm -f "$tmp_cross" "$tmp_bin"
+      local proxy_dir
+      proxy_dir="$(mktemp -d "${TMPDIR:-/tmp}/pf-verify-proxy.XXXXXX")"
+      local proxy_objs=()
+      pids=()
+      c_rc=0
+      idx=0
+      for src in "${proxy_srcs[@]}"; do
+        obj="$proxy_dir/${idx}_$(basename "$src" .c).o"
+        idx=$((idx + 1))
+        (
+          "${cc_wrap[@]}" "${proxy_flags[@]}" -c "$src" -o "$obj"
+        ) &
+        pids+=("$!")
+        proxy_objs+=("$obj")
+        if [ "${#pids[@]}" -ge "$vjobs" ]; then
+          wait "${pids[0]}" || c_rc=1
+          pids=("${pids[@]:1}")
+        fi
+      done
+      for pid in "${pids[@]+"${pids[@]}"}"; do
+        wait "$pid" || c_rc=1
+      done
+      if [ "$c_rc" -ne 0 ] || ! "$cc" "${proxy_flags[@]}" "${proxy_objs[@]}" -o "$tmp_bin"; then
+        rm -rf "$proxy_dir" "$tmp_cross" "$tmp_bin"
         echo "verify_bucket.sh: failed to compile 64-bit proxy verify_runner ($profile) against '$REPO_ROOT'" >&2
         exit 125
       fi
+      rm -rf "$proxy_dir"
       mv -f "$tmp_cross" "$bin$cross_suffix"
     else
       shopt -s nullglob
@@ -788,12 +838,47 @@ build_verify_runner() {
         "$FUZZ_ROOT/harnesses/prism/fuzz.c"
         "$FUZZ_ROOT/triage/verify_runner.c"
       )
-
-      if ! "$cc" "${flags[@]}" "${srcs[@]}" -o "$tmp_bin"; then
-        rm -f "$tmp_bin"
+      local vjobs="${JOBS:-8}"
+      case "$vjobs" in ''|*[!0-9]*|0) vjobs=4 ;; esac
+      local cc_wrap=("$cc")
+      if [ "${FUZZ_CCACHE:-1}" != "0" ] && command -v ccache >/dev/null 2>&1; then
+        for cand in "${CCACHE_DIR:-}" "/ccache" "$FUZZ_ROOT/.cache/ccache" "${TMPDIR:-/tmp}/prism-fuzzer-ccache-$(id -u)"; do
+          [ -n "$cand" ] || continue
+          if mkdir -p "$cand" 2>/dev/null && [ -w "$cand" ]; then
+            cc_wrap=("env" "CCACHE_DIR=$cand" "CCACHE_NOHASHDIR=1" "CCACHE_NAMESPACE=verify|$profile|${FUZZ_IMAGE_ID:-}" "ccache" "$cc")
+            break
+          fi
+        done
+      fi
+      local obj_dir
+      obj_dir="$(mktemp -d "${TMPDIR:-/tmp}/pf-verify-host.XXXXXX")"
+      local objs=()
+      local pids=()
+      local c_rc=0
+      local src obj idx=0
+      for src in "${srcs[@]}"; do
+        obj="$obj_dir/${idx}_$(basename "$src" .c).o"
+        idx=$((idx + 1))
+        (
+          "${cc_wrap[@]}" "${flags[@]}" -c "$src" -o "$obj"
+        ) &
+        pids+=("$!")
+        objs+=("$obj")
+        if [ "${#pids[@]}" -ge "$vjobs" ]; then
+          wait "${pids[0]}" || c_rc=1
+          pids=("${pids[@]:1}")
+        fi
+      done
+      local pid
+      for pid in "${pids[@]+"${pids[@]}"}"; do
+        wait "$pid" || c_rc=1
+      done
+      if [ "$c_rc" -ne 0 ] || ! "$cc" "${flags[@]}" "${objs[@]}" -o "$tmp_bin"; then
+        rm -rf "$obj_dir" "$tmp_bin"
         echo "verify_bucket.sh: failed to compile verify_runner ($profile) against '$REPO_ROOT'" >&2
         exit 125
       fi
+      rm -rf "$obj_dir"
     fi
     mv -f "$tmp_bin" "$bin"
     current_fp="$(compute_build_fingerprint "$REPO_ROOT" "$prism_b" "$FUZZ_ROOT" "$cc" "${flags[@]}")"

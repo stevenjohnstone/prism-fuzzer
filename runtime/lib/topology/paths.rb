@@ -160,7 +160,7 @@ module PrismFuzzer
       if stage
         stage.note(msg)
       else
-        puts msg
+        (@log_progress_mutex ||= Mutex.new).synchronize { puts msg }
       end
     end
 

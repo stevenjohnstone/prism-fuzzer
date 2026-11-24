@@ -104,6 +104,7 @@ module PrismFuzzer
           op.on("--skip-build", "Skip binary build") { opts[:skip_build] = true }
           op.on("--in-container-step", "Internal flag for container build dispatch") { opts[:in_container_step] = true }
           op.on("--build-ruby", "Build custom ruby source ref if different from /opt/ruby") { opts[:build_ruby] = true }
+          op.on("-j", "--jobs N", Integer, "Maximum parallel build jobs") { |v| ENV["JOBS"] = v.to_s if v && v > 0 }
           op.on("--dry-run", "Print planned actions without executing") { opts[:dry_run] = true }
           op.on("--no-stage", "--pure", "Compute plan-launch output without staging (for plan-launch)") { opts[:no_stage] = true }
           op.on("--force", "Force Docker rebuild (for docker-build)") { opts[:force] = true }

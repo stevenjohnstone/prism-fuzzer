@@ -1,8 +1,207 @@
 # frozen_string_literal: true
 
+require "tmpdir"
+
 module PrismFuzzer
   module Topology
+    # Bounded worker/token pool shared across concurrent target builds and
+    # per-translation-unit `-c` compilations so total compiler/linker concurrency
+    # never exceeds `jobs` while keeping all cores busy.
+    class BuildPool
+      attr_reader :jobs
+
+      def initialize(jobs)
+        @jobs = [jobs.to_i, 1].max
+        @tokens = Thread::Queue.new
+        @jobs.times { @tokens.push(:token) }
+        @parent_stage = defined?(PrismFuzzer::Progress) ? PrismFuzzer::Progress.current_stage : nil
+      end
+
+      def with_slot
+        @tokens.pop
+        begin
+          yield
+        ensure
+          @tokens.push(:token)
+        end
+      end
+
+      def parallel_map(items, max_threads: @jobs)
+        arr = Array(items)
+        return [] if arr.empty?
+        return arr.map { |item| yield item } if arr.size == 1 || @jobs <= 1 || max_threads <= 1
+
+        results = Array.new(arr.size)
+        work_q = Thread::Queue.new
+        arr.each_with_index { |item, idx| work_q.push([item, idx]) }
+        err_lock = Mutex.new
+        first_err = nil
+        worker_count = [arr.size, [max_threads.to_i, 1].max].min
+
+        threads = Array.new(worker_count) do
+          Thread.new do
+            prev_stage = Thread.current[:prism_fuzzer_progress_stage]
+            Thread.current[:prism_fuzzer_progress_stage] = @parent_stage
+            begin
+              loop do
+                break if err_lock.synchronize { !first_err.nil? }
+
+                pair = begin
+                  work_q.pop(true)
+                rescue ThreadError
+                  break
+                end
+                item, idx = pair
+                begin
+                  results[idx] = yield item
+                rescue StandardError => e
+                  err_lock.synchronize { first_err ||= e }
+                  break
+                end
+              end
+            ensure
+              Thread.current[:prism_fuzzer_progress_stage] = prev_stage
+            end
+          end
+        end
+
+        threads.each(&:join)
+        raise first_err if first_err
+
+        results
+      end
+    end
+
     module_function
+
+    CCACHE_ENV_KEYS = %w[
+      AFL_LLVM_INSTRUMENT AFL_LLVM_IJON AFL_LLVM_CMPLOG AFL_LLVM_ONLY_FSRV
+      AFL_USE_ASAN AFL_USE_UBSAN AFL_USE_MSAN AFL_USE_LSAN AFL_UBSAN_VERBOSE
+    ].freeze
+
+    def default_build_jobs(explicit = nil)
+      [explicit, ENV["JOBS"], ENV["FUZZ_BUILD_JOBS"]].each do |cand|
+        next if cand.nil? || cand.to_s.strip.empty?
+
+        n = cand.to_i
+        return n if n >= 1
+      end
+      [[Etc.nprocessors, 1].max, 16].min
+    rescue StandardError
+      4
+    end
+
+    def artifact_lock(key)
+      guard = (@artifact_locks_guard ||= Mutex.new)
+      lock = guard.synchronize do
+        @artifact_locks ||= {}
+        @artifact_locks[key] ||= Mutex.new
+      end
+      lock.synchronize { yield }
+    end
+
+    def run_build_cmd(pool, *cmd, chdir: nil, env: nil, allow_fail: false)
+      if pool
+        pool.with_slot { run_cmd(*cmd, chdir: chdir, env: env, allow_fail: allow_fail) }
+      else
+        run_cmd(*cmd, chdir: chdir, env: env, allow_fail: allow_fail)
+      end
+    end
+
+    def ccache_executable
+      return nil if ENV["FUZZ_CCACHE"].to_s.strip == "0"
+
+      path_val = ENV.fetch("PATH", "")
+      if defined?(@ccache_cached_path) && @ccache_cached_path_env == path_val
+        return @ccache_cached_path
+      end
+
+      found = path_val.split(File::PATH_SEPARATOR).filter_map do |dir|
+        next if dir.empty?
+
+        cand = File.join(dir, "ccache")
+        cand if File.file?(cand) && File.executable?(cand)
+      end.first
+      @ccache_cached_path_env = path_val
+      @ccache_cached_path = found
+    end
+
+    def resolve_ccache_dir(fuzz_root:)
+      candidates = []
+      env_dir = ENV["CCACHE_DIR"].to_s.strip
+      candidates << env_dir unless env_dir.empty?
+      candidates << "/ccache"
+      candidates << File.join(fuzz_root, ".cache", "ccache") if fuzz_root
+      candidates << File.join(Dir.tmpdir, "prism-fuzzer-ccache-#{Process.uid}")
+
+      candidates.each do |dir|
+        begin
+          FileUtils.mkdir_p(dir) unless Dir.exist?(dir)
+          return dir if Dir.exist?(dir) && File.writable?(dir)
+        rescue SystemCallError
+          next
+        end
+      end
+      nil
+    end
+
+    def afl_stamp_signature(afl_stamp)
+      return "none" unless afl_stamp && File.file?(afl_stamp)
+
+      st = File.stat(afl_stamp)
+      "#{st.size}:#{st.mtime.to_i}"
+    rescue SystemCallError
+      "none"
+    end
+
+    def ccache_compile_wrapper(cc_bin, base_env, fuzz_root:, afl_stamp: nil, extra_ns: nil)
+      ccache = ccache_executable
+      return [[cc_bin], base_env] unless ccache
+
+      cdir = resolve_ccache_dir(fuzz_root: fuzz_root)
+      return [[cc_bin], base_env] unless cdir
+
+      merged = (base_env || {}).dup
+      ns = ["cc=#{File.basename(cc_bin)}"]
+      img = ENV["FUZZ_IMAGE_ID"].to_s.strip
+      ns << "img=#{img[0, 19]}" unless img.empty?
+      ns << "afl=#{afl_stamp_signature(afl_stamp)}" if afl_stamp
+      ns << extra_ns if extra_ns && !extra_ns.empty?
+      CCACHE_ENV_KEYS.each do |k|
+        val = merged.key?(k) ? merged[k] : ENV[k]
+        ns << "#{k}=#{val}" if val && !val.to_s.empty?
+      end
+      merged["CCACHE_DIR"] = cdir
+      merged["CCACHE_NOHASHDIR"] = "1"
+      merged["CCACHE_NAMESPACE"] = ns.join("|")
+      [[ccache, cc_bin], merged]
+    end
+
+    def with_tmp_obj_dir(prefix, build_dir:)
+      safe = prefix.to_s.gsub(/[^a-zA-Z0-9._-]/, "_")
+      suffix = "#{safe}-#{Process.pid}-#{Thread.current.object_id}-#{rand(1_000_000)}"
+      base = begin
+        td = Dir.tmpdir
+        File.writable?(td) ? td : build_dir
+      rescue StandardError
+        build_dir
+      end
+      dir = File.join(base, "pf-objs-#{suffix}")
+      FileUtils.mkdir_p(dir)
+      yield dir
+    ensure
+      FileUtils.rm_rf(dir) if dir && Dir.exist?(dir)
+    end
+
+    def compile_objects_parallel!(pool, items, cc_bin:, base_env: nil, fuzz_root:, build_dir:, prefix:, afl_stamp: nil, extra_ns: nil)
+      cc_cmd, comp_env = ccache_compile_wrapper(cc_bin, base_env, fuzz_root: fuzz_root, afl_stamp: afl_stamp, extra_ns: extra_ns)
+      indexed = items.each_with_index.map { |(src_file, flags), idx| [src_file, flags, idx] }
+      pool.parallel_map(indexed) do |(src_file, flags, idx)|
+        obj = File.join(prefix, "#{idx}_#{File.basename(src_file, '.c')}.o")
+        run_build_cmd(pool, *cc_cmd, *flags, "-c", src_file, "-o", obj, env: comp_env)
+        obj
+      end
+    end
 
     def read_prism_version(prism_dir)
       header = File.join(prism_dir, "include", "prism", "version.h")
@@ -176,7 +375,7 @@ module PrismFuzzer
       [c_files, explain_srcs, deps, inc_flags]
     end
 
-    def build_prism_parse!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false)
+    def build_prism_parse!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil)
       src = plan.fetch("sources").fetch(fspec.fetch("source"))
       src_dir = src.fetch("path")
       gen_dir = src.fetch("gen_dir")
@@ -214,39 +413,45 @@ module PrismFuzzer
       end
 
       override_flags, user_flags, override_macros, = fuzzer_override_flags(fspec)
+      prov_flags = source_provenance_flags(src)
 
-      flags = []
-      flags.concat(split_extra_flags("DEBUG_FLAGS"))
-      flags.concat(split_extra_flags("CPPFLAGS"))
-      flags.concat(split_extra_flags("CFLAGS"))
+      base_flags = []
+      base_flags.concat(split_extra_flags("DEBUG_FLAGS"))
+      base_flags.concat(split_extra_flags("CPPFLAGS"))
+      base_flags.concat(split_extra_flags("CFLAGS"))
       if (!sans.empty? || fspec["xallocator"]) && !override_macros.include?("PM_ARENA_INITIAL_SIZE")
-        flags << "-DPM_ARENA_INITIAL_SIZE=0"
+        base_flags << "-DPM_ARENA_INITIAL_SIZE=0"
       end
       if mode == "slow"
-        flags << "-DSLOW"
+        base_flags << "-DSLOW"
       else
-        flags.concat(%w[-DPRISM_EXCLUDE_SERIALIZATION -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT])
+        base_flags.concat(%w[-DPRISM_EXCLUDE_SERIALIZATION -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT])
       end
-      flags.concat(common_define_flags(plan, user_flags: user_flags, extra_flags: override_flags))
-      flags.concat(source_provenance_flags(src))
-      inc_dirs.each { |d| flags << "-I#{d}" }
-      flags << "-DPRISM_FUZZ_IJON" if ijon_enabled
+      base_flags.concat(common_define_flags(plan, user_flags: user_flags, extra_flags: override_flags))
+      inc_dirs.each { |d| base_flags << "-I#{d}" }
+      base_flags << "-DPRISM_FUZZ_IJON" if ijon_enabled
       if afl_mode != "cmplog" && !override_macros.include?("PRISM_FUZZ_INLINE_ASSERTS") && !override_macros.include?("PRISM_NO_INLINE_ASSERTS")
-        flags << "-DPRISM_FUZZ_INLINE_ASSERTS"
+        base_flags << "-DPRISM_FUZZ_INLINE_ASSERTS"
       end
-      flags << "-DPRISM_XALLOCATOR" if fspec["xallocator"]
-      flags << "-Dpm_strncasecmp=strncasecmp" if afl_mode == "cmplog"
-      flags.concat(override_flags)
+      base_flags << "-DPRISM_XALLOCATOR" if fspec["xallocator"]
+      base_flags << "-Dpm_strncasecmp=strncasecmp" if afl_mode == "cmplog"
+      base_flags.concat(override_flags)
+
       san_arg = sans.include?("asan") ? "-fsanitize=address,fuzzer" : "-fsanitize=fuzzer"
-      flags.concat([san_arg, "-ggdb3", "-std=c99"])
+      tu_san_flags = sans.include?("asan") ? ["-fsanitize=address"] : []
+      tu_flags = base_flags + tu_san_flags + %w[-ggdb3 -std=c99]
+      harness_tu_flags = base_flags + prov_flags + tu_san_flags + %w[-ggdb3 -std=c99]
+      flags = base_flags + prov_flags + [san_arg, "-ggdb3", "-std=c99"]
 
       cc_bin = afl_mode == "pcguard" ? "afl-clang-fast" : "afl-clang-lto"
-      env = { "AFL_PATH" => afl_path }
-      env["AFL_LLVM_INSTRUMENT"] = "PCGUARD" if afl_mode == "pcguard"
-      env.merge!(sanitizer_afl_env(sans))
-      env["AFL_LLVM_IJON"] = "1" if ijon_enabled
-      env["AFL_LLVM_ONLY_FSRV"] = "1" if afl_mode == "sand"
-      env["AFL_LLVM_CMPLOG"] = "1" if afl_mode == "cmplog"
+      compile_env = { "AFL_PATH" => afl_path }
+      compile_env["AFL_LLVM_INSTRUMENT"] = "PCGUARD" if afl_mode == "pcguard"
+      compile_env.merge!(sanitizer_afl_env(sans))
+      compile_env["AFL_LLVM_IJON"] = "1" if ijon_enabled
+      compile_env["AFL_LLVM_ONLY_FSRV"] = "1" if afl_mode == "sand"
+      compile_env["AFL_LLVM_CMPLOG"] = "1" if afl_mode == "cmplog"
+
+      env = compile_env.dup
       if fspec["document_ids"]
         ids_path = File.expand_path(fspec.fetch("ids_file"), fuzz_root)
         env["AFL_LLVM_DOCUMENT_IDS"] = ids_path
@@ -263,17 +468,29 @@ module PrismFuzzer
       end
       return if stamp_up_to_date?(stamp_file, out_path, bkey, deps) && (!fspec["document_ids"] || File.file?(env["AFL_LLVM_DOCUMENT_IDS"]))
 
+      pool ||= BuildPool.new(default_build_jobs)
       log_progress "building #{id} (#{mode}, sanitizers=#{sans.empty? ? 'none' : sans.join('+')}, afl=#{afl_mode}#{ijon_enabled ? '+ijon' : ''})"
       FileUtils.rm_f(env["AFL_LLVM_DOCUMENT_IDS"]) if env["AFL_LLVM_DOCUMENT_IDS"]
-      tmp_out = "#{out_path}.tmp.#{Process.pid}"
-      run_cmd(cc_bin, *flags, "-o", tmp_out, *c_files, *harness_srcs, env: env)
+      tmp_out = "#{out_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+      with_tmp_obj_dir("parse-#{id}", build_dir: build_dir) do |obj_dir|
+        items = c_files.map { |f| [f, tu_flags] } + harness_srcs.map { |f| [f, harness_tu_flags] }
+        objs = compile_objects_parallel!(
+          pool, items,
+          cc_bin: cc_bin, base_env: compile_env, fuzz_root: fuzz_root,
+          build_dir: build_dir, prefix: obj_dir, afl_stamp: afl_stamp
+        )
+        tmp_link = File.join(obj_dir, "linked.bin")
+        run_build_cmd(pool, cc_bin, *flags, "-o", tmp_link, *objs, env: env)
+        FileUtils.cp(tmp_link, tmp_out)
+        File.chmod(0o755 & ~File.umask, tmp_out)
+      end
       File.rename(tmp_out, out_path)
       record_stamp(stamp_file, bkey, out_path)
     ensure
       FileUtils.rm_f(tmp_out) if tmp_out && File.exist?(tmp_out)
     end
 
-    def build_prism_diff_ruby!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false)
+    def build_prism_diff_ruby!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil, sub_jobs: nil)
       prism_src = plan.fetch("sources").fetch(fspec.fetch("prism"))
       ruby_src = plan.fetch("sources").fetch(fspec.fetch("ruby"))
       out_path = File.expand_path(fspec.fetch("binary"), fuzz_root)
@@ -364,11 +581,16 @@ module PrismFuzzer
         cmd.push("--ruby-dir", ruby_src["oracle_dir"])
       end
       extra_cflags.each { |flag| cmd.push("--cflag", flag) }
-      run_cmd(*cmd, env: env)
+      run_env = env.dup
+      run_env["FUZZ_SUB_JOBS"] = sub_jobs.to_s if sub_jobs && sub_jobs > 0
+      if (cdir = resolve_ccache_dir(fuzz_root: fuzz_root))
+        run_env["CCACHE_DIR"] ||= cdir
+      end
+      run_build_cmd(pool, *cmd, env: run_env)
       record_stamp(stamp_file, bkey, out_path)
     end
 
-    def build_prism_diff_prism!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false)
+    def build_prism_diff_prism!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil, sub_jobs: nil)
       a_src = plan.fetch("sources").fetch(fspec.fetch("prism_a"))
       b_src = plan.fetch("sources").fetch(fspec.fetch("prism_b"))
       out_path = File.expand_path(fspec.fetch("binary"), fuzz_root)
@@ -454,11 +676,58 @@ module PrismFuzzer
         "--output", out_path
       ]
       extra_cflags.each { |flag| cmd.push("--cflag", flag) }
-      run_cmd(*cmd, env: env.empty? ? nil : env)
+      run_env = env.dup
+      run_env["FUZZ_SUB_JOBS"] = sub_jobs.to_s if sub_jobs && sub_jobs > 0
+      if (cdir = resolve_ccache_dir(fuzz_root: fuzz_root))
+        run_env["CCACHE_DIR"] ||= cdir
+      end
+      run_build_cmd(pool, *cmd, env: run_env.empty? ? nil : run_env)
       record_stamp(stamp_file, bkey, out_path)
     end
 
-    def build_oracle64_helpers!(source_spec, fspec, plan:, fuzz_root:, build_dir:)
+    def ensure_oracle64_prism_objs!(source_spec, c_files, h_files, base_flags, fuzz_root:, build_dir:, pool: nil)
+      src_dir = source_spec.fetch("path")
+      obj_flags = %w[-fPIC -fvisibility=hidden] + base_flags
+      o_key = build_key_digest({
+        kind: "oracle64_prism_objs",
+        src: source_spec["commit"] || src_dir,
+        patch: source_spec.dig("resolved", "patch_digest"),
+        flags: obj_flags
+      })
+      obj_dir = File.join(build_dir, ".objs", "oracle64-#{o_key}")
+      stamp_file = File.join(obj_dir, ".stamp.json")
+      expected_objs = c_files.each_with_index.map do |src_file, idx|
+        File.join(obj_dir, "#{idx}_#{File.basename(src_file, '.c')}.o")
+      end
+      deps = c_files + h_files
+
+      artifact_lock("oracle64-objs:#{obj_dir}") do
+        prev = read_json(stamp_file)
+        objs_present = prev && prev["key"] == o_key && expected_objs.all? { |p| File.file?(p) }
+        up_to_date = if objs_present
+                       min_obj_mtime = expected_objs.map { |p| File.mtime(p) }.min
+                       max_in = newest_mtime(deps)
+                       !max_in || max_in <= min_obj_mtime
+                     else
+                       false
+                     end
+        return expected_objs if up_to_date
+
+        FileUtils.rm_rf(obj_dir)
+        FileUtils.mkdir_p(obj_dir)
+        eff_pool = pool || BuildPool.new(default_build_jobs)
+        items = c_files.map { |f| [f, obj_flags] }
+        built = compile_objects_parallel!(
+          eff_pool, items,
+          cc_bin: "clang", base_env: nil, fuzz_root: fuzz_root,
+          build_dir: build_dir, prefix: obj_dir
+        )
+        write_json_atomic(stamp_file, { "key" => o_key, "built_at" => Time.now.utc.to_i })
+        built
+      end
+    end
+
+    def build_oracle64_helpers!(source_spec, fspec, plan:, fuzz_root:, build_dir:, pool: nil)
       src_dir = source_spec.fetch("path")
       gen_dir = source_spec.fetch("gen_dir")
       c_files = prism_c_sources(src_dir)
@@ -481,13 +750,6 @@ module PrismFuzzer
       mutator_path = File.join(build_dir, mutator_name)
       m_key = build_key_digest({ kind: "mutator64", src: source_spec["commit"], flags: base_flags })
       m_stamp = File.join(build_dir, ".stamps", "#{File.basename(mutator_name)}.json")
-      unless stamp_up_to_date?(m_stamp, mutator_path, m_key, deps)
-        log_progress "building 64-bit AST oracle mutator (#{mutator_name})"
-        tmp = "#{mutator_path}.tmp.#{Process.pid}"
-        run_cmd("clang", "-fPIC", "-shared", "-fvisibility=hidden", "-Wl,-Bsymbolic", *base_flags, *c_files, mutator_src, "-o", tmp)
-        File.rename(tmp, mutator_path)
-        record_stamp(m_stamp, m_key, mutator_path)
-      end
 
       arch = fspec.fetch("arch")
       cfg = CROSS_ARCH_CONFIGS.fetch(arch)
@@ -499,16 +761,49 @@ module PrismFuzzer
                     [%(-DORACLE_REPLAY_TARGET_NAME="#{target_bin_cstr}")]
       r_key = build_key_digest({ kind: "oracle_repro", arch: arch, target_name: target_bin_name, src: source_spec["commit"], flags: repro_flags })
       r_stamp = File.join(build_dir, ".stamps", "#{File.basename(repro_name)}.json")
-      unless stamp_up_to_date?(r_stamp, repro_path, r_key, deps)
-        log_progress "building 64-bit oracle replay wrapper for #{arch} (#{repro_name})"
-        tmp = "#{repro_path}.tmp.#{Process.pid}"
-        run_cmd("clang", *repro_flags, *c_files, mutator_src, "-o", tmp)
-        File.rename(tmp, repro_path)
-        record_stamp(r_stamp, r_key, repro_path)
+
+      need_mutator = !stamp_up_to_date?(m_stamp, mutator_path, m_key, deps)
+      need_repro = !stamp_up_to_date?(r_stamp, repro_path, r_key, deps)
+      return unless need_mutator || need_repro
+
+      eff_pool = pool || BuildPool.new(default_build_jobs)
+      prism_objs = ensure_oracle64_prism_objs!(
+        source_spec, c_files, h_files, base_flags,
+        fuzz_root: fuzz_root, build_dir: build_dir, pool: eff_pool
+      )
+
+      artifact_lock("mutator:#{mutator_path}") do
+        unless stamp_up_to_date?(m_stamp, mutator_path, m_key, deps)
+          log_progress "building 64-bit AST oracle mutator (#{mutator_name})"
+          FileUtils.mkdir_p(File.dirname(mutator_path))
+          tmp = "#{mutator_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+          begin
+            run_build_cmd(eff_pool, "clang", "-fPIC", "-shared", "-fvisibility=hidden", "-Wl,-Bsymbolic", *base_flags, *prism_objs, mutator_src, "-o", tmp)
+            File.rename(tmp, mutator_path)
+            record_stamp(m_stamp, m_key, mutator_path)
+          ensure
+            FileUtils.rm_f(tmp) if tmp && File.exist?(tmp)
+          end
+        end
+      end
+
+      artifact_lock("repro:#{repro_path}") do
+        unless stamp_up_to_date?(r_stamp, repro_path, r_key, deps)
+          log_progress "building 64-bit oracle replay wrapper for #{arch} (#{repro_name})"
+          FileUtils.mkdir_p(File.dirname(repro_path))
+          tmp = "#{repro_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+          begin
+            run_build_cmd(eff_pool, "clang", *repro_flags, *prism_objs, mutator_src, "-o", tmp)
+            File.rename(tmp, repro_path)
+            record_stamp(r_stamp, r_key, repro_path)
+          ensure
+            FileUtils.rm_f(tmp) if tmp && File.exist?(tmp)
+          end
+        end
       end
     end
 
-    def build_prism_cross_oracle!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false)
+    def build_prism_cross_oracle!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil)
       src = plan.fetch("sources").fetch(fspec.fetch("source"))
       arch = fspec.fetch("arch")
       cfg = CROSS_ARCH_CONFIGS.fetch(arch)
@@ -553,7 +848,8 @@ module PrismFuzzer
         return
       end
 
-      build_oracle64_helpers!(src, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir)
+      eff_pool = pool || BuildPool.new(default_build_jobs)
+      build_oracle64_helpers!(src, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, pool: eff_pool)
 
       c_files = prism_c_sources(src_dir)
       h_files = prism_headers(src_dir)
@@ -569,7 +865,8 @@ module PrismFuzzer
         afl_stamp
       ]
       pcguard_so = File.join(afl_path, "SanitizerCoveragePCGUARD.so")
-      cflags = [
+      prov_flags = source_provenance_flags(src)
+      base_cflags = [
         "--target=#{triple}", "-isystem", "/usr/#{triple}/include",
         *cfg[:extra_cflags],
         "-O1", "-g", "-fno-omit-frame-pointer", "-std=c99",
@@ -582,44 +879,43 @@ module PrismFuzzer
         "-DPRISM_OSS_FUZZ", *arena_flags,
         "-DPRISM_EXCLUDE_JSON", "-DPRISM_EXCLUDE_PRETTYPRINT",
         *common_define_flags(plan, user_flags: user_flags, extra_flags: override_flags),
-        *source_provenance_flags(src),
         *san_cflags,
         "-fpass-plugin=#{pcguard_so}"
       ]
-      cflags << "-DPRISM_FUZZ_IJON" if ijon_enabled
-      cflags.concat(override_flags)
+      base_cflags << "-DPRISM_FUZZ_IJON" if ijon_enabled
+      base_cflags.concat(override_flags)
+      harness_cflags = base_cflags + prov_flags
 
-      bkey = build_key_digest({ shape: "prism_cross_oracle", id: id, arch: arch, afl: afl_mode, ijon: ijon_enabled, sans: sans, src: src["commit"], patch: src.dig("resolved", "patch_digest"), cflags: cflags })
+      bkey = build_key_digest({ shape: "prism_cross_oracle", id: id, arch: arch, afl: afl_mode, ijon: ijon_enabled, sans: sans, src: src["commit"], patch: src.dig("resolved", "patch_digest"), cflags: harness_cflags })
       return if stamp_up_to_date?(stamp_file, out_path, bkey, deps)
 
       mode_desc = (sans.map(&:upcase) + ["PCGUARD"] + (ijon_enabled ? ["IJON"] : [])).join("+")
       log_progress "building 32-bit #{arch.upcase} fuzz target #{id} (qemu-#{arch} #{mode_desc})"
-      obj_dir = File.join(build_dir, "cross-#{id.gsub(/[^a-zA-Z0-9._-]/, '_')}")
-      FileUtils.rm_rf(obj_dir)
-      FileUtils.mkdir_p(obj_dir)
       FileUtils.mkdir_p(File.dirname(out_path))
       clang_env = ijon_enabled ? { "AFL_LLVM_IJON" => "1" } : nil
-      objs = (c_files + harness_srcs).map do |src_file|
-        obj = File.join(obj_dir, "#{src_file.gsub(/[^a-zA-Z0-9_-]/, '_')}.o")
-        run_cmd("clang", *cflags, "-c", src_file, "-o", obj, env: clang_env)
-        obj
+      tmp_out = "#{out_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+      with_tmp_obj_dir("cross-#{id}", build_dir: build_dir) do |obj_dir|
+        items = c_files.map { |f| [f, base_cflags] } + harness_srcs.map { |f| [f, harness_cflags] }
+        objs = compile_objects_parallel!(
+          eff_pool, items,
+          cc_bin: "clang", base_env: clang_env, fuzz_root: fuzz_root,
+          build_dir: build_dir, prefix: obj_dir, afl_stamp: afl_stamp, extra_ns: "cross=#{arch}"
+        )
+        run_build_cmd(
+          eff_pool,
+          "#{triple}-gcc", "-no-pie", *san_ldflags, *objs,
+          File.join(afl_path, "aflpp_driver-#{cfg[:rt_suffix]}.o"),
+          File.join(afl_path, "afl-compiler-rt-#{cfg[:rt_suffix]}.o"),
+          *cfg[:extra_ldflags], "-ldl", "-lpthread", "-o", tmp_out
+        )
       end
-      tmp_out = "#{out_path}.tmp.#{Process.pid}"
-      run_cmd(
-        "#{triple}-gcc", "-no-pie", *san_ldflags, *objs,
-        File.join(afl_path, "aflpp_driver-#{cfg[:rt_suffix]}.o"),
-        File.join(afl_path, "afl-compiler-rt-#{cfg[:rt_suffix]}.o"),
-        *cfg[:extra_ldflags], "-ldl", "-lpthread", "-o", tmp_out
-      )
       File.rename(tmp_out, out_path)
-      FileUtils.rm_rf(obj_dir)
       record_stamp(stamp_file, bkey, out_path)
     ensure
-      FileUtils.rm_rf(obj_dir) if obj_dir && File.exist?(obj_dir)
       FileUtils.rm_f(tmp_out) if tmp_out && File.exist?(tmp_out)
     end
 
-    def build_explain_for_source!(src_id, out_rel, plan:, fuzz_root:, build_dir:)
+    def build_explain_for_source!(src_id, out_rel, plan:, fuzz_root:, build_dir:, pool: nil)
       src = plan.fetch("sources").fetch(src_id)
       src_dir = src.fetch("path")
       gen_dir = src.fetch("gen_dir")
@@ -634,10 +930,19 @@ module PrismFuzzer
       bkey = build_key_digest({ kind: "explain", cc: cc, src: src["commit"] || src_dir, out: out_path, flags: flags })
       return out_path if stamp_up_to_date?(stamp_file, out_path, bkey, deps)
 
+      eff_pool = pool || BuildPool.new(default_build_jobs)
       log_progress "building fuzz diagnostic explain helper (#{src_id} -> #{out_rel})"
       FileUtils.mkdir_p(File.dirname(out_path))
-      tmp_out = "#{out_path}.tmp.#{Process.pid}"
-      run_cmd(cc, *flags, *c_files, *explain_srcs, "-lm", "-o", tmp_out)
+      tmp_out = "#{out_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+      with_tmp_obj_dir("explain-#{src_id}", build_dir: build_dir) do |obj_dir|
+        items = (c_files + explain_srcs).map { |f| [f, flags] }
+        objs = compile_objects_parallel!(
+          eff_pool, items,
+          cc_bin: cc, base_env: nil, fuzz_root: fuzz_root,
+          build_dir: build_dir, prefix: obj_dir
+        )
+        run_build_cmd(eff_pool, cc, *flags, *objs, "-lm", "-o", tmp_out)
+      end
       File.rename(tmp_out, out_path)
       record_stamp(stamp_file, bkey, out_path)
       out_path
@@ -645,7 +950,7 @@ module PrismFuzzer
       FileUtils.rm_f(tmp_out) if tmp_out && File.exist?(tmp_out)
     end
 
-    def build_cross_explain!(arch, plan:, fuzz_root: locate_fuzz_root, build_dir: nil, out_path: nil, src_id: nil)
+    def build_cross_explain!(arch, plan:, fuzz_root: locate_fuzz_root, build_dir: nil, out_path: nil, src_id: nil, pool: nil)
       cfg = CROSS_ARCH_CONFIGS.fetch(arch.to_s) do
         raise TopologyError, "Unsupported cross-arch explain target '#{arch}'"
       end
@@ -677,28 +982,27 @@ module PrismFuzzer
       bkey = build_key_digest({ kind: "cross_explain", arch: arch.to_s, src: src["commit"] || src_dir, out: out_path, flags: cflags })
       return out_path if stamp_up_to_date?(stamp_file, out_path, bkey, deps)
 
+      eff_pool = pool || BuildPool.new(default_build_jobs)
       log_progress "building #{arch} diagnostic explain helper -> #{path_relative_or_abs(out_path, fuzz_root)}"
-      obj_dir = File.join(build_dir, "cross-explain-#{arch}")
-      FileUtils.rm_rf(obj_dir)
-      FileUtils.mkdir_p(obj_dir)
       FileUtils.mkdir_p(File.dirname(out_path))
-      objs = (c_files + explain_srcs).map do |src_file|
-        obj = File.join(obj_dir, "#{src_file.gsub(/[^a-zA-Z0-9_-]/, '_')}.o")
-        run_cmd("clang", *cflags, "-c", src_file, "-o", obj)
-        obj
+      tmp_out = "#{out_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+      with_tmp_obj_dir("cross-explain-#{arch}", build_dir: build_dir) do |obj_dir|
+        items = (c_files + explain_srcs).map { |f| [f, cflags] }
+        objs = compile_objects_parallel!(
+          eff_pool, items,
+          cc_bin: "clang", base_env: nil, fuzz_root: fuzz_root,
+          build_dir: build_dir, prefix: obj_dir, extra_ns: "cross=#{arch}"
+        )
+        run_build_cmd(eff_pool, "#{triple}-gcc", "-no-pie", *objs, "-lm", *cfg[:extra_ldflags], "-o", tmp_out)
       end
-      tmp_out = "#{out_path}.tmp.#{Process.pid}"
-      run_cmd("#{triple}-gcc", "-no-pie", *objs, "-lm", *cfg[:extra_ldflags], "-o", tmp_out)
       File.rename(tmp_out, out_path)
-      FileUtils.rm_rf(obj_dir)
       record_stamp(stamp_file, bkey, out_path)
       out_path
     ensure
-      FileUtils.rm_rf(obj_dir) if obj_dir && File.exist?(obj_dir)
       FileUtils.rm_f(tmp_out) if tmp_out && File.exist?(tmp_out)
     end
 
-    def build_ruby_ext_for_source!(src_id, src_spec, build_dir:, primary: false)
+    def build_ruby_ext_for_source!(src_id, src_spec, build_dir:, primary: false, pool: nil, sub_jobs: nil)
       src_dir = src_spec.fetch("path")
       extconf = File.join(src_dir, "ext", "prism", "extconf.rb")
       return nil unless File.file?(extconf)
@@ -712,13 +1016,14 @@ module PrismFuzzer
 
       log_progress "building Ruby C extension for grammar generator (#{src_id})"
       FileUtils.mkdir_p(ext_dir)
-      run_cmd(RbConfig.ruby, extconf, chdir: ext_dir)
-      run_cmd(ENV.fetch("MAKE", "make"), chdir: ext_dir)
+      make_jobs = [sub_jobs || 4, 1].max
+      run_build_cmd(pool, RbConfig.ruby, extconf, chdir: ext_dir)
+      run_build_cmd(pool, ENV.fetch("MAKE", "make"), "-j#{make_jobs}", chdir: ext_dir)
       record_stamp(stamp_file, bkey, so_path)
       ext_dir
     end
 
-    def build_plan!(plan, fuzz_root: locate_fuzz_root, build_dir: nil, dry_run: false)
+    def build_plan!(plan, fuzz_root: locate_fuzz_root, build_dir: nil, dry_run: false, jobs: nil)
       ws = workspace_paths(plan, fuzz_root: fuzz_root, build_dir: build_dir)
       build_dir = ws[:build_dir]
       shared_build = default_build_dir(fuzz_root)
@@ -727,34 +1032,61 @@ module PrismFuzzer
       afl_path = File.directory?(File.join(build_dir, "afl")) ? File.join(build_dir, "afl") : File.join(shared_build, "afl")
       raise TopologyError, "Missing AFL++ instrumentation stamp (#{afl_stamp}); build inside Docker via 'make build'" unless dry_run || File.file?(afl_stamp)
 
-      plan.fetch("fuzzers").each do |id, fspec|
-        case fspec.fetch("shape")
-        when "prism_parse"
-          build_prism_parse!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: dry_run)
-        when "prism_diff_ruby"
-          build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: dry_run)
-        when "prism_diff_prism"
-          build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: dry_run)
-        when "prism_cross_oracle"
-          build_prism_cross_oracle!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: dry_run)
-        else
+      fuzzers = plan.fetch("fuzzers")
+      fuzzers.each do |_id, fspec|
+        unless %w[prism_parse prism_diff_ruby prism_diff_prism prism_cross_oracle].include?(fspec.fetch("shape"))
           raise TopologyError, "No builder registered for shape '#{fspec['shape']}'"
         end
       end
 
-      return plan if dry_run
-
-      plan.fetch("explain_binaries", {}).each do |src_id, out_rel|
-        build_explain_for_source!(src_id, out_rel, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir)
+      if dry_run
+        fuzzers.each do |id, fspec|
+          case fspec.fetch("shape")
+          when "prism_parse"
+            build_prism_parse!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
+          when "prism_diff_ruby"
+            build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
+          when "prism_diff_prism"
+            build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
+          when "prism_cross_oracle"
+            build_prism_cross_oracle!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
+          end
+        end
+        return plan
       end
 
-      ext_sources = Array(plan["grammar_ext_sources"])
-      ext_sources.each_with_index do |src_id, idx|
+      pool = BuildPool.new(default_build_jobs(jobs))
+      script_count = fuzzers.values.count { |fs| %w[prism_diff_ruby prism_diff_prism].include?(fs["shape"]) } + Array(plan["grammar_ext_sources"]).size
+      sub_jobs = [[pool.jobs / [script_count, 1].max, 2].max, 8].min
+
+      tasks = []
+      fuzzers.each do |id, fspec|
+        tasks << lambda do
+          case fspec.fetch("shape")
+          when "prism_parse"
+            build_prism_parse!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool)
+          when "prism_diff_ruby"
+            build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
+          when "prism_diff_prism"
+            build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
+          when "prism_cross_oracle"
+            build_prism_cross_oracle!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool)
+          end
+        end
+      end
+
+      plan.fetch("explain_binaries", {}).each do |src_id, out_rel|
+        tasks << -> { build_explain_for_source!(src_id, out_rel, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, pool: pool) }
+      end
+
+      Array(plan["grammar_ext_sources"]).each_with_index do |src_id, idx|
         src_spec = plan.dig("sources", src_id)
         next unless src_spec
 
-        build_ruby_ext_for_source!(src_id, src_spec, build_dir: build_dir, primary: idx == 0)
+        tasks << -> { build_ruby_ext_for_source!(src_id, src_spec, build_dir: build_dir, primary: idx == 0, pool: pool, sub_jobs: sub_jobs) }
       end
+
+      pool.parallel_map(tasks, max_threads: tasks.size, &:call)
 
       write_json_atomic(File.join(build_dir, "topology.resolved.json"), plan)
       plan

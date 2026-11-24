@@ -221,8 +221,10 @@ module PrismFuzzer
         return if clean.empty?
 
         if @inner
-          @io.puts(clean)
-          @io.flush
+          @lock.synchronize do
+            @io.puts(clean)
+            @io.flush
+          end
           return
         end
 
@@ -248,8 +250,10 @@ module PrismFuzzer
 
         if @inner
           if preview
-            @io.puts(stripped)
-            @io.flush
+            @lock.synchronize do
+              @io.puts(stripped)
+              @io.flush
+            end
           end
           return
         end

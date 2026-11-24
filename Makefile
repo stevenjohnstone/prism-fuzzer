@@ -68,6 +68,10 @@ REPORTS_DIR ?= $(call _abs_or_curdir,$(_WS_REPORTS_REL))
 FUZZ_DOCKER_IMAGE ?= prism-fuzzer
 FUZZ_CONTAINER_NAME ?= prism-fuzzer
 FUZZ_TMPFS_FLAGS ?= --tmpfs /tmp:rw,exec,mode=1777
+FUZZ_CCACHE_VOLUME ?= prism-fuzzer-ccache
+FUZZ_CCACHE_FLAGS ?= $(if $(filter 0,$(FUZZ_CCACHE)),,-v $(FUZZ_CCACHE_VOLUME):/ccache)
+JOBS ?=
+_JOBS_DOCKER_ENV := $(if $(strip $(JOBS)),-e JOBS=$(strip $(JOBS)),)
 RUBY_GIT_REF ?=
 
 FUZZ_MAX_INPUT_SIZE ?= 1024
@@ -172,7 +176,7 @@ _build-all: $(FUZZ_AFL_STAMP)
 build:
 ifeq ($(IN_DOCKER),)
 	$(Q) $(MAKE) docker-build targets-sync
-	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) $(_LIMITS_DOCKER_ENV) -e FUZZ_FLAGS="$(FUZZ_FLAGS)" -e FUZZ_IMAGE_ID="$$(docker image inspect -f '{{.Id}}' $(FUZZ_DOCKER_IMAGE) 2>/dev/null || true)" -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) make _build-all
+	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) $(_LIMITS_DOCKER_ENV) $(_JOBS_DOCKER_ENV) -e FUZZ_FLAGS="$(FUZZ_FLAGS)" -e FUZZ_IMAGE_ID="$$(docker image inspect -f '{{.Id}}' $(FUZZ_DOCKER_IMAGE) 2>/dev/null || true)" -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) make _build-all
 else
 	$(Q) $(MAKE) targets-sync
 	$(Q) $(MAKE) _build-all

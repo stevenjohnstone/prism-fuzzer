@@ -69,5 +69,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends ruby \
 
 RUN gem install --no-document concurrent-ruby:1.3.8 lrama:0.8.0 lrama-fuzz:0.1.0
 
+RUN apt-get update && apt-get install -y --no-install-recommends ccache \
+    && mkdir -p /ccache && chown $USERNAME:$USERNAME /ccache \
+    && rm -rf /var/lib/apt/lists/*
+ENV CCACHE_DIR=/ccache
+ENV CCACHE_MAXSIZE=5G
+ENV CCACHE_NOHASHDIR=1
+
 WORKDIR /prism-fuzzer
 USER $USERNAME

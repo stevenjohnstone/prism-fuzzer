@@ -34,7 +34,8 @@ module PrismFuzzer
         target: nil,
         prism_dir: nil,
         gen_dir: nil,
-        output: nil
+        output: nil,
+        jobs: nil
       }
 
       OptionParser.new do |op|
@@ -46,6 +47,7 @@ module PrismFuzzer
         op.on("--corpus-dir PATH", "Seed corpus directory") { |v| opts[:corpus_dir] = File.expand_path(v) }
         op.on("--bin-dir PATH", "Snapshot bin directory") { |v| opts[:bin_dir] = File.expand_path(v) }
         op.on("--build-ruby", "Build configured ruby source ref if different from /opt/ruby") { opts[:build_ruby] = true }
+        op.on("-j", "--jobs N", Integer, "Maximum parallel build jobs (default: JOBS env or min(nproc, 16))") { |v| opts[:jobs] = v }
         op.on("--dry-run", "Print build commands without executing them") { opts[:dry_run] = true }
         op.on("--no-stage", "--pure", "Compute plan-launch output without filesystem or subprocess staging") { opts[:no_stage] = true }
         op.on("--relative", "Output paths relative to repo root where applicable (for paths subcommand)") { opts[:relative] = true }
@@ -187,7 +189,7 @@ module PrismFuzzer
           end
           resolved = plan
         end
-        PrismFuzzer::Topology.build_plan!(resolved, fuzz_root: fuzz_root, build_dir: build_dir, dry_run: opts[:dry_run])
+        PrismFuzzer::Topology.build_plan!(resolved, fuzz_root: fuzz_root, build_dir: build_dir, dry_run: opts[:dry_run], jobs: opts[:jobs])
         return 0 if opts[:dry_run]
 
         prov_rb = File.join(fuzz_root, "runtime", "provenance.rb")
