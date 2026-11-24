@@ -386,6 +386,45 @@ class TargetsSyncAndPatchesTest < Minitest::Test
     end
   end
 
+  def test_three_way_patch_fallback_uses_mirror_object_alternates
+    with_tmpdir("targets-3way-") do |workdir|
+      ws = prepare_dsl_workspace(workdir)
+      repo = ws[:upstream][:repo]
+
+      # Checkout v1 in synthetic upstream and rewrite an adjacent context line in
+      # include/prism/internal/arena.h so direct `git apply --check` fails on 0001,
+      # requiring `git apply --3way` to fetch preimage blobs from the cached mirror.
+      arena_h = File.join(repo, "include/prism/internal/arena.h")
+      run_cmd("git", "-C", repo, "checkout", "-q", ws[:upstream][:v1])
+      patched_ctx = File.read(arena_h).sub(
+        "    /* The number of bytes consumed so far. */",
+        "    /* Bytes consumed so far (upstream doc tweak shifting 0001 context). */"
+      )
+      File.write(arena_h, patched_ctx)
+      run_cmd("git", "-C", repo, "add", "include/prism/internal/arena.h")
+      run_cmd("git", "-C", repo, "commit", "-q", "-m", "Upstream context tweak requiring 3-way")
+      v4_sha, = run_cmd("git", "-C", repo, "rev-parse", "HEAD")
+      v4_sha = v4_sha.strip
+
+      sync_out, = assert_topo(
+        "sync",
+        "--topology", ws[:topo_path],
+        "--build-dir", ws[:build_dir],
+        "--cache-dir", ws[:cache_dir],
+        "--json",
+        env: { "PRISM_B_REF" => v4_sha }
+      )
+      d = JSON.parse(sync_out)
+      b = d.dig("sources", "prism_b")
+      refute_nil b
+      assert_equal v4_sha, b["commit"]
+      assert_equal 5, Array(b.dig("resolved", "applied_patches")).size
+      merged_arena = File.read(File.join(b["path"], "include/prism/internal/arena.h"))
+      assert_includes merged_arena, "pm_arena_align_t"
+      assert_includes merged_arena, "upstream doc tweak shifting 0001 context"
+    end
+  end
+
   private
 
   def topo_cli

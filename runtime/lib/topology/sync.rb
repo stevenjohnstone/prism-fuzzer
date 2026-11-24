@@ -87,9 +87,23 @@ module PrismFuzzer
       end
     end
 
-    def apply_prism_patches!(worktree_dir, patch_files)
+    def mirror_objects_dir(mirror)
+      return nil unless mirror
+
+      base = File.expand_path(mirror)
+      [File.join(base, "objects"), File.join(base, ".git", "objects")].find { |d| File.directory?(d) }
+    end
+
+    def apply_prism_patches!(worktree_dir, patch_files, mirror: nil)
       applied = []
       skipped = []
+      alt_objects = mirror_objects_dir(mirror)
+      three_way_env = if alt_objects
+                        prev_alt = ENV["GIT_ALTERNATE_OBJECT_DIRECTORIES"].to_s.strip
+                        val = prev_alt.empty? ? alt_objects : "#{prev_alt}#{File::PATH_SEPARATOR}#{alt_objects}"
+                        { "GIT_ALTERNATE_OBJECT_DIRECTORIES" => val }
+                      end
+
       patch_files.each do |patch|
         name = File.basename(patch)
         _, _, can_apply = run_cmd("git", "-C", worktree_dir, "apply", "--check", patch, allow_fail: true)
@@ -105,7 +119,7 @@ module PrismFuzzer
           next
         end
 
-        _, err_3way, st_3way = run_cmd("git", "-C", worktree_dir, "apply", "--3way", patch, allow_fail: true)
+        _, err_3way, st_3way = run_cmd("git", "-C", worktree_dir, "apply", "--3way", patch, env: three_way_env, allow_fail: true)
         if st_3way.success?
           applied << name
         else
@@ -224,7 +238,7 @@ module PrismFuzzer
       end
 
       checkout_detached_worktree!(mirror, sha, worktree_dir, role: role)
-      applied, skipped = apply_prism_patches!(worktree_dir, patch_files)
+      applied, skipped = apply_prism_patches!(worktree_dir, patch_files, mirror: mirror)
       tpl_ran = ensure_prism_templates!(worktree_dir, spec["templates"])
       validate_prism_root!(worktree_dir)
       ensure_harness_generated_inc!(worktree_dir, gen_dir, fuzz_root: fuzz_root)

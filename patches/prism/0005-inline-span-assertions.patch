@@ -1,23 +1,23 @@
-From 002e85d87806e73937680cb2c4581f511b44755d Mon Sep 17 00:00:00 2001
+From f91e89bedfbf5a9b3ff3cdefb7901429b2a57651 Mon Sep 17 00:00:00 2001
 From: prism-fuzzer <fuzz@prism-fuzzer.local>
-Date: Mon, 23 Nov 2026 20:32:33 +0000
+Date: Tue, 24 Nov 2026 00:25:09 +0000
 Subject: [PATCH] Add optional inline AST and diagnostic span invariant
  assertions
 
 ---
- include/prism/internal/fuzz_assert.h | 126 ++++++++++++++++++++++
+ include/prism/internal/fuzz_assert.h | 131 +++++++++++++++++++++++++++
  include/prism/internal/node.h        |   9 ++
- src/prism.c                          | 153 ++++++++++++++++++++++++++-
- templates/src/node.c.erb             |  28 +++++
- 4 files changed, 313 insertions(+), 3 deletions(-)
+ src/prism.c                          | 129 +++++++++++++++++++++++++-
+ templates/src/node.c.erb             |  28 ++++++
+ 4 files changed, 294 insertions(+), 3 deletions(-)
  create mode 100644 include/prism/internal/fuzz_assert.h
 
 diff --git a/include/prism/internal/fuzz_assert.h b/include/prism/internal/fuzz_assert.h
 new file mode 100644
-index 0000000..39c196b
+index 000000000..acb0ee7b2
 --- /dev/null
 +++ b/include/prism/internal/fuzz_assert.h
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,131 @@
 +#ifndef PRISM_INTERNAL_FUZZ_ASSERT_H
 +#define PRISM_INTERNAL_FUZZ_ASSERT_H
 +
@@ -25,7 +25,6 @@ index 0000000..39c196b
 +#define PRISM_FUZZ_INLINE_ASSERTS_ENABLED 1
 +
 +#include "prism/compiler/branch.h"
-+#include "prism/compiler/format.h"
 +#include "prism/compiler/inline.h"
 +#include "prism/compiler/noreturn.h"
 +
@@ -34,8 +33,14 @@ index 0000000..39c196b
 +#include <stddef.h>
 +#include <stdint.h>
 +
++#if defined(__GNUC__) || defined(__clang__)
++#define PM_FUZZ_PRINTF_ATTR __attribute__((format(printf, 1, 2)))
++#else
++#define PM_FUZZ_PRINTF_ATTR
++#endif
++
 +PRISM_NORETURN void
-+pm_fuzz_span_fail(const char *fmt, ...) PRISM_ATTRIBUTE_FORMAT(1, 2);
++pm_fuzz_span_fail(const char *fmt, ...) PM_FUZZ_PRINTF_ATTR;
 +
 +static PRISM_INLINE const char *
 +pm_fuzz_loc_violation_kind(uint32_t start, uint32_t length) {
@@ -145,7 +150,7 @@ index 0000000..39c196b
 +
 +#endif
 diff --git a/include/prism/internal/node.h b/include/prism/internal/node.h
-index 9519a3e..a08c45a 100644
+index 9519a3ed0..a08c45a7d 100644
 --- a/include/prism/internal/node.h
 +++ b/include/prism/internal/node.h
 @@ -8,6 +8,7 @@
@@ -177,10 +182,10 @@ index 9519a3e..a08c45a 100644
  }
  
 diff --git a/src/prism.c b/src/prism.c
-index 270dd3c..1faf6e0 100644
+index 5521bb16e..112ae77f2 100644
 --- a/src/prism.c
 +++ b/src/prism.c
-@@ -95,14 +95,108 @@ pm_version(void) {
+@@ -94,14 +94,108 @@ pm_version(void) {
  #define FL PM_NODE_FLAGS
  #define UP PM_NODE_UPCAST
  
@@ -292,7 +297,7 @@ index 270dd3c..1faf6e0 100644
  #define PM_NODES_LENGTH(left_, right_) (PM_NODE_END(right_) - PM_NODE_START(left_))
  
  #define PM_TOKEN_NODE_LENGTH(parser_, token_, node_) (PM_NODE_END(node_) - PM_TOKEN_START(parser_, token_))
-@@ -129,6 +223,7 @@ pm_location_init(uint32_t start, uint32_t length) {
+@@ -128,6 +222,7 @@ pm_location_init(uint32_t start, uint32_t length) {
  
  #define PM_LOCATION_INIT(start_, length_) pm_location_init((start_), (length_))
  #define PM_LOCATION_INIT_BOUNDS(start_, end_) PM_LOCATION_INIT((start_), U32((end_) - (start_)))
@@ -300,12 +305,12 @@ index 270dd3c..1faf6e0 100644
  #define PM_LOCATION_INIT_UNSET PM_LOCATION_INIT(0, 0)
  #define PM_LOCATION_INIT_TOKEN(parser_, token_) PM_LOCATION_INIT(PM_TOKEN_START(parser_, token_), PM_TOKEN_LENGTH(token_))
  #define PM_LOCATION_INIT_NODE(node_) UP(node_)->location
-@@ -526,10 +621,35 @@ debug_lex_state_set(pm_parser_t *parser, pm_lex_state_t state, char const * call
+@@ -467,8 +562,33 @@ lex_state_set(pm_parser_t *parser, pm_lex_state_t state) {
  /**
   * Append an error to the list of errors on the parser.
   */
 +#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
- static PRISM_INLINE void
++static PRISM_INLINE void
 +pm_fuzz_assert_diag_span(const pm_parser_t *parser, const char *list_name, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id, const char *site) {
 +    size_t parsed_size = (size_t) (parser->end - parser->start);
 +    const char *kind = pm_fuzz_bounded_violation_kind(start, length, parsed_size);
@@ -326,7 +331,7 @@ index 270dd3c..1faf6e0 100644
 +}
 +#endif
 +
-+static PRISM_INLINE void
+ static PRISM_INLINE void
  pm_parser_err(pm_parser_t *parser, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id) {
 +#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
 +    pm_fuzz_assert_diag_span(parser, "error", start, length, diag_id, "pm_parser_err");
@@ -334,28 +339,7 @@ index 270dd3c..1faf6e0 100644
      pm_diagnostic_list_append(&parser->metadata_arena, &parser->error_list, start, length, diag_id);
  }
  
- /**
-  * Append an error to the list of errors on the parser using the location of the
-@@ -580,8 +700,18 @@ pm_parser_err_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id_
- /**
-  * Append an error to the list of errors on the parser using a format string.
-  */
-+#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
-+#define PM_PARSER_ERR_FORMAT(parser_, start_, length_, diag_id_, ...) \
-+    do { \
-+        uint32_t pm_fuzz_s_ = (start_); \
-+        uint32_t pm_fuzz_l_ = (length_); \
-+        pm_fuzz_assert_diag_span((parser_), "error", pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __func__); \
-+        pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->error_list, pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __VA_ARGS__); \
-+    } while (0)
-+#else
- #define PM_PARSER_ERR_FORMAT(parser_, start_, length_, diag_id_, ...) \
-     pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->error_list, start_, length_, diag_id_, __VA_ARGS__)
-+#endif
- 
- /**
-  * Append an error to the list of errors on the parser using the location of the
-@@ -616,6 +746,9 @@ pm_parser_err_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id_
+@@ -559,6 +679,9 @@ pm_parser_err_node_content(pm_parser_t *parser, const pm_node_t *node, pm_diagno
   */
  static PRISM_INLINE void
  pm_parser_warn(pm_parser_t *parser, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id) {
@@ -365,27 +349,8 @@ index 270dd3c..1faf6e0 100644
      pm_diagnostic_list_append(&parser->metadata_arena, &parser->warning_list, start, length, diag_id);
  }
  
-@@ -641,8 +774,18 @@ pm_parser_warn_node(pm_parser_t *parser, const pm_node_t *node, pm_diagnostic_id
-  * Append a warning to the list of warnings on the parser using a format string
-  * and the given location.
-  */
-+#ifdef PRISM_FUZZ_INLINE_ASSERTS_ENABLED
-+#define PM_PARSER_WARN_FORMAT(parser_, start_, length_, diag_id_, ...) \
-+    do { \
-+        uint32_t pm_fuzz_s_ = (start_); \
-+        uint32_t pm_fuzz_l_ = (length_); \
-+        pm_fuzz_assert_diag_span((parser_), "warning", pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __func__); \
-+        pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->warning_list, pm_fuzz_s_, pm_fuzz_l_, (diag_id_), __VA_ARGS__); \
-+    } while (0)
-+#else
- #define PM_PARSER_WARN_FORMAT(parser_, start_, length_, diag_id_, ...) \
-     pm_diagnostic_list_append_format(&(parser_)->metadata_arena, &(parser_)->warning_list, start_, length_, diag_id_, __VA_ARGS__)
-+#endif
- 
- /**
-  * Append a warning to the list of warnings on the parser using the location of
 diff --git a/templates/src/node.c.erb b/templates/src/node.c.erb
-index 842a978..e9404f0 100644
+index 842a978b4..e9404f012 100644
 --- a/templates/src/node.c.erb
 +++ b/templates/src/node.c.erb
 @@ -2,8 +2,28 @@
