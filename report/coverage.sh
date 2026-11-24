@@ -148,7 +148,7 @@ ruby -rdigest -rjson -rfileutils -rshellwords - "$WORK_DIR" "$PAIRS_META" "$LIVE
     unless File.file?(File.join(prism_root, "include", "prism.h")) && File.directory?(File.join(prism_root, "src"))
       abort "Error: invalid Prism target directory '#{prism_root}' for coverage pair '#{p["id"]}' (run make targets-sync first)."
     end
-    if defined?(PrismFuzzer::Topology) && !File.file?(File.join(p["gen_dir"].to_s, "node_locations.inc"))
+    if defined?(PrismFuzzer::Topology) && (!File.file?(File.join(p["gen_dir"].to_s, "node_locations.inc")) || !File.file?(File.join(p["gen_dir"].to_s, "prism_fuzz_compat.h")))
       PrismFuzzer::Topology.ensure_harness_generated_inc!(prism_root, p["gen_dir"].to_s, fuzz_root: repo_root)
     end
   end

@@ -20,6 +20,11 @@ $(PRISM_A_GEN_DIR)/node_locations.inc: harnesses/prism/gen_node_locations.rb $(P
 	$(ECHO) "generating $@"
 	$(Q) ruby ./harnesses/prism/gen_node_locations.rb $(PRISM_A_DIR)/config.yml $@
 
+$(PRISM_A_GEN_DIR)/prism_fuzz_compat.h: harnesses/prism/gen_api_compat.rb $(PRISM_A_GEN_DIR)/node_locations.inc $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP)
+	$(Q) $(MAKEDIRS) $(@D)
+	$(ECHO) "generating $@"
+	$(Q) ruby ./harnesses/prism/gen_api_compat.rb --include-dir $(PRISM_A_DIR)/include --subloc-inc $(PRISM_A_GEN_DIR)/node_locations.inc --output $@
+
 # ------------------------------------------------------------------------------
 # Incremental test binary builds (cached under build/test/)
 # ------------------------------------------------------------------------------
@@ -77,7 +82,7 @@ TEST_EXPLAIN_ASAN_BIN := $(TEST_BUILD_DIR)/bin/fuzz.explain.asan
 TEST_EXPLAIN_OBJS := $(patsubst $(PRISM_A_DIR)/src/%.c,$(TEST_BUILD_DIR)/obj/explain/%.o,$(PRISM_A_SOURCES))
 TEST_EXPLAIN_ASAN_OBJS := $(patsubst $(PRISM_A_DIR)/src/%.c,$(TEST_BUILD_DIR)/obj/explain-asan/%.o,$(PRISM_A_SOURCES))
 TEST_EXPLAIN_HARNESS_SRCS := harnesses/prism/explain.c harnesses/prism/explain/analysis.c harnesses/prism/explain/prettyprint.c harnesses/prism/explain/json_digest.c
-TEST_EXPLAIN_HARNESS_DEPS := harnesses/prism/explain/explain.h harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/include/fuzz_json.h $(PRISM_A_GEN_DIR)/node_locations.inc $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP)
+TEST_EXPLAIN_HARNESS_DEPS := harnesses/prism/explain/explain.h harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/include/fuzz_json.h $(PRISM_A_GEN_DIR)/node_locations.inc $(PRISM_A_GEN_DIR)/prism_fuzz_compat.h $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP)
 TEST_EXPLAIN_HARNESS_OBJS := $(addprefix $(TEST_BUILD_DIR)/obj/explain/,harness_explain.o harness_explain_analysis.o harness_explain_prettyprint.o harness_explain_json_digest.o)
 TEST_EXPLAIN_ASAN_HARNESS_OBJS := $(addprefix $(TEST_BUILD_DIR)/obj/explain-asan/,harness_explain.o harness_explain_analysis.o harness_explain_prettyprint.o harness_explain_json_digest.o)
 TEST_EXPLAIN_CFLAGS := -O1 -std=c99 -I$(PRISM_A_DIR)/include -I$(PRISM_A_GEN_DIR) -Iharnesses/prism -DPRISM_DEPTH_MAXIMUM=128 -DPM_INTEGER_DIVIDE_THRESHOLD=8
@@ -138,7 +143,7 @@ $(TEST_EXPLAIN_ARM32_BIN): $(PRISM_A_SOURCES) $(TEST_EXPLAIN_HARNESS_SRCS) $(TES
 TEST_OSS_FUZZ_DIR := $(TEST_BUILD_DIR)/oss-fuzz
 TEST_OSS_FUZZ_SRC := $(TEST_OSS_FUZZ_DIR)/src-tmp
 TEST_OSS_FUZZ_STAMP := $(TEST_OSS_FUZZ_DIR)/built.stamp
-TEST_OSS_FUZZ_DEPS := $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_CONFIG_DEP) $(PRISM_A_STATE_DEP) harnesses/prism/parse.c harnesses/prism/fuzz.c harnesses/prism/include/fuzz_options.h harnesses/prism/gen_node_locations.rb runtime/corpus.rb $(RUNTIME_TOPOLOGY_DEPS) dict/prism.dict oss-fuzz/build.sh oss-fuzz/project.yaml oss-fuzz/prism_parse_fuzzer.options oss-fuzz/prism_full_fuzzer.options
+TEST_OSS_FUZZ_DEPS := $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_CONFIG_DEP) $(PRISM_A_STATE_DEP) harnesses/prism/parse.c harnesses/prism/fuzz.c harnesses/prism/include/fuzz_options.h harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb runtime/corpus.rb $(RUNTIME_TOPOLOGY_DEPS) dict/prism.dict oss-fuzz/build.sh oss-fuzz/project.yaml oss-fuzz/prism_parse_fuzzer.options oss-fuzz/prism_full_fuzzer.options
 
 $(TEST_OSS_FUZZ_STAMP): $(TEST_OSS_FUZZ_DEPS)
 	$(ECHO) "building OSS-Fuzz test binaries (ASan+UBSan and CmpLog)"
@@ -165,7 +170,7 @@ define RUN_TEST_STAGE
 	$(Q) rm -f $@ && $(TEST_STAGE_ENV) $(1) && touch $@
 endef
 
-TARGETS_COMMON_DEPS := $(TEST_RUNNER_DEPS) bin/topology.rb bin/campaign.rb bin/publish.rb lib/prism_fuzzer.rb lib/ruby_fuzz.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/common.rb runtime/fuzz_header.rb runtime/campaign_dsl.rb runtime/progress.rb runtime/json_schema.rb runtime/provenance.rb runtime/run.sh runtime/kill.sh runtime/status.rb topology.schema.json campaigns/default.rb $(wildcard patches/prism/*.patch) $(REPORT_LIB_DEPS) report/coverage.sh triage/triage.rb triage/cluster.rb triage/inspect.rb triage/explain.rb triage/target_worktree.sh harnesses/prism/coverage.c harnesses/prism/build_diff.sh harnesses/prism/gen_node_locations.rb harnesses/prism/gen_serialize_walk.rb
+TARGETS_COMMON_DEPS := $(TEST_RUNNER_DEPS) bin/topology.rb bin/campaign.rb bin/publish.rb lib/prism_fuzzer.rb lib/ruby_fuzz.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/common.rb runtime/fuzz_header.rb runtime/campaign_dsl.rb runtime/progress.rb runtime/json_schema.rb runtime/provenance.rb runtime/run.sh runtime/kill.sh runtime/status.rb topology.schema.json campaigns/default.rb $(wildcard patches/prism/*.patch) $(REPORT_LIB_DEPS) report/coverage.sh triage/triage.rb triage/cluster.rb triage/inspect.rb triage/explain.rb triage/target_worktree.sh harnesses/prism/coverage.c harnesses/prism/build_diff.sh harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb harnesses/prism/gen_serialize_walk.rb
 
 $(TEST_STAMPS_DIR)/targets_sync_and_patches.stamp: test/targets/sync_and_patches_test.rb $(TARGETS_COMMON_DEPS)
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/targets/sync_and_patches_test.rb)
@@ -185,7 +190,7 @@ $(TEST_STAMPS_DIR)/targets_launch_and_status.stamp: test/targets/launch_and_stat
 $(TEST_STAMPS_DIR)/targets_build_and_cross.stamp: test/targets/build_and_cross_test.rb $(TARGETS_COMMON_DEPS) Makefile test/tests.mk
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/targets/build_and_cross_test.rb)
 
-$(TEST_STAMPS_DIR)/prism_diff.stamp: test/prism_diff_test.rb $(TEST_RUNNER_DEPS) $(TEST_EXPLAIN_BIN) $(FUZZ_AFL_STAMP) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) $(FUZZ_PRISM_DIFF_DEPS) harnesses/prism/explain.c harnesses/prism/gen_node_locations.rb $(TRIAGE_COMMON_DEPS) bin/publish.rb
+$(TEST_STAMPS_DIR)/prism_diff.stamp: test/prism_diff_test.rb $(TEST_RUNNER_DEPS) $(TEST_EXPLAIN_BIN) $(FUZZ_AFL_STAMP) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) $(FUZZ_PRISM_DIFF_DEPS) harnesses/prism/explain.c harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb $(TRIAGE_COMMON_DEPS) bin/publish.rb
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) PRISM_DIFF_EXPLAIN_A_BIN="$(CURDIR)/$(TEST_EXPLAIN_BIN)" ruby test/run.rb test/prism_diff_test.rb)
 
 $(TEST_STAMPS_DIR)/afl_patch.stamp: test/test_afl_patch.sh $(FUZZ_AFL_STAMP) $(FUZZ_DOCKER_STAMP)
@@ -200,20 +205,20 @@ $(TEST_STAMPS_DIR)/sankey.stamp: test/sankey_test.rb $(TEST_RUNNER_DEPS) $(REPOR
 $(TEST_STAMPS_DIR)/accel_smoke.stamp: test/test_accel.sh $(TEST_ACCEL_BIN)
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ACCEL_BIN="$(CURDIR)/$(TEST_ACCEL_BIN)" ACCEL_SKIP_BUILD=1 ./test/test_accel.sh --smoke)
 
-$(TEST_STAMPS_DIR)/oss_fuzz.stamp: test/oss_fuzz_test.rb $(TEST_RUNNER_DEPS) $(TEST_OSS_FUZZ_STAMP) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_CONFIG_DEP) $(PRISM_A_STATE_DEP) harnesses/prism/fuzz.c harnesses/prism/parse.c harnesses/prism/gen_node_locations.rb runtime/corpus.rb oss-fuzz/build.sh oss-fuzz/project.yaml oss-fuzz/prism_parse_fuzzer.options oss-fuzz/prism_full_fuzzer.options
+$(TEST_STAMPS_DIR)/oss_fuzz.stamp: test/oss_fuzz_test.rb $(TEST_RUNNER_DEPS) $(TEST_OSS_FUZZ_STAMP) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_CONFIG_DEP) $(PRISM_A_STATE_DEP) harnesses/prism/fuzz.c harnesses/prism/parse.c harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb runtime/corpus.rb oss-fuzz/build.sh oss-fuzz/project.yaml oss-fuzz/prism_parse_fuzzer.options oss-fuzz/prism_full_fuzzer.options
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) OSS_FUZZ_SKIP_BUILD=1 OSS_FUZZ_OUT_DIR="$(CURDIR)/$(TEST_OSS_FUZZ_DIR)/out" OSS_FUZZ_CMPLOG_OUT_DIR="$(CURDIR)/$(TEST_OSS_FUZZ_DIR)/cmplog" ruby test/run.rb test/oss_fuzz_test.rb)
 
 # Modular triage suites
 $(TEST_STAMPS_DIR)/triage_signature.stamp: test/triage/signature_test.rb $(TEST_RUNNER_DEPS) triage/signature.sh triage/lib/signature.rb triage/halfempty.sh triage/halfempty_compare.sh
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/signature_test.rb)
 
-$(TEST_STAMPS_DIR)/triage_repro.stamp: test/triage/repro_test.rb $(TEST_RUNNER_DEPS) triage/triage.rb triage/verify_bucket.sh triage/signature.sh bin/topology.rb lib/prism_fuzzer.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/campaign_dsl.rb runtime/progress.rb campaigns/default.rb harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/parse.c harnesses/prism/gen_node_locations.rb harnesses/prism/gen_serialize_walk.rb runtime/corpus.rb $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP)
+$(TEST_STAMPS_DIR)/triage_repro.stamp: test/triage/repro_test.rb $(TEST_RUNNER_DEPS) triage/triage.rb triage/verify_bucket.sh triage/signature.sh bin/topology.rb lib/prism_fuzzer.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/campaign_dsl.rb runtime/progress.rb campaigns/default.rb harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/parse.c harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb harnesses/prism/gen_serialize_walk.rb runtime/corpus.rb $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP)
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/repro_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_pipeline.stamp: test/triage/pipeline_test.rb $(TEST_RUNNER_DEPS) $(FUZZ_AFL_STAMP) $(TRIAGE_COMMON_DEPS) harnesses/prism/include/fuzz_options.h
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/pipeline_test.rb)
 
-$(TEST_STAMPS_DIR)/triage_verify.stamp: test/triage/verify_test.rb $(TEST_RUNNER_DEPS) triage/verify_runner.c harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/include/fuzz_json.h harnesses/prism/gen_node_locations.rb $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) $(TRIAGE_COMMON_DEPS)
+$(TEST_STAMPS_DIR)/triage_verify.stamp: test/triage/verify_test.rb $(TEST_RUNNER_DEPS) triage/verify_runner.c harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/include/fuzz_json.h harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) $(TRIAGE_COMMON_DEPS)
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) REAL_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/main" ruby test/run.rb test/triage/verify_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_cluster.stamp: test/triage/cluster_test.rb $(TEST_RUNNER_DEPS) triage/verify_runner.c $(TRIAGE_COMMON_DEPS)

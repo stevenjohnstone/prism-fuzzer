@@ -290,7 +290,9 @@ class TriageOracleExplainTest < Minitest::Test
 
   def ensure_node_locations_inc(prism_a, workdir)
     cand = prism_a_gen_dir
-    return cand if cand && File.file?(File.join(cand, "node_locations.inc"))
+    if cand && File.file?(File.join(cand, "node_locations.inc")) && File.file?(File.join(cand, "prism_fuzz_compat.h"))
+      return cand
+    end
 
     local_gen = File.join(workdir, "gen")
     FileUtils.mkdir_p(local_gen)
@@ -298,6 +300,12 @@ class TriageOracleExplainTest < Minitest::Test
       repo_path("harnesses/prism/gen_node_locations.rb"),
       File.join(prism_a, "config.yml"),
       File.join(local_gen, "node_locations.inc")
+    )
+    assert_ruby_cmd(
+      repo_path("harnesses/prism/gen_api_compat.rb"),
+      "--include-dir", File.join(prism_a, "include"),
+      "--subloc-inc", File.join(local_gen, "node_locations.inc"),
+      "--output", File.join(local_gen, "prism_fuzz_compat.h")
     )
     local_gen
   end
@@ -498,7 +506,7 @@ class TriageOracleExplainTest < Minitest::Test
     %w[parse.c mutator_oracle64.c fuzz.c].each do |src|
       FileUtils.cp(repo_path("harnesses/prism", src), File.join(harness_dst, src))
     end
-    %w[gen_serialize_walk.rb gen_node_locations.rb].each do |gen_rb|
+    %w[gen_serialize_walk.rb gen_node_locations.rb gen_api_compat.rb].each do |gen_rb|
       src = repo_path("harnesses/prism", gen_rb)
       FileUtils.cp(src, File.join(harness_dst, gen_rb)) if File.file?(src)
     end

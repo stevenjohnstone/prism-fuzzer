@@ -3,6 +3,11 @@
 #endif
 
 #include <prism.h>
+#if defined(__has_include)
+#  if __has_include("prism_fuzz_compat.h")
+#    include "prism_fuzz_compat.h"
+#  endif
+#endif
 #ifndef PRISM_FUZZ_NO_INTERNAL_BUFFER
 #include "prism/internal/buffer.h"
 #endif

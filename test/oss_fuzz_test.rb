@@ -322,12 +322,20 @@ class OssFuzzTest < Minitest::Test
       FileUtils.mkdir_p([msan_dir, msan_gen_dir])
 
       inc_path = File.join(msan_gen_dir, "node_locations.inc")
+      compat_path = File.join(msan_gen_dir, "prism_fuzz_compat.h")
       assert_ruby_cmd(
         repo_path("harnesses", "prism", "gen_node_locations.rb"),
         File.join(prism_dir, "config.yml"),
         inc_path
       )
+      assert_ruby_cmd(
+        repo_path("harnesses", "prism", "gen_api_compat.rb"),
+        "--include-dir", File.join(prism_dir, "include"),
+        "--subloc-inc", inc_path,
+        "--output", compat_path
+      )
       assert_path_exists inc_path
+      assert_path_exists compat_path
 
       %w[fuzz.c parse.c].each do |src_name|
         obj_path = File.join(msan_dir, "#{src_name}.o")

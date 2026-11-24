@@ -101,7 +101,8 @@ jobs:
               runtime/corpus runtime/status triage/triage triage/bisect triage/cluster
               triage/explain triage/inspect triage/match triage/retriage triage/verify
               harnesses/prism/gen_diff_ids harnesses/prism/gen_node_locations
-              harnesses/prism/gen_serialize_walk report/report report/sankey bin/publish
+              harnesses/prism/gen_api_compat harnesses/prism/gen_serialize_walk
+              report/report report/sankey bin/publish
             ].each { |lib| require File.expand_path(lib) }
             new_priv = Object.private_instance_methods(false) - before_priv
             new_pub = Object.public_instance_methods(false) - before_pub

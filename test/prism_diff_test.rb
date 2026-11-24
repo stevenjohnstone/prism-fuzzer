@@ -443,6 +443,12 @@ class PrismDiffTest < Minitest::Test
       File.join(prism_root, "config.yml"),
       File.join(gen_dir, "node_locations.inc")
     )
+    assert_ruby_cmd(
+      repo_path("harnesses/prism/gen_api_compat.rb"),
+      "--include-dir", File.join(prism_root, "include"),
+      "--subloc-inc", File.join(gen_dir, "node_locations.inc"),
+      "--output", File.join(gen_dir, "prism_fuzz_compat.h")
+    )
 
     prism_srcs = Dir.glob(File.join(prism_root, "src/**/*.c")).sort
     explain_srcs = [repo_path("harnesses/prism/explain.c"), *Dir.glob(repo_path("harnesses/prism/explain/*.c")).sort]

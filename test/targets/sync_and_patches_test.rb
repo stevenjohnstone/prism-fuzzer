@@ -40,6 +40,7 @@ class TargetsSyncAndPatchesTest < Minitest::Test
       refute_nil gen, "missing prism_a gen_dir"
       assert_path_exists File.join(gen, "node_locations.inc")
       assert_path_exists File.join(gen, "node_serialize_walk.inc")
+      assert_path_exists File.join(gen, "prism_fuzz_compat.h")
 
       refute d.dig("sources", "prism_b"), "prism_b should be inactive"
       refute d.dig("fuzzers", "fuzz.prism_diff"), "fuzz.prism_diff should be inactive"

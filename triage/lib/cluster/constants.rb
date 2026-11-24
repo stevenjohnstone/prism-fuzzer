@@ -70,6 +70,7 @@ module FuzzClustering
     LLVMFuzzerTestOneInput
     fuzz_oracle32_fail
     pm_token_str
+    pm_token_string
     context_human
   ] + VISITOR_FUNCTIONS).freeze
 
@@ -180,6 +181,7 @@ module FuzzClustering
     pm_node_type
     pm_token_type
     pm_token_str
+    pm_token_string
     pm_parser_constant
     pm_parser_local_add
     pm_locals_find

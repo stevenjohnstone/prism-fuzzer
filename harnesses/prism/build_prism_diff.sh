@@ -187,14 +187,22 @@ build_isolated_side() {
   done
   [ "$cmd_rc" -eq 0 ] || exit 1
 
+  mkdir -p "$side_dir/gen"
+  if [ -f "$FUZZ_ROOT/harnesses/prism/gen_api_compat.rb" ]; then
+    ruby "$FUZZ_ROOT/harnesses/prism/gen_api_compat.rb" \
+      --include-dir "$prism_root/include" \
+      --no-subloc-check \
+      --output "$side_dir/gen/prism_fuzz_compat.h"
+  fi
   local side_scan_flags=(
+    "-I$side_dir/gen"
     "-DFUZZ_GIT_COMMIT=$git_commit"
     "-DFUZZ_GIT_DIRTY=$git_dirty"
   )
   if [ -f "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" ] && [ -f "$prism_root/config.yml" ] && \
      grep -rq 'PM_SCOPE_NODE' "$prism_root/include" 2>/dev/null && \
      ruby "$FUZZ_ROOT/harnesses/prism/gen_serialize_walk.rb" "$prism_root/config.yml" "$side_dir/gen/node_serialize_walk.inc" >/dev/null 2>&1; then
-    side_scan_flags+=("-I$side_dir/gen")
+    :
   else
     side_scan_flags+=(-DPRISM_FUZZ_NO_SERIALIZE_SCAN)
   fi

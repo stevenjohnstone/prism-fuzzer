@@ -803,10 +803,11 @@ class TriageExplainTest < Minitest::Test
     if cand
       locs = File.join(cand, "node_locations.inc")
       walk = File.join(cand, "node_serialize_walk.inc")
+      compat = File.join(cand, "prism_fuzz_compat.h")
       cfg = File.join(prism_dir, "config.yml")
       gen_loc_rb = repo_path("harnesses/prism/gen_node_locations.rb")
       gen_walk_rb = repo_path("harnesses/prism/gen_serialize_walk.rb")
-      if File.file?(locs) && File.file?(walk) &&
+      if File.file?(locs) && File.file?(walk) && File.file?(compat) &&
          (!File.file?(cfg) || (File.mtime(locs) >= File.mtime(cfg) && File.mtime(walk) >= File.mtime(cfg))) &&
          File.mtime(locs) >= File.mtime(gen_loc_rb) &&
          File.mtime(walk) >= File.mtime(gen_walk_rb)

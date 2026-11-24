@@ -364,7 +364,8 @@ module PrismFuzzer
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_invariants.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_json.h"),
-        File.join(gen_dir, "node_locations.inc")
+        File.join(gen_dir, "node_locations.inc"),
+        File.join(gen_dir, "prism_fuzz_compat.h")
       ]
       inc_flags = [
         "-I#{File.join(src_dir, 'include')}",
@@ -400,7 +401,8 @@ module PrismFuzzer
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "prism_ijon.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "prism_xallocator.h"),
-        File.join(gen_dir, "node_locations.inc")
+        File.join(gen_dir, "node_locations.inc"),
+        File.join(gen_dir, "prism_fuzz_compat.h")
       ]
 
       afl_mode = fspec["afl"].to_s.empty? ? "lto" : fspec["afl"].to_s
@@ -741,7 +743,11 @@ module PrismFuzzer
         "-I#{File.join(fuzz_root, 'harnesses', 'prism', 'include')}"
       ]
       mutator_src = File.join(fuzz_root, "harnesses", "prism", "mutator_oracle64.c")
-      deps = c_files + h_files + [mutator_src, File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h")]
+      deps = c_files + h_files + [
+        mutator_src,
+        File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h"),
+        File.join(gen_dir, "prism_fuzz_compat.h")
+      ]
       base_flags = %w[-O2] + split_extra_flags("CPPFLAGS") + split_extra_flags("CFLAGS") +
                    %w[-U_FORTIFY_SOURCE -UNDEBUG -DNDEBUG=1 -fno-sanitize=all -Wno-unused-function] +
                    inc_flags + common_defs + %w[-DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT] + fuzzer_defines
@@ -862,6 +868,7 @@ module PrismFuzzer
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_serialize_scan.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "prism_ijon.h"),
         File.join(gen_dir, "node_serialize_walk.inc"),
+        File.join(gen_dir, "prism_fuzz_compat.h"),
         afl_stamp
       ]
       pcguard_so = File.join(afl_path, "SanitizerCoveragePCGUARD.so")
@@ -965,6 +972,7 @@ module PrismFuzzer
 
       src_dir = src.fetch("path")
       gen_dir = src.fetch("gen_dir")
+      ensure_harness_generated_inc!(src_dir, gen_dir, fuzz_root: fuzz_root) if Dir.exist?(src_dir)
       out_path = out_path ? File.expand_path(out_path, fuzz_root) : File.join(build_dir, "fuzz.explain.#{arch}")
       stamps_dir = File.join(build_dir, ".stamps")
       stamp_file = File.join(stamps_dir, "explain.#{arch}.json")
@@ -1053,6 +1061,12 @@ module PrismFuzzer
           end
         end
         return plan
+      end
+
+      plan.fetch("sources", {}).each_value do |s|
+        next unless s.is_a?(Hash) && s["kind"].to_s == "prism" && s["path"] && s["gen_dir"] && Dir.exist?(s["path"])
+
+        ensure_harness_generated_inc!(s["path"], s["gen_dir"], fuzz_root: fuzz_root)
       end
 
       pool = BuildPool.new(default_build_jobs(jobs))

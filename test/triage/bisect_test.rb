@@ -457,7 +457,9 @@ class TriageBisectTest < Minitest::Test
 
   def resolve_prism_gen_dir(prism_a, workdir)
     gd = prism_a_gen_dir
-    return gd if gd && File.file?(File.join(gd, "node_locations.inc"))
+    if gd && File.file?(File.join(gd, "node_locations.inc")) && File.file?(File.join(gd, "prism_fuzz_compat.h"))
+      return gd
+    end
 
     fallback = File.join(workdir, "gen")
     FileUtils.mkdir_p(fallback)
@@ -465,6 +467,12 @@ class TriageBisectTest < Minitest::Test
       repo_path("harnesses/prism/gen_node_locations.rb"),
       File.join(prism_a, "config.yml"),
       File.join(fallback, "node_locations.inc")
+    )
+    assert_ruby_cmd(
+      repo_path("harnesses/prism/gen_api_compat.rb"),
+      "--include-dir", File.join(prism_a, "include"),
+      "--subloc-inc", File.join(fallback, "node_locations.inc"),
+      "--output", File.join(fallback, "prism_fuzz_compat.h")
     )
     fallback
   end

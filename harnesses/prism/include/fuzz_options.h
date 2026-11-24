@@ -1,6 +1,12 @@
 #ifndef PRISM_FUZZ_OPTIONS_H
 #define PRISM_FUZZ_OPTIONS_H
 
+#if defined(__has_include)
+#  if __has_include("prism_fuzz_compat.h")
+#    include "prism_fuzz_compat.h"
+#  endif
+#endif
+
 #include <limits.h>
 /* Requires <prism.h> to be included by the enclosing translation unit first. */
 #include <stdbool.h>
@@ -245,18 +251,18 @@ static inline void fuzz_options_populate(
 #endif
 
     if (opts->has_encoding_opts) {
-#ifdef PRISM_FUZZ_LEGACY_ENCODING_SET_LEN
+#if defined(PRISM_FUZZ_LEGACY_ENCODING_SET_2ARG)
+        pm_options_encoding_set(options, fuzz_option_encoding_name(opts->aux_byte));
+#else
         {
             const char *enc_name = fuzz_option_encoding_name(opts->aux_byte);
             pm_options_encoding_set(options, enc_name, strlen(enc_name));
         }
-#else
-        pm_options_encoding_set(options, fuzz_option_encoding_name(opts->aux_byte));
 #endif
-#ifdef PRISM_FUZZ_LEGACY_FILEPATH_SET_LEN
-        pm_options_filepath_set(options, "fuzz.rb", sizeof("fuzz.rb") - 1);
-#else
+#if defined(PRISM_FUZZ_LEGACY_FILEPATH_SET_2ARG)
         pm_options_filepath_set(options, "fuzz.rb");
+#else
+        pm_options_filepath_set(options, "fuzz.rb", sizeof("fuzz.rb") - 1);
 #endif
 #ifndef PRISM_FUZZ_NO_SHEBANG_CALLBACK
         if ((opts->aux_byte & 0x08) != 0) {

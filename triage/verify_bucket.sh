@@ -475,160 +475,25 @@ build_verify_runner() {
     )
 
     # Probe historical Prism C API differences across 2024–2026 commits so older commits compile cleanly.
-    mapfile -t probe_arr < <(VERIFY_SUBLOC_INC="$sub_loc_inc" ruby -e '
-      inc = ARGV[0]
-      hdrs = Dir.glob(File.join(inc, "**", "*.h")).sort.map { |p| File.read(p, encoding: "BINARY") }.join("\n")
-      code = hdrs.gsub(%r{//[^\n]*|/\*.*?\*/}m, " ")
-
-      out = []
-      has_arena_initial_ifndef = code.match?(/#\s*ifndef\s+PM_ARENA_INITIAL_SIZE\b/)
-      out << "-DPM_ARENA_INITIAL_SIZE=0" if has_arena_initial_ifndef
-
-      unless File.file?(File.join(inc, "prism", "internal", "buffer.h"))
-        out << "-DPRISM_FUZZ_NO_INTERNAL_BUFFER"
-      end
-
-      sub_loc_inc = ENV.fetch("VERIFY_SUBLOC_INC", "")
-      if sub_loc_inc && File.file?(sub_loc_inc)
-        struct_fields = {}
-        code.scan(/typedef\s+struct\s*[A-Za-z0-9_]*\s*\{([^}]*)\}\s*(pm_[A-Za-z0-9_]+_t)\s*;/) do |body, sname|
-          struct_fields[sname] = body.scan(/\bpm_location_t\s+([A-Za-z_][A-Za-z0-9_]*)\s*;/).flatten
-        end
-        cur_struct = nil
-        sub_loc_compat = true
-        File.read(sub_loc_inc, encoding: "BINARY").each_line do |ln|
-          if ln =~ /\bcase\s+(PM_[A-Z0-9_]+):/
-            sub_loc_compat = false unless code.match?(/\b#{Regexp.escape(Regexp.last_match(1))}\b/)
-          elsif ln =~ /\(\s*const\s+(pm_[a-z0-9_]+_t)\s*\*\)/
-            cur_struct = Regexp.last_match(1)
-            sub_loc_compat = false unless struct_fields.key?(cur_struct)
-          elsif ln =~ /cast->([a-z0-9_]+)/
-            sub_loc_compat = false unless cur_struct && struct_fields[cur_struct]&.include?(Regexp.last_match(1))
-          end
-          break unless sub_loc_compat
-        end
-        out << "-DPRISM_FUZZ_NO_SUB_LOCATIONS" unless sub_loc_compat
-      else
-        out << "-DPRISM_FUZZ_NO_SUB_LOCATIONS"
-      end
-
-      # Options API
-      unless code.match?(/\bpm_options_new\b/)
-        out << "-DPRISM_FUZZ_LEGACY_OPTIONS_STRUCT"
-        out << "-DPRISM_FUZZ_OPTIONS_CLEANUP" if code.match?(/\bpm_options_cleanup\b/)
-      end
-      out << "-DPRISM_FUZZ_NO_COMMAND_LINE" unless code.match?(/\bpm_options_command_line_set\b/)
-      out << "-DPRISM_FUZZ_NO_MAIN_SCRIPT" unless code.match?(/\bpm_options_main_script_set\b/)
-      out << "-DPRISM_FUZZ_NO_FREEZE" unless code.match?(/\bpm_options_freeze_set\b/)
-      out << "-DPRISM_FUZZ_NO_PARTIAL_SCRIPT" unless code.match?(/\bpm_options_partial_script_set\b/)
-      out << "-DPRISM_FUZZ_NO_ATTACH_COMMENTS" unless code.match?(/\bpm_options_attach_comments_set\b/)
-      out << "-DPRISM_FUZZ_NO_ENCODING_LOCKED" unless code.match?(/\bpm_options_encoding_locked_set\b/)
-      out << "-DPRISM_FUZZ_NO_VERSION_SET" unless code.match?(/\bpm_options_version_set\b/)
-      out << "-DPRISM_FUZZ_LEGACY_ENCODING_SET_LEN" if code.match?(/\bpm_options_encoding_set\s*\([^)]*size_t/)
-      out << "-DPRISM_FUZZ_LEGACY_FILEPATH_SET_LEN" if code.match?(/\bpm_options_filepath_set\s*\([^)]*size_t/)
-      out << "-DPRISM_FUZZ_NO_FROZEN_STRING_LITERAL" unless code.match?(/\bpm_options_frozen_string_literal_set\b/)
-      out << "-DPRISM_FUZZ_NO_SHEBANG_CALLBACK" unless code.match?(/\bpm_options_shebang_callback_set\b/)
-      out << "-DPRISM_FUZZ_NO_STACK_BUDGET" unless code.match?(/\bpm_options_stack_budget_set\b/)
-      out << "-DPRISM_FUZZ_NO_SCOPE_FORWARDING" unless code.match?(/\bpm_options_scope_forwarding_set\b/)
-      out << "-DPRISM_FUZZ_VOID_SCOPES_INIT" if code.match?(/\bvoid\s+pm_options_scopes_init\b/)
-      out << "-DPRISM_FUZZ_VOID_SCOPE_INIT" if code.match?(/\bvoid\s+pm_options_scope_init\b/)
-      unless code.match?(/\bpm_options_scope_mut\b/)
-        out << (code.match?(/\bpm_options_scope_get_mut\b/) ? "-DPRISM_FUZZ_SCOPE_GET_MUT" : "-DPRISM_FUZZ_SCOPE_DIRECT")
-      end
-      unless code.match?(/\bpm_options_scope_local_mut\b/)
-        out << (code.match?(/\bpm_options_scope_local_get_mut\b/) ? "-DPRISM_FUZZ_LOCAL_GET_MUT" : "-DPRISM_FUZZ_LOCAL_DIRECT")
-      end
-
-      # String init
-      if !code.match?(/\bpm_string_init\b/) && code.match?(/\bpm_string_constant_init\b/)
-        out << "-DPRISM_FUZZ_LEGACY_STRING_INIT"
-      end
-
-      # Arena API
-      if !code.match?(/\bpm_arena_t\b/)
-        out << "-DPRISM_FUZZ_LEGACY_NO_ARENA"
-      elsif !code.match?(/\bpm_arena_new\b/)
-        out << "-DPRISM_FUZZ_LEGACY_ARENA_STRUCT"
-        out << "-DPRISM_FUZZ_ARENA_CLEANUP" if code.match?(/\bpm_arena_cleanup\b/)
-      end
-
-      # Parser, line offsets, locations, iterators, node type name
-      has_parser_new = code.match?(/\bpm_parser_new\b/)
-      unless has_parser_new
-        out << "-DPRISM_FUZZ_LEGACY_PARSER_INIT"
-        if (m = code.match(/\bpm_parser_init\s*\(([^)]*)\)/m)) && m[1].include?("arena")
-          out << "-DPRISM_FUZZ_PARSER_INIT_ARENA"
-        end
-        out << "-DPRISM_FUZZ_PARSER_CLEANUP" if code.match?(/\bpm_parser_cleanup\b/)
-      end
-      out << "-DPRISM_FUZZ_LEGACY_PARSER_DATA_LOC" unless code.match?(/\bpm_parser_data_loc\b/)
-      unless code.match?(/\bpm_parser_line_offsets\b/)
-        out << (code.match?(/\bpm_newline_list_t\b/) ? "-DPRISM_FUZZ_PARSER_NEWLINE_LIST" : "-DPRISM_FUZZ_LEGACY_PARSER_LINE_OFFSETS")
-      end
-      if (m = code.match(/typedef\s+struct\b[^{]*\{([^}]*)\}\s*pm_location_t\s*;/m)) && m[1].match?(/\*\s*start\b/)
-        out << "-DPRISM_FUZZ_POINTER_LOCATIONS"
-      end
-      unless code.match?(/\bpm_magic_comment_key\b/)
-        if (m = code.match(/typedef\s+struct\b[^{]*\{([^}]*)\}\s*pm_magic_comment_t\s*;/m)) && m[1].match?(/\bkey_start\b/)
-          out << "-DPRISM_FUZZ_LEGACY_MAGIC_COMMENT_START"
-        else
-          out << "-DPRISM_FUZZ_LEGACY_MAGIC_COMMENT_FIELDS"
-        end
-      end
-      out << "-DPRISM_FUZZ_LEGACY_DIAG_FIELDS" unless code.match?(/\bpm_diagnostic_location\b/)
-      out << "-DPRISM_FUZZ_NO_DIAGNOSTIC_TYPE" unless code.match?(/\bpm_diagnostic_type\b/)
-      out << "-DPRISM_FUZZ_LEGACY_COMMENT_FIELDS" unless code.match?(/\bpm_comment_location\b/)
-      unless code.match?(/\bpm_parser_errors_first\b/)
-        if code.match?(/\bpm_parser_errors_each\b/)
-          out << "-DPRISM_FUZZ_EACH_ITERATORS"
-        elsif code.match?(/\bpm_diagnostics_iter_t\b/)
-          out << "-DPRISM_FUZZ_ITER_OBJS"
-        else
-          out << "-DPRISM_FUZZ_LIST_ITERATORS"
-        end
-      end
-      if !code.match?(/\bpm_node_type\s*\(/)
-        out << (code.match?(/\bpm_node_type_to_str\s*\(/) ? "-DPRISM_FUZZ_NODE_TYPE_TO_STR" : "-DPRISM_FUZZ_NO_NODE_TYPE_NAME")
-      end
-      out << "-DPRISM_FUZZ_NO_VISIT_NODE" unless code.match?(/\bpm_visit_node\b/)
-      out << "-DPRISM_FUZZ_LEGACY_VISIT_BOOL" unless code.match?(/\bpm_visit_result_t\b/)
-      unless code.match?(/\bpm_node_list_t\b/) &&
-             code.match?(/\bpm_interpolated_symbol_node_t\b/) &&
-             code.match?(/\bpm_interpolated_x_string_node_t\b/) &&
-             code.match?(/\bpm_interpolated_regular_expression_node_t\b/) &&
-             code.match?(/\bPM_ARRAY_NODE\b/)
-        out << "-DPRISM_FUZZ_NO_NODE_RELATIONS"
-      end
-
-      # Buffer, stream, errors_format, json
-      unless code.match?(/\bpm_buffer_new\b/)
-        out << "-DPRISM_FUZZ_LEGACY_BUFFER_STRUCT"
-        out << "-DPRISM_FUZZ_BUFFER_CLEANUP" if code.match?(/\bpm_buffer_cleanup\b/)
-      end
-      out << "-DPRISM_FUZZ_NO_BUFFER_CLEAR" unless code.match?(/\bpm_buffer_clear\b/)
-      out << "-DPRISM_FUZZ_NO_ERRORS_FORMAT" unless code.match?(/\bpm_errors_format\b/)
-      out << "-DPRISM_FUZZ_NO_PARSER_ERRORS_SIZE" unless code.match?(/\bpm_parser_errors_size\b/)
-      if !has_parser_new || !File.file?(File.join(inc, "prism", "stream.h")) || !code.match?(/\bpm_source_stream_new\b/)
-        out << "-DPRISM_FUZZ_NO_STREAM"
-      end
-      out << "-DPRISM_FUZZ_NO_JSON" unless code.match?(/\bpm_dump_json\b/)
-
-      puts out
-    ' "$REPO_ROOT/include")
+    local compat_h="$cache_dir/prism_fuzz_compat.h"
+    local compat_args=(--include-dir "$REPO_ROOT/include" --output "$compat_h" --cflags)
+    if [ -f "$sub_loc_inc" ]; then
+      compat_args+=(--subloc-inc "$sub_loc_inc")
+    else
+      compat_args+=(--subloc-inc "$cache_dir/.missing_node_locations.inc")
+    fi
+    mapfile -t probe_arr < <(ruby "$FUZZ_ROOT/harnesses/prism/gen_api_compat.rb" "${compat_args[@]}")
     wait "$!" || exit $?
     local pf
     for pf in "${probe_arr[@]+"${probe_arr[@]}"}"; do
       [ -n "$pf" ] || continue
       flags+=("$pf")
       case "$pf" in
-        -DPRISM_FUZZ_LEGACY_*|-DPRISM_FUZZ_NO_*)
+        -Wno-shorten-64-to-32)
           has_legacy_shims=1
           ;;
       esac
     done
-    if [ "$has_legacy_shims" -eq 1 ]; then
-      flags+=(-Wno-shorten-64-to-32 -Wno-implicit-function-declaration)
-    fi
 
     case "$profile" in
       asan_ubsan)
@@ -825,6 +690,8 @@ build_verify_runner() {
         -Wno-switch -Wno-unused-function
         -U_FORTIFY_SOURCE -UNDEBUG -DNDEBUG=1 -fno-sanitize=all
         "-I$REPO_ROOT/include"
+        "-I$cache_dir"
+        "-I$FUZZ_ROOT/harnesses/prism"
         -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT
         -DPM_INTEGER_DIVIDE_THRESHOLD=8 -DPRISM_DEPTH_MAXIMUM=128
         "-DFUZZ_MAX_INPUT_SIZE=$max_input"
@@ -832,10 +699,8 @@ build_verify_runner() {
         "-DPRISM_VERIFY_QEMU_BIN=\"$qemu_bin\""
         "-DPRISM_VERIFY_SYSROOT=\"/usr/$cross_triplet\""
         "-DPRISM_VERIFY_TARGET_SUFFIX=\"$cross_suffix\""
+        "${probe_arr[@]}"
       )
-      if [ "$has_legacy_shims" -eq 1 ]; then
-        proxy_flags+=("${probe_arr[@]}" -Wno-shorten-64-to-32 -Wno-implicit-function-declaration)
-      fi
       local proxy_dir
       proxy_dir="$(mktemp -d "${TMPDIR:-/tmp}/pf-verify-proxy.XXXXXX")"
       local proxy_objs=()

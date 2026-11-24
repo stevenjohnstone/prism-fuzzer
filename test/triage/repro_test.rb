@@ -79,19 +79,13 @@ class TriageReproTest < Minitest::Test
         ar_out, ar_err, ar_st = Open3.capture3("ar", "rcs", lib_path, *objs)
         raise "ar rcs failed:\n#{ar_out}\n#{ar_err}" unless ar_st.success?
 
-        gen_dir = if gen_dir_candidate && File.file?(File.join(gen_dir_candidate, "node_locations.inc"))
+        gen_dir = if gen_dir_candidate &&
+                     File.file?(File.join(gen_dir_candidate, "node_locations.inc")) &&
+                     File.file?(File.join(gen_dir_candidate, "prism_fuzz_compat.h"))
                     gen_dir_candidate
                   else
                     local_gen = File.join(cache_dir, "gen")
-                    FileUtils.mkdir_p(local_gen)
-                    g_out, g_err, g_st = Open3.capture3(
-                      RbConfig.ruby,
-                      File.join(root_dir, "harnesses/prism/gen_node_locations.rb"),
-                      File.join(prism_a, "config.yml"),
-                      File.join(local_gen, "node_locations.inc")
-                    )
-                    raise "gen_node_locations.rb failed:\n#{g_out}\n#{g_err}" unless g_st.success?
-
+                    PrismFuzzer::Topology.ensure_harness_generated_inc!(prism_a, local_gen, fuzz_root: root_dir)
                     local_gen
                   end
 
@@ -1161,12 +1155,45 @@ class TriageReproTest < Minitest::Test
         const char *pm_node_type(pm_node_type_t);
       H
 
+      ptr_loc_gen = File.join(workdir, "ptr_loc_gen")
+      assert_ruby_cmd(
+        repo_path("harnesses/prism/gen_api_compat.rb"),
+        "--include-dir", ptr_loc_inc,
+        "--output", File.join(ptr_loc_gen, "prism_fuzz_compat.h")
+      )
+      compat_text = File.read(File.join(ptr_loc_gen, "prism_fuzz_compat.h"))
+      assert_includes compat_text, "#define PRISM_FUZZ_POINTER_LOCATIONS 1"
+      assert_includes compat_text, "#define PRISM_FUZZ_LEGACY_ENCODING_SET_2ARG 1"
+      assert_includes compat_text, "#define PRISM_FUZZ_LEGACY_FILEPATH_SET_2ARG 1"
+
       assert_cmd(
         c_compiler, "-c", "-O1", "-std=c99", "-Wall", "-Werror",
-        "-DPRISM_FUZZ_POINTER_LOCATIONS", "-DPRISM_FUZZ_NO_SUB_LOCATIONS",
-        "-DPRISM_FUZZ_NO_NODE_RELATIONS", "-DPRISM_FUZZ_NO_PARSER_ERRORS_SIZE",
-        "-I#{ptr_loc_inc}", "-I#{repo_path('harnesses/prism')}",
+        "-DPRISM_FUZZ_NO_PARSER_ERRORS_SIZE",
+        "-I#{ptr_loc_inc}", "-I#{ptr_loc_gen}", "-I#{repo_path('harnesses/prism')}",
         parse_c, "-o", File.join(workdir, "parse_ptr_locs.o")
+      )
+
+      modern_inc = File.join(workdir, "modern_3arg_inc")
+      modern_gen = File.join(workdir, "modern_3arg_gen")
+      FileUtils.mkdir_p(modern_inc)
+      File.write(
+        File.join(modern_inc, "prism.h"),
+        File.read(File.join(ptr_loc_inc, "prism.h"))
+          .sub("void pm_options_encoding_set(pm_options_t *, const char *);", "void pm_options_encoding_set(pm_options_t *, const char *, size_t);")
+          .sub("void pm_options_filepath_set(pm_options_t *, const char *);", "void pm_options_filepath_set(pm_options_t *, const char *, size_t);")
+      )
+      assert_ruby_cmd(
+        repo_path("harnesses/prism/gen_api_compat.rb"),
+        "--include-dir", modern_inc,
+        "--output", File.join(modern_gen, "prism_fuzz_compat.h")
+      )
+      modern_compat = File.read(File.join(modern_gen, "prism_fuzz_compat.h"))
+      refute_includes modern_compat, "PRISM_FUZZ_LEGACY_ENCODING_SET_2ARG"
+      refute_includes modern_compat, "PRISM_FUZZ_LEGACY_FILEPATH_SET_2ARG"
+      assert_cmd(
+        c_compiler, "-c", "-O1", "-std=c99", "-Wall", "-Werror",
+        "-I#{modern_inc}", "-I#{modern_gen}", "-I#{repo_path('harnesses/prism')}",
+        parse_c, "-o", File.join(workdir, "parse_modern_3arg.o")
       )
 
       iter_runtime_c = File.join(workdir, "iter_objs_runtime.c")

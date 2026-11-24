@@ -63,6 +63,12 @@ ruby templates/template.rb
 GEN_INC_DIR="${OSS_FUZZ_GEN_DIR:-$WORK_DIR/oss-fuzz-gen}"
 mkdir -p "$GEN_INC_DIR"
 ruby "$GEN_LOC_RB" "$REPO_ROOT/config.yml" "$GEN_INC_DIR/node_locations.inc"
+if [ -f "$HARNESS_DIR/gen_api_compat.rb" ]; then
+  ruby "$HARNESS_DIR/gen_api_compat.rb" \
+    --include-dir "$REPO_ROOT/include" \
+    --subloc-inc "$GEN_INC_DIR/node_locations.inc" \
+    --output "$GEN_INC_DIR/prism_fuzz_compat.h"
+fi
 
 shopt -s nullglob
 SRCS=(
