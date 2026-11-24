@@ -126,10 +126,12 @@ module PrismFuzzer
           next
         end
 
-        _, err_3way, st_3way = run_cmd("git", "-C", worktree_dir, "apply", "--3way", patch, env: three_way_env, allow_fail: true)
+        _, err_3way, st_3way = run_cmd("git", "-C", worktree_dir, "apply", "--3way", "--index", patch, env: three_way_env, allow_fail: true)
         if st_3way.success?
           applied << name
         else
+          run_cmd("git", "-C", worktree_dir, "reset", "--hard", allow_fail: true)
+          run_cmd("git", "-C", worktree_dir, "clean", "-fdx", allow_fail: true)
           raise TopologyError, "Patch '#{name}' failed to apply cleanly to #{worktree_dir}:\n#{err_3way}"
         end
       end

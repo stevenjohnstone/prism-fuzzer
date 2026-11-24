@@ -1,4 +1,4 @@
-From 1309d15d0d015a971c580d9c0a7ca3bb4fe05418 Mon Sep 17 00:00:00 2001
+From 03a67c50949c17c4d9b55ab6db53bafc7a349a7b Mon Sep 17 00:00:00 2001
 From: prism-fuzzer <fuzz@prism-fuzzer.local>
 Date: Tue, 24 Nov 2026 10:39:51 +0000
 Subject: [PATCH] Add optional source-level IJON fuzzing guidance and regexp
@@ -179,10 +179,10 @@ index 8bcdea96f660d8c419336163773515724372b54e..08d9d31e414a7d0d127838810459535a
          if (rest > half || (rest == half && (inexact || (bits & 1)))) bits++;
      }
 diff --git a/src/integer.c b/src/integer.c
-index 9361dc4e87c38ccd50560a1046178e86d6e77c98..79a07a5d847fa40c4275116227bd91af66e0ce16 100644
+index a0732990671fb0f1124aeace1978ad1827e3a24a..cb50db1cbe527225769f7179ea91539985b03256 100644
 --- a/src/integer.c
 +++ b/src/integer.c
-@@ -260,6 +260,7 @@ pm_integer_parse_decimal_divide(pm_arena_t *arena, pm_integer_t *integer, uint32
+@@ -262,6 +262,7 @@ pm_integer_parse_decimal_divide(pm_arena_t *arena, pm_integer_t *integer, uint32
          powers[level].words = pm_bignum_scratch_take(&scratch, 2 * previous->length);
          pm_bignum_multiply(&powers[level], previous, previous, &scratch);
      }
@@ -190,7 +190,7 @@ index 9361dc4e87c38ccd50560a1046178e86d6e77c98..79a07a5d847fa40c4275116227bd91af
  
      pm_integer_parse_decimal_divide_chunks(&result, nchunks, chunks, powers, &scratch);
      xfree_sized(allocation, sizeof(uint32_t) * (size_t) scratch_size);
-@@ -336,6 +337,7 @@ pm_integer_parse_digits(pm_arena_t *arena, pm_integer_t *integer, uint32_t base,
+@@ -338,6 +339,7 @@ pm_integer_parse_digits(pm_arena_t *arena, pm_integer_t *integer, uint32_t base,
      for (; cursor < end; cursor++) {
          if (pm_integer_separator(*cursor)) continue;
          uint64_t digit = (uint64_t) pm_integer_parse_digit(*cursor);
@@ -199,10 +199,10 @@ index 9361dc4e87c38ccd50560a1046178e86d6e77c98..79a07a5d847fa40c4275116227bd91af
          if (value > limit || (value == limit && digit > limit_digit)) {
              uint32_t digits = 0;
 diff --git a/src/prism.c b/src/prism.c
-index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69a79cd5f9 100644
+index 0b7f352c7851f5d12dd9c06c169314f73f315b5a..c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae 100644
 --- a/src/prism.c
 +++ b/src/prism.c
-@@ -13506,6 +13506,13 @@ parse_shareable_constant_write(pm_parser_t *parser, pm_node_t *write) {
+@@ -13514,6 +13514,13 @@ parse_shareable_constant_write(pm_parser_t *parser, pm_node_t *write) {
   */
  static pm_node_t *
  parse_write(pm_parser_t *parser, pm_node_t *target, pm_token_t *operator, pm_node_t *value) {
@@ -216,7 +216,7 @@ index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69
      switch (PM_NODE_TYPE(target)) {
          case PM_ERROR_RECOVERY_NODE:
              return target;
-@@ -17941,6 +17948,8 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_set_t *captures, uint8_t flags
+@@ -18021,6 +18028,8 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_set_t *captures, uint8_t flags
          return parse_resource_recovery(parser, depth);
      }
  
@@ -225,7 +225,7 @@ index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69
      pm_node_t *node = NULL;
  
      bool leading_rest = false;
-@@ -20244,6 +20253,7 @@ parse_uninterpolated_symbol_array(pm_parser_t *parser) {
+@@ -20311,6 +20320,7 @@ parse_uninterpolated_symbol_array(pm_parser_t *parser) {
          }
  
          if (parts.size > 0) {
@@ -233,7 +233,7 @@ index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69
              pm_array_elements_append(parser, &elements, UP(pm_interpolated_symbol_node_create(parser, NULL, &parts, NULL)));
              parts = (pm_node_list_t) { 0 };
          } else if (current != NULL) {
-@@ -20434,6 +20444,7 @@ parse_uninterpolated_string_array(pm_parser_t *parser) {
+@@ -20501,6 +20511,7 @@ parse_uninterpolated_string_array(pm_parser_t *parser) {
          }
  
          if (parts.size > 0) {
@@ -241,7 +241,7 @@ index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69
              pm_array_elements_append(parser, &elements, UP(pm_interpolated_string_node_create(parser, NULL, &parts, NULL)));
              parts = (pm_node_list_t) { 0 };
          } else if (current != NULL) {
-@@ -22302,6 +22313,13 @@ parse_aref(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_bin
+@@ -22369,6 +22380,13 @@ parse_aref(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_bin
  static PRISM_INLINE pm_node_t *
  parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_binding_power, pm_binding_power_t binding_power, uint8_t flags, uint16_t depth) {
      pm_token_t token = parser->current;
@@ -256,7 +256,7 @@ index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69
      switch (token.type) {
          case PM_TOKEN_EQUAL:
 diff --git a/src/regexp.c b/src/regexp.c
-index abe8b82921bdd8334b0fb623c3aa7309191baf7c..7121f5ccbe011890fba11657360fffeb435ee08d 100644
+index 4a9a01745e2ea892ab75cfa8740ccbfa0a7bc124..6af22decd075070bfab131a1b6bbacd755c0bac7 100644
 --- a/src/regexp.c
 +++ b/src/regexp.c
 @@ -21,7 +21,13 @@
@@ -273,15 +273,15 @@ index abe8b82921bdd8334b0fb623c3aa7309191baf7c..7121f5ccbe011890fba11657360fffeb
  
  /**
   * Whether an ASCII byte is written as it is when a regular expression is
-@@ -2018,6 +2024,7 @@ pm_regexp_class_add_set(pm_regexp_parser_t *parser, pm_regexp_class_t *character
+@@ -2034,6 +2040,7 @@ pm_regexp_class_add_set(pm_regexp_parser_t *parser, pm_regexp_class_t *character
  static bool
  pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
      const uint8_t *open = parser->cursor - 1;
 +    PM_IJON_MAX_IF(depth > 1, 0x401u, depth);
  
      if (depth >= PM_REGEXP_PARSE_DEPTH_MAX) {
-         pm_regexp_parse_error(parser, parser->start, parser->end, "parse depth limit over");
-@@ -2052,6 +2059,11 @@ pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
+         PM_REGEXP_PARSE_ERROR(parser, parser->start, parser->end, "parse depth limit over");
+@@ -2068,6 +2075,11 @@ pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
  
      while (token.type != PM_REGEXP_CLASS_TOKEN_CLOSE) {
          bool fetched = false;
@@ -293,15 +293,15 @@ index abe8b82921bdd8334b0fb623c3aa7309191baf7c..7121f5ccbe011890fba11657360fffeb
  
          switch (token.type) {
              case PM_REGEXP_CLASS_TOKEN_EOF:
-@@ -2528,6 +2540,7 @@ pm_regexp_parse_item(pm_regexp_parser_t *parser, uint16_t depth) {
+@@ -2544,6 +2556,7 @@ pm_regexp_parse_item(pm_regexp_parser_t *parser, uint16_t depth) {
   */
  static bool
  pm_regexp_parse_expression(pm_regexp_parser_t *parser, uint16_t depth) {
 +    PM_IJON_MAX_IF(depth > 1, 0x403u, depth);
      if (depth >= PM_REGEXP_PARSE_DEPTH_MAX) {
-         pm_regexp_parse_error(parser, parser->start, parser->end, "parse depth limit over");
+         PM_REGEXP_PARSE_ERROR(parser, parser->start, parser->end, "parse depth limit over");
          return false;
-@@ -3067,6 +3080,7 @@ static const bool pm_regexp_preprocess_stops[128] = {
+@@ -3061,6 +3074,7 @@ static const bool pm_regexp_preprocess_stops[128] = {
   */
  static bool
  pm_regexp_preprocess_scan(pm_regexp_preprocessor_t *preprocessor, const uint8_t **parent_cursor, bool extended, bool nested, uint16_t depth) {
@@ -310,10 +310,10 @@ index abe8b82921bdd8334b0fb623c3aa7309191baf7c..7121f5ccbe011890fba11657360fffeb
       * reports. Past that depth, this leaves the cursor where it is, so that
       * the caller reads the escapes of the subexpression as part of its own
 diff --git a/src/static_literals.c b/src/static_literals.c
-index 0b0bfe9a957ab11dc71fe21719e23c786aa3adaf..aa65a902ab59e03ec6e81e86018dd7c730c7f20e 100644
+index 09ba53e74d6bb7ad83d3174fe11b7caa76839bf0..4785bfc7c60a9e1e48e9d5ab082f0806d9776982 100644
 --- a/src/static_literals.c
 +++ b/src/static_literals.c
-@@ -191,6 +191,7 @@ string_nodes_equal(const pm_node_t *left, const pm_node_t *right, pm_node_flags_
+@@ -190,6 +190,7 @@ string_nodes_equal(const pm_node_t *left, const pm_node_t *right, pm_node_flags_
   */
  static enum pm_node_type
  static_literal_type(const pm_node_t *node) {
@@ -321,7 +321,7 @@ index 0b0bfe9a957ab11dc71fe21719e23c786aa3adaf..aa65a902ab59e03ec6e81e86018dd7c7
      switch (PM_NODE_TYPE(node)) {
          case PM_SOURCE_LINE_NODE:
              return PM_INTEGER_NODE;
-@@ -337,6 +338,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+@@ -336,6 +337,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
  
          if (literals->size < PM_STATIC_LITERALS_INLINE_CAPACITY) {
              literals->nodes[literals->size++] = node;
@@ -329,7 +329,7 @@ index 0b0bfe9a957ab11dc71fe21719e23c786aa3adaf..aa65a902ab59e03ec6e81e86018dd7c7
              return NULL;
          }
  
-@@ -368,9 +370,11 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+@@ -367,9 +369,11 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
       * already in the hash. Otherwise, we can just increment the size and insert
       * the new node. */
      pm_node_t *result = literals->entries[index].node;

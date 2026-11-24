@@ -1,4 +1,4 @@
-From 49e097c4f63aeddc67ba485267e3300a0d5f9589 Mon Sep 17 00:00:00 2001
+From 0423f762ed0cfb06362d32da5602e704c495d1f4 Mon Sep 17 00:00:00 2001
 From: prism-fuzzer <fuzz@prism-fuzzer.local>
 Date: Tue, 24 Nov 2026 10:39:51 +0000
 Subject: [PATCH] Add optional inline AST and diagnostic span invariant
@@ -6,10 +6,10 @@ Subject: [PATCH] Add optional inline AST and diagnostic span invariant
 
 ---
  include/prism/internal/fuzz_assert.h | 131 +++++++++++++++++++++++++++
- include/prism/internal/node.h        |   9 ++
+ include/prism/internal/node.h        |  10 ++
  src/prism.c                          | 129 +++++++++++++++++++++++++-
  templates/src/node.c.erb             |  28 ++++++
- 4 files changed, 294 insertions(+), 3 deletions(-)
+ 4 files changed, 295 insertions(+), 3 deletions(-)
  create mode 100644 include/prism/internal/fuzz_assert.h
 
 diff --git a/include/prism/internal/fuzz_assert.h b/include/prism/internal/fuzz_assert.h
@@ -150,18 +150,17 @@ index 0000000000000000000000000000000000000000..acb0ee7b25d883a698ab0a169adb68f1
 +
 +#endif
 diff --git a/include/prism/internal/node.h b/include/prism/internal/node.h
-index 9519a3ed01cdce70e63b50f5ae31e448961add2f..a08c45a7d4a3a3081293f30dfc16322829d5296c 100644
+index fcdeb5f5e14005b2adf78c196867bcf7288057bd..9af104f334fb646a5d835a059124ff32cd8d322d 100644
 --- a/include/prism/internal/node.h
 +++ b/include/prism/internal/node.h
-@@ -8,6 +8,7 @@
+@@ -19,16 +19,26 @@
+ /* The offset just past the end of the given location. */
+ #define PM_LOCATION_END(location_) ((location_)->start + (location_)->length)
  
- #include "prism/arena.h"
- #include "prism/internal/assert.h"
 +#include "prism/internal/fuzz_assert.h"
- 
- #include <stddef.h>
- #include <stdint.h>
-@@ -23,11 +24,19 @@
++
+ /* Return the span covering two initialized locations. Read both endpoints
+  * before changing either field, so moving the start preserves the old end.
   * An unset location must be initialized separately from the first child. */
  static PRISM_FORCE_INLINE pm_location_t
  pm_location_join(pm_location_t left, pm_location_t right) {
@@ -182,7 +181,7 @@ index 9519a3ed01cdce70e63b50f5ae31e448961add2f..a08c45a7d4a3a3081293f30dfc163228
  }
  
 diff --git a/src/prism.c b/src/prism.c
-index 34f84a09af29a85caf52a766a9f5ffc48892b79f..b390f5fa1760ea12a1588f36143d453f493f5700 100644
+index c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae..9cec0d9879f82244589290d36936caf7484b39fe 100644
 --- a/src/prism.c
 +++ b/src/prism.c
 @@ -94,14 +94,108 @@ pm_version(void) {
@@ -339,7 +338,7 @@ index 34f84a09af29a85caf52a766a9f5ffc48892b79f..b390f5fa1760ea12a1588f36143d453f
      pm_diagnostic_list_append(&parser->metadata_arena, &parser->error_list, start, length, diag_id);
  }
  
-@@ -559,6 +679,9 @@ pm_parser_err_node_content(pm_parser_t *parser, const pm_node_t *node, pm_diagno
+@@ -576,6 +696,9 @@ pm_parser_err_node_content(pm_parser_t *parser, const pm_node_t *node, pm_diagno
   */
  static PRISM_INLINE void
  pm_parser_warn(pm_parser_t *parser, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id) {
