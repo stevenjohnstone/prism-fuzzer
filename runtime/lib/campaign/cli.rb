@@ -10,7 +10,7 @@ module PrismFuzzer
         run validate compile plan paths sync sync-ruby build docker-build
         ensure-afl-passes invalidate-docker-caches
         attach stop logs ps status stats clean shell
-        report retriage verify bisect match explain inspect publish bench accel
+        report coverage retriage verify bisect match explain inspect publish bench accel
         env docker-args plan-launch
       ].freeze
 
@@ -41,6 +41,7 @@ module PrismFuzzer
           dry_run: false,
           no_stage: false,
           detach: false,
+          no_coverage: false,
           skip_sync: false,
           skip_build: false,
           in_container_step: false,
@@ -74,7 +75,8 @@ module PrismFuzzer
               stop / logs    Stop container (and run after_run steps) or show logs
               ps             List running prism-fuzzer campaign containers with attach commands
               status / stats Show live container status (--live) or workspace campaign statistics
-              report         Triage crashes, collect LLVM coverage, and generate HTML report (<ws>/report/)
+              report         Triage crashes, write HTML report (<ws>/report/index.html), then collect LLVM coverage (--no-coverage skips)
+              coverage       Collect LLVM source coverage (<ws>/report/coverage/) independently
               retriage       Sync targets and re-triage buckets in workspace (pass --report to refresh HTML)
               verify         Sync targets and verify fixed inputs across triage buckets
               bisect         Bisect regression/fix commit across Prism history
@@ -96,6 +98,7 @@ module PrismFuzzer
           op.on("--post", "Run report (triage, coverage, HTML report) after fuzzing stops") { opts[:post] = true }
           op.on("--no-post", "Skip all after_run post-processing steps") { opts[:no_post] = true }
           op.on("--report", "Enable post-run report (triage + coverage + unified HTML)") { opts[:report] = true }
+          op.on("--no-coverage", "--skip-coverage", "Skip LLVM coverage collection during report") { opts[:no_coverage] = true }
           op.on("--publish", "Enable post-run report publishing") { opts[:publish] = true }
           op.on("--run-id ID", "Run ID for publish step") { |v| opts[:publish_run_id] = v }
           op.on("--title TEXT", "Title for publish step") { |v| opts[:publish_title] = v }
@@ -265,6 +268,15 @@ module PrismFuzzer
           0
         when "report"
           PrismFuzzer::Campaign.run_report!(ctx, dry_run: opts[:dry_run])
+          0
+        when "coverage"
+          PrismFuzzer::Campaign.run_standalone_coverage!(
+            ctx,
+            skip_sync: opts[:skip_sync],
+            build_ruby: opts[:build_ruby],
+            cache_dir: opts[:cache_dir],
+            dry_run: opts[:dry_run]
+          )
           0
         when "publish"
           PrismFuzzer::Campaign.run_publish!(ctx, extra_args: extra_args, dry_run: opts[:dry_run])

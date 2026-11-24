@@ -56,7 +56,7 @@ module PrismFuzzerReport
     }
   end
 
-  def generate(afl_dir: nil, out_path: nil, cov_json_path: nil, triage_dir: nil, sankey_top: nil, title: nil, topo: nil, write_output: true)
+  def generate(afl_dir: nil, out_path: nil, cov_json_path: nil, triage_dir: nil, sankey_top: nil, title: nil, topo: nil, coverage_pending: false, write_output: true)
     paths = resolve_paths(
       afl_dir: afl_dir,
       out_path: out_path,
@@ -86,7 +86,8 @@ module PrismFuzzerReport
       cov_json_path: resolved_cov,
       out_dir_abs: out_dir_abs,
       fuzzers: fleet[:fuzzers],
-      topo_ctx: topo_ctx
+      topo_ctx: topo_ctx,
+      coverage_pending: coverage_pending
     )
     triage_view = TriageView.load_triage_view_data(
       triage_dir: resolved_triage,
@@ -109,7 +110,9 @@ module PrismFuzzerReport
 
     if write_output
       FileUtils.mkdir_p(File.dirname(resolved_out))
-      File.write(resolved_out, html)
+      tmp_out = "#{resolved_out}.tmp.#{Process.pid}"
+      File.write(tmp_out, html)
+      File.rename(tmp_out, resolved_out)
     end
 
     {
@@ -124,7 +127,8 @@ module PrismFuzzerReport
       triage_dir: nil,
       sankey_top: nil,
       title: nil,
-      out: nil
+      out: nil,
+      coverage_pending: false
     }
     cli_args = argv.dup
     OptionParser.new do |op|
@@ -132,6 +136,7 @@ module PrismFuzzerReport
       op.on("--triage-dir DIR", "Triage directory for clusters & Sankey tab") { |v| cli_opts[:triage_dir] = v }
       op.on("--sankey-top N", Integer, "Max cluster bars shown in embedded Sankey") { |v| cli_opts[:sankey_top] = v }
       op.on("--title TEXT", "Custom HTML report title") { |v| cli_opts[:title] = v }
+      op.on("--coverage-pending", "Render live pending/updating state while coverage.sh runs") { cli_opts[:coverage_pending] = true }
       op.on("-o", "--out PATH", "Output HTML report path") { |v| cli_opts[:out] = v }
       op.on("-h", "--help", "Show help") { puts op; exit 0 }
     end.parse!(cli_args)
@@ -142,7 +147,8 @@ module PrismFuzzerReport
       cov_json_path: cli_args[2],
       triage_dir: cli_opts[:triage_dir],
       sankey_top: cli_opts[:sankey_top],
-      title: cli_opts[:title]
+      title: cli_opts[:title],
+      coverage_pending: cli_opts[:coverage_pending]
     )
     puts "Wrote campaign report (#{result[:fuzzer_count]} fuzzers) to #{result[:out_path]}"
   rescue InputError => e

@@ -103,7 +103,7 @@ Running `report` (or setting `after_run { report ... }`) compiles a self-contain
 - **Fleet Overview & Topology Visualization**: Interactive SVG fleet topology diagram, worker KPI summary (uptime, fleet execs/s, bitmap edge coverage %, saved crashes/hangs, triage clusters, LLVM line/region/branch coverage), and per-worker summary metrics.
 - **Time-Series SVG Charts & Sync Yield**: Plots edge coverage %, edges discovered, corpus growth, throughput (`execs/sec`), cumulative executions, pending favored queue, foreign synced imports, locally discovered items, grammar seed creation/import rates, and peer-sync import/reject/skip yield bars across workers.
 - **Crash Lineage & Interactive Triage Sankey ([`report/sankey.rb`](report/sankey.rb))**: Tracks crash provenance (grammar seeds vs. initial corpus vs. local mutations vs. synced peers) and visualizes fuzzer/origin → crash reason → root-cause cluster → signature bucket flows.
-- **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Collects corpus coverage cleanly across `(source, target)` pairs (filtering `fuzz_` harness helpers), caches cumulative `.profdata` and seen-input digests per pair across mid-run `report` snapshots (`(last_cutoff, cutoff]`, cleaned up automatically on the final post-run report; see [`docs/architecture.md`](docs/architecture.md#3-incremental-per-pair-llvm-coverage-caching-reportcoveragesh)), and embeds interactive summary tables linked to full `llvm-cov` line-by-line HTML reports.
+- **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Writes `<ws>/report/index.html` immediately after triage so fleet and triage tabs are usable right away, then streams progressive per-pair coverage summaries and `llvm-cov` HTML links into open `file://` or `https://` tabs via `coverage/coverage.js` (with incremental `(last_cutoff, cutoff]` `.profdata` caching across mid-run snapshots; see [`docs/architecture.md`](docs/architecture.md#3-decoupled-reporting--incremental-per-pair-llvm-coverage-reportreportrb--reportcoveragesh)).
 - **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive complete multi-run report snapshots (including `llvm-cov` HTML and `triage/` bucket artifacts) into a gitignored `reports/` `gh-pages` branch worktree.
 
 ---
@@ -161,7 +161,8 @@ RUBY_REF=v3_4_1 ./campaigns/default.rb build --build-ruby
 ### Reporting, Triage Investigation, Cleanup & Tests
 
 ```bash
-./campaigns/default.rb report                          # Triage crashes, collect LLVM coverage (incrementally cached mid-run), and build <ws>/report/index.html
+./campaigns/default.rb report                          # Triage crashes, write <ws>/report/index.html immediately, then collect LLVM coverage (--no-coverage skips)
+./campaigns/default.rb coverage                        # Collect LLVM coverage independently into <ws>/report/coverage/ (hydrates existing index.html)
 ./campaigns/default.rb inspect -- --samples 1          # Inspect triaged clusters in <ws>/report/triage/
 ./campaigns/default.rb explain -- --cluster cluster-01 # Or add -- --disasm --all-buckets
 ./campaigns/default.rb verify -- --target /path/to/fixed-prism
@@ -181,7 +182,7 @@ Any executable campaign script (`./campaigns/default.rb`, any [`examples/*.rb`](
 
 - **Lifecycle & container control**: `run` *(default)*, `attach`, `stop`, `ps`, `status`, `stats`, `logs [step | worker <id>]`, `shell`, `bench`, `accel`, `clean`.
 - **Targets, validation & build**: `validate`, `compile`, `plan`, `paths`, `sync`, `sync-ruby`, `build`, `docker-build`, `env`, `docker-args`, `plan-launch`.
-- **Report & investigation**: `report`, `retriage`, `verify`, `bisect`, `match`, `inspect`, `explain`, `publish` (forward tool-specific flags after `--`).
+- **Report & investigation**: `report`, `coverage`, `retriage`, `verify`, `bisect`, `match`, `inspect`, `explain`, `publish` (forward tool-specific flags after `--`).
 
 Common CLI flags:
 
@@ -193,7 +194,7 @@ Common CLI flags:
 | `--duration SPEC` | Set/override campaign timer (e.g. `30m`, `2h`, `300`; `0` clears DSL timer) |
 | `-d`, `--detach` | Launch fuzzers in background and print Docker attach/status/stop commands |
 | `--post` / `--no-post` | Enable `report` (triage + coverage + HTML report) after fuzzing stops, or disable all `after_run` steps |
-| `--report`, `--publish` | Enable post-run `report` or `publish` steps |
+| `--report`, `--no-coverage`, `--publish` | Enable post-run `report`, skip LLVM coverage during `report`, or enable `publish` |
 | `--run-id ID`, `--title TEXT`, `--out-dir DIR` | Override `publish` snapshot metadata and destination |
 | `--skip-sync`, `--skip-build`, `--build-ruby`, `--force` | Skip sync or binary rebuild; compile non-default `RUBY_REF`; force Docker rebuild (`docker-build`) |
 | `--live` | Query live container status on `stats` |

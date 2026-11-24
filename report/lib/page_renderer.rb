@@ -152,7 +152,7 @@ module PrismFuzzerReport
       fleet[:afl_fuzzers].map do |f|
         ps = peer_sync_by_name[f[:name]]
         wpairs = CoverageView.resolve_worker_pairs(f[:name], cov_worker_pairs, cov_pairs_by_id)
-        src_cov_cell, rep_cell = CoverageView.render_worker_cov_overview_cells(wpairs)
+        src_cov_cell, rep_cell = CoverageView.render_worker_cov_overview_cells(wpairs, coverage_pending: cov_info[:coverage_pending])
         edges_str = f[:total_edges] > 0 ? "#{Helpers.format_int(f[:edges_found])} / #{Helpers.format_int(f[:total_edges])}" : Helpers.format_int(f[:edges_found])
         crash_cls = f[:saved_crashes] > 0 ? "badge-danger" : "badge-muted"
         hang_cls = f[:saved_hangs] > 0 ? "badge-warn" : "badge-muted"
@@ -176,7 +176,7 @@ module PrismFuzzerReport
             <td class="num">#{Helpers.format_compact(f[:execs_done])}</td>
             <td class="num"><strong>#{format("%.2f%%", f[:bitmap_cvg])}</strong></td>
             <td class="num">#{edges_str}</td>
-            <td class="num">#{src_cov_cell}</td>
+            <td class="num" data-worker-cov-cell="#{CGI.escapeHTML(f[:name])}">#{src_cov_cell}</td>
             <td class="num">#{Helpers.format_int(f[:corpus_count])}</td>
             <td class="num">#{Helpers.format_int(f[:corpus_found])}</td>
             <td class="num">#{Helpers.format_int(f[:corpus_imported])}</td>
@@ -185,7 +185,7 @@ module PrismFuzzerReport
             <td class="num">#{Helpers.format_int(f[:pending_favs])} / #{Helpers.format_int(f[:pending_total])}</td>
             <td class="num"><span class="badge #{crash_cls}">#{f[:saved_crashes]}</span></td>
             <td class="num"><span class="badge #{hang_cls}">#{f[:saved_hangs]}</span></td>
-            <td class="num">#{rep_cell}</td>
+            <td class="num" data-worker-cov-rep="#{CGI.escapeHTML(f[:name])}">#{rep_cell}</td>
           </tr>
         HTML
       end.join("\n")
@@ -202,7 +202,7 @@ module PrismFuzzerReport
       gen_rows = gen_fuzzers.map do |gf|
         ps = peer_sync_by_name[gf[:name]]
         wpairs = CoverageView.resolve_worker_pairs(gf[:name], cov_worker_pairs, cov_pairs_by_id)
-        src_cov_cell, rep_cell = CoverageView.render_worker_cov_overview_cells(wpairs)
+        src_cov_cell, rep_cell = CoverageView.render_worker_cov_overview_cells(wpairs, coverage_pending: cov_info[:coverage_pending])
         yield_cell = if ps
                        "<strong>+#{Helpers.format_int(ps[:imported_by_main])}</strong> / #{Helpers.format_int(ps[:tested_by_main])} <span class=\"muted\">(#{format('%.1f%%', ps[:yield_pct])} into #{CGI.escapeHTML(ps[:intake_name])})</span>"
                      else
@@ -223,8 +223,8 @@ module PrismFuzzerReport
             <td class="num">#{Helpers.format_int(gf[:files_pruned])}</td>
             <td class="num">#{Helpers.format_int(gf[:duplicates_skipped])}</td>
             <td class="num">#{yield_cell}</td>
-            <td class="num">#{src_cov_cell}</td>
-            <td class="num">#{rep_cell}</td>
+            <td class="num" data-worker-cov-cell="#{CGI.escapeHTML(gf[:name])}">#{src_cov_cell}</td>
+            <td class="num" data-worker-cov-rep="#{CGI.escapeHTML(gf[:name])}">#{rep_cell}</td>
           </tr>
         ROW
       end.join("\n")
@@ -291,11 +291,20 @@ module PrismFuzzerReport
                            format("%.2f%%", primary_cov_pair.dig("totals", "lines", "percent").to_f)
                          end
         tab_buttons_html << <<~HTML
-          <button class="tab-btn" data-tab="coverage" onclick="selectTab('coverage')">
+          <span id="tab-btn-coverage-slot" style="display:contents"><button id="tab-btn-coverage" class="tab-btn" data-tab="coverage" onclick="selectTab('coverage')">
             <span class="legend-dot" style="background:#34d399"></span>
             Source Coverage (#{CGI.escapeHTML(cov_tab_suffix)})
-          </button>
+          </button></span>
         HTML
+      elsif cov_info[:coverage_pending]
+        tab_buttons_html << <<~HTML
+          <span id="tab-btn-coverage-slot" style="display:contents"><button id="tab-btn-coverage" class="tab-btn" data-tab="coverage" onclick="selectTab('coverage')">
+            <span class="legend-dot" style="background:#34d399"></span>
+            Source Coverage (Collecting&hellip;)
+          </button></span>
+        HTML
+      else
+        tab_buttons_html << %(<span id="tab-btn-coverage-slot" style="display:contents"></span>\n)
       end
       tab_buttons_html
     end
@@ -373,7 +382,7 @@ module PrismFuzzerReport
               <span class="sched-pill">Role: Seed Generator (#{CGI.escapeHTML(gf[:sched])})</span>
               <span class="sched-pill">Runtime: #{Helpers.format_duration(gf[:run_time])}</span>
               <span class="sched-pill">Samples: #{Helpers.format_int(gf[:sample_count])}</span>
-              #{gen_cov_btn}
+              <span data-worker-cov-banner="#{safe_name}" style="display:contents">#{gen_cov_btn}</span>
             </div>
           </div>
 
@@ -508,7 +517,7 @@ module PrismFuzzerReport
               <span class="sched-pill">Schedule: #{CGI.escapeHTML(f[:sched])}</span>
               <span class="sched-pill">Stability: #{CGI.escapeHTML(f[:stability])}</span>
               <span class="sched-pill">Samples: #{Helpers.format_int(f[:sample_count])}</span>
-              #{worker_cov_btn}
+              <span data-worker-cov-banner="#{safe_name}" style="display:contents">#{worker_cov_btn}</span>
             </div>
           </div>
 
@@ -617,7 +626,7 @@ module PrismFuzzerReport
           has_sankey: !sankey_sec.nil?
         )
       end
-      tab_panels_html << CoverageView.render_coverage_tab_html(cov_info) if active_cov_pairs.any?
+      tab_panels_html << CoverageView.render_coverage_tab_html(cov_info)
       if sankey_sec
         tab_panels_html << <<~HTML
           <section id="tab-sankey" class="tab-panel">
@@ -637,15 +646,22 @@ module PrismFuzzerReport
 
       cov_header_btns = if active_cov_pairs.any?
                           btns = active_cov_pairs.filter_map do |p|
-                            href = p["report_rel_path"].to_s
-                            next nil if href.empty?
-
                             lbl = active_cov_pairs.size > 1 ? "#{CGI.escapeHTML(p['label'].to_s)} llvm-cov" : "llvm-cov HTML"
-                            %(<a class="cov-btn" href="#{CGI.escapeHTML(href)}" target="_blank" rel="noopener">#{lbl} &nearr;</a>)
-                          end.join(" ")
-                          btns.empty? ? "" : %(<div class="fuzzer-meta">#{btns}</div>)
+                            if CoverageView.pair_html_ready?(p)
+                              href = p["report_rel_path"].to_s
+                              %(<a class="cov-btn" href="#{CGI.escapeHTML(href)}" target="_blank" rel="noopener">#{lbl} &nearr;</a>)
+                            elsif p["html_ready"] == false
+                              %(<span class="sched-pill cov-pending-pill"><span class="cov-pulse-dot"></span> #{lbl} (rendering&hellip;)</span>)
+                            end
+                          end
+                          if cov_info[:status] == "updating"
+                            btns << %(<span class="sched-pill cov-pending-pill"><span class="cov-pulse-dot"></span> Updating coverage&hellip;</span>)
+                          end
+                          btns.empty? ? %(<div id="header-cov-btns"></div>) : %(<div id="header-cov-btns" class="fuzzer-meta">#{btns.join(" ")}</div>)
+                        elsif cov_info[:coverage_pending]
+                          %(<div id="header-cov-btns" class="fuzzer-meta"><span class="sched-pill cov-pending-pill"><span class="cov-pulse-dot"></span> Collecting LLVM coverage&hellip;</span></div>)
                         else
-                          ""
+                          %(<div id="header-cov-btns"></div>)
                         end
 
       gen_kpi_html = if gen_fuzzers.any?
@@ -694,7 +710,7 @@ module PrismFuzzerReport
             #{sankey_sec ? sankey_sec[:styles] : ""}
           </style>
         </head>
-        <body>
+        <body data-cov-js="#{CGI.escapeHTML(cov_info[:cov_js_rel_path].to_s)}" data-cov-base="#{CGI.escapeHTML(cov_info[:cov_base_rel_path].to_s)}" data-cov-status="#{CGI.escapeHTML(cov_info[:status].to_s)}" data-cov-seq="#{cov_info[:sequence].to_i}" data-cov-generated-at="#{CGI.escapeHTML(cov_info[:generated_at].to_s)}" data-worker-pairs="#{CGI.escapeHTML(JSON.generate(cov_info[:cov_worker_pairs] || {}))}">
           <header>
             <div class="header-top">
               <div class="header-title">
@@ -741,7 +757,7 @@ module PrismFuzzerReport
                   <div class="kpi-sub">#{fleet_lineage[:total_grammar_crashes]} grammar &bull; #{fleet_lineage[:total_corpus_crashes]} corpus &bull; #{fleet[:fleet_hangs]} hangs</div>
                 </div>
                 #{triage_kpi_html}
-                #{CoverageView.render_overview_cov_kpi_cards(active_cov_pairs)}
+                <div id="overview-cov-kpis" style="display:contents">#{CoverageView.render_overview_cov_kpi_cards(active_cov_pairs)}</div>
               </div>
 
               #{topology_overview_html}

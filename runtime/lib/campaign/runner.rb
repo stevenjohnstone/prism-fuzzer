@@ -345,20 +345,83 @@ module PrismFuzzer
       FileUtils.rm_f(tar_host) if tar_host
     end
 
-    def render_coverage_and_report!(ctx, dry_run: false)
+    def coverage_skipped?(ctx)
+      return true unless ENV["FUZZ_SKIP_COVERAGE"].to_s.empty?
+      return true if ctx.dig(:cli, :no_coverage)
+
+      rep_opts = step_opts(ctx[:lifecycle], "report")
+      rep_opts["coverage"] == false
+    end
+
+    def render_report_html!(ctx, dry_run: false, coverage_pending: false, stage_key: "report", title: "Generate campaign report", done_prefix: "Report written to")
       ws = ctx[:ws]
       rep_opts = step_opts(ctx[:lifecycle], "report")
-      if ENV["FUZZ_SKIP_COVERAGE"].to_s.empty? && (dry_run || Dir.exist?(ws[:afl_dir]))
-        run_coverage!(ctx, dry_run: dry_run, coverage_flags: rep_opts["coverage_flags"] || rep_opts["flags"])
-      end
-
       report_rb = File.join(ctx[:fuzz_root], "report", "report.rb")
       out_html = File.join(ws[:report_dir], "index.html")
       cov_json = File.join(ws[:coverage_dir], "coverage.json")
       cmd = [RbConfig.ruby, report_rb, ws[:afl_dir], out_html, cov_json, "--triage-dir", ws[:triage_dir]]
       cmd.push("--sankey-top", rep_opts["top"].to_s) if rep_opts["top"]
+      cmd << "--coverage-pending" if coverage_pending
       FileUtils.mkdir_p(ws[:report_dir]) unless dry_run
-      run_host_script_stage!(ctx, "report", "Generate campaign report", cmd, fail_message: "report.rb failed", done_message: "Report written to #{Topology.path_relative_or_abs(out_html, ctx[:fuzz_root])}", dry_run: dry_run)
+      rel_out = Topology.path_relative_or_abs(out_html, ctx[:fuzz_root])
+      run_host_script_stage!(ctx, stage_key, title, cmd, fail_message: "report.rb failed", done_message: "#{done_prefix} #{rel_out}", dry_run: dry_run)
+    end
+
+    def render_coverage_and_report!(ctx, dry_run: false)
+      ws = ctx[:ws]
+      rep_opts = step_opts(ctx[:lifecycle], "report")
+      sync_dirs = Topology.sync_group_dirs(ctx[:plan], base_dir: ws[:fuzz_dir])
+      sync_dirs = [ws[:afl_dir]] if sync_dirs.empty?
+      has_afl_data = sync_dirs.any? { |d| Dir.exist?(d) }
+      will_run_cov = !coverage_skipped?(ctx) && (dry_run || has_afl_data)
+
+      render_report_html!(
+        ctx,
+        dry_run: dry_run,
+        coverage_pending: will_run_cov,
+        stage_key: "report",
+        title: "Generate campaign report",
+        done_prefix: will_run_cov ? "Report written (coverage pending):" : "Report written to"
+      )
+      return true unless will_run_cov
+
+      run_coverage!(ctx, dry_run: dry_run, coverage_flags: rep_opts["coverage_flags"] || rep_opts["flags"])
+      render_report_html!(
+        ctx,
+        dry_run: dry_run,
+        coverage_pending: false,
+        stage_key: "report-coverage",
+        title: "Update report with LLVM coverage",
+        done_prefix: "Report updated with coverage:"
+      )
+    end
+
+    def run_standalone_coverage!(ctx, skip_sync: false, build_ruby: false, cache_dir: nil, dry_run: false)
+      ws = ctx[:ws]
+      ensure_docker_image!(fuzz_root: ctx[:fuzz_root], build_dir: ws[:build_dir], dry_run: dry_run, logs_dir: ws[:logs_dir]) unless in_docker?
+      unless skip_sync
+        prism_sources = ctx[:plan].fetch("sources", {}).select { |_, s| s.is_a?(Hash) && s["kind"].to_s == "prism" }
+        missing_src = prism_sources.any? do |sid, s|
+          cand = s["path"] || s["dir"] || File.join(ws[:build_dir], "targets", sid.to_s)
+          !File.file?(File.join(File.expand_path(cand.to_s, ctx[:fuzz_root]), "include", "prism.h"))
+        end
+        sync_sources!(ctx, skip_sync: false, dry_run: dry_run, build_ruby: build_ruby, cache_dir: cache_dir) if missing_src
+      end
+
+      rep_opts = step_opts(ctx[:lifecycle], "report")
+      run_coverage!(ctx, dry_run: dry_run, coverage_flags: rep_opts["coverage_flags"] || rep_opts["flags"])
+      out_html = File.join(ws[:report_dir], "index.html")
+      if !dry_run && File.file?(out_html)
+        render_report_html!(
+          ctx,
+          dry_run: false,
+          coverage_pending: false,
+          stage_key: "report-coverage",
+          title: "Update report with LLVM coverage",
+          done_prefix: "Report updated with coverage:"
+        )
+      end
+      true
     end
 
     def run_report!(ctx, dry_run: false)

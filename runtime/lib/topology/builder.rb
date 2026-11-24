@@ -1066,7 +1066,7 @@ module PrismFuzzer
       plan.fetch("sources", {}).each_value do |s|
         next unless s.is_a?(Hash) && s["kind"].to_s == "prism" && s["path"] && s["gen_dir"] && Dir.exist?(s["path"])
 
-        ensure_harness_generated_inc!(s["path"], s["gen_dir"], fuzz_root: fuzz_root)
+        ensure_prism_fuzz_compat!(s["path"], s["gen_dir"], fuzz_root: fuzz_root)
       end
 
       pool = BuildPool.new(default_build_jobs(jobs))

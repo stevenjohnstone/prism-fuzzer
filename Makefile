@@ -272,16 +272,28 @@ endef
 _report:
 	$(ECHO) "triaging findings"
 	@$(FUZZ_RUN_TRIAGE)
-	@if [ -z "$(FUZZ_SKIP_COVERAGE)" ] && [ -d "$(FUZZ_AFL_DIR)" ]; then \
-		if [ -d "$(FUZZ_DIR)/.coverage-cache" ] || [ ! -f "$(FUZZ_COVERAGE_DIR)/coverage.json" ] || [ -n "$$(find $(FUZZ_DIR) -maxdepth 4 \( -name 'queue' -o -name 'crashes' -o -name 'hangs' \) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ] || [ -n "$$(find $(FUZZ_SEEDS_DIR) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ]; then \
-			echo "collecting coverage (set FUZZ_SKIP_COVERAGE=1 to skip)"; \
-			$(FUZZ_RUN_COVERAGE); \
-		fi; \
-	fi
 	$(ECHO) "generating campaign report"
-	$(Q) ruby ./report/report.rb $(FUZZ_AFL_DIR) $(FUZZ_REPORT_DIR)/index.html $(FUZZ_COVERAGE_DIR)/coverage.json --triage-dir $(FUZZ_TRIAGE_DIR) $(REPORT_ARGS)
+	@will_cov=""; \
+	if [ -z "$(FUZZ_SKIP_COVERAGE)" ] && [ -d "$(FUZZ_AFL_DIR)" ]; then \
+		if [ -d "$(FUZZ_DIR)/.coverage-cache" ] || [ ! -f "$(FUZZ_COVERAGE_DIR)/coverage.json" ] || [ -n "$$(find $(FUZZ_DIR) -maxdepth 4 \( -name 'queue' -o -name 'crashes' -o -name 'hangs' \) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ] || [ -n "$$(find $(FUZZ_SEEDS_DIR) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ]; then \
+			will_cov="--coverage-pending"; \
+		fi; \
+	fi; \
+	ruby ./report/report.rb $(FUZZ_AFL_DIR) $(FUZZ_REPORT_DIR)/index.html $(FUZZ_COVERAGE_DIR)/coverage.json --triage-dir $(FUZZ_TRIAGE_DIR) $$will_cov $(REPORT_ARGS); \
+	if [ -n "$$will_cov" ]; then \
+		echo "collecting coverage (set FUZZ_SKIP_COVERAGE=1 to skip)"; \
+		$(FUZZ_RUN_COVERAGE); \
+		ruby ./report/report.rb $(FUZZ_AFL_DIR) $(FUZZ_REPORT_DIR)/index.html $(FUZZ_COVERAGE_DIR)/coverage.json --triage-dir $(FUZZ_TRIAGE_DIR) $(REPORT_ARGS); \
+	fi
 
 report: docker-build targets-sync _report
+
+coverage: docker-build targets-sync
+	$(ECHO) "collecting coverage"
+	@$(FUZZ_RUN_COVERAGE)
+	@if [ -f "$(FUZZ_REPORT_DIR)/index.html" ]; then \
+		ruby ./report/report.rb $(FUZZ_AFL_DIR) $(FUZZ_REPORT_DIR)/index.html $(FUZZ_COVERAGE_DIR)/coverage.json --triage-dir $(FUZZ_TRIAGE_DIR) $(REPORT_ARGS); \
+	fi
 
 pages-worktree:
 	$(ECHO) "ensuring gh-pages worktree at $(REPORTS_DIR)"
@@ -341,4 +353,4 @@ clean:
 	$(Q) ruby -r./runtime/campaign -e 'PrismFuzzer::Campaign.clean_preserving_paths(ARGV[0], ARGV[1..])' "$(FUZZ_DIR)" "$(FUZZ_BUILD_DIR)" "$(FUZZ_TRIAGE_DIR)"
 	$(ECHO) "done"
 
-.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage clean
+.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage clean

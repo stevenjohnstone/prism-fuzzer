@@ -373,8 +373,41 @@ class WorkspaceAndCoverageTest < Minitest::Test
       assert_match(/coverage\.sh/, dry_campaign)
       assert_match(/report\.rb/, dry_campaign)
       assert_includes dry_campaign, "--sankey-top 10"
+      assert_includes dry_campaign, "--coverage-pending"
+      first_rep_idx = dry_campaign.index("report.rb")
+      cov_sh_idx = dry_campaign.index("coverage.sh")
+      last_rep_idx = dry_campaign.rindex("report.rb")
+      assert first_rep_idx && cov_sh_idx && last_rep_idx && first_rep_idx < cov_sh_idx && cov_sh_idx < last_rep_idx,
+             "expected report.rb (--coverage-pending) to run BEFORE coverage.sh and refresh AFTER coverage.sh:\n#{dry_campaign}"
       assert_match(/publish\.rb/, dry_campaign)
       assert_includes dry_campaign, "--run-id iso-01"
+
+      dry_rep_nocov, = assert_cmd(ws_topo, "report", "--no-coverage", "--dry-run", env: CLEAN_WS_ENV)
+      assert_match(/triage\.rb/, dry_rep_nocov)
+      assert_match(/report\.rb/, dry_rep_nocov)
+      refute_match(/coverage\.sh/, dry_rep_nocov)
+      refute_includes dry_rep_nocov, "--coverage-pending"
+
+      dry_cov_only, = assert_cmd(ws_topo, "coverage", "--skip-sync", "--dry-run", env: CLEAN_WS_ENV)
+      assert_match(/coverage\.sh/, dry_cov_only)
+      refute_match(/triage\.rb/, dry_cov_only)
+
+      nocov_dsl = File.join(workdir, "nocov_dsl_campaign.rb")
+      File.write(nocov_dsl, <<~RB)
+        require #{File.join(root_dir, "lib", "prism_fuzzer").dump}
+        PrismFuzzer.campaign "nocov-dsl-test" do
+          workspace #{File.join(workdir, "ws_nocov_dsl").dump}
+          after_run { report coverage: false, threads: 2 }
+          prism :prism_a, repo: #{upstream[:repo].dump}, ref: #{upstream[:v1].dump}, patches: "none", templates: "never"
+          fuzzer "ws_fuzz", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
+          sync_group :afl, dir: "afl", primary: true
+          worker :w1, fuzzer: "ws_fuzz", sync_group: :afl, afl_role: :main, schedule: "fast"
+        end
+      RB
+      assert_ruby_cmd(campaign_cli, "validate", nocov_dsl, env: CLEAN_WS_ENV)
+      dry_dsl_nocov, = assert_ruby_cmd(campaign_cli, "run", nocov_dsl, "--dry-run", "--skip-build", env: CLEAN_WS_ENV)
+      assert_match(/report\.rb/, dry_dsl_nocov)
+      refute_match(/coverage\.sh/, dry_dsl_nocov)
 
       dry_stop, = assert_cmd(ws_topo, "stop", "--dry-run", env: CLEAN_WS_ENV)
       assert_includes dry_stop, "docker stop -t 30 "
@@ -1161,9 +1194,37 @@ class WorkspaceAndCoverageTest < Minitest::Test
         assert_path_exists term_profraw
         assert_operator File.size(term_profraw), :>, 0
 
-        # Unified report output
+        # Upfront report (--coverage-pending) works before coverage.json exists
         triage_fixture = File.join(workdir, "triage_fixture")
         build_triage_fixture!(triage_fixture)
+        pending_html_path = File.join(real_ws, "report", "pending_index.html")
+        assert_ruby_cmd(
+          repo_path("report", "report.rb"),
+          File.join(real_ws, "afl"),
+          pending_html_path,
+          File.join(workdir, "missing_coverage", "coverage.json"),
+          "--triage-dir", triage_fixture,
+          "--coverage-pending",
+          env: CLEAN_WS_ENV.merge("TOPOLOGY" => real_topo, "CAMPAIGN" => real_topo)
+        )
+        pending_html = File.read(pending_html_path)
+        assert_includes pending_html, 'data-cov-status="pending"'
+        assert_includes pending_html, "Source Coverage (Collecting&hellip;)"
+        assert_includes pending_html, "Collecting LLVM coverage&hellip;"
+        assert_includes pending_html, "__PRISM_FUZZER_ON_COVERAGE__"
+        FileUtils.rm_f(pending_html_path)
+
+        cov_js_path = File.join(cov_dir, "coverage.js")
+        assert_path_exists cov_js_path
+        cov_js_body = File.read(cov_js_path)
+        assert_includes cov_js_body, "window.__PRISM_FUZZER_ON_COVERAGE__("
+        cov_js_json = cov_js_body[/window\.__PRISM_FUZZER_ON_COVERAGE__\((.+)\);\s*}\s*else/m, 1]
+        refute_nil cov_js_json, "expected valid JSON argument inside coverage.js"
+        parsed_cov_js = JSON.parse(cov_js_json)
+        assert_equal "complete", parsed_cov_js["status"]
+        assert parsed_cov_js.fetch("pairs").all? { |p| p["html_ready"] == true }
+
+        # Unified report output
         report_html_path = File.join(real_ws, "report", "index.html")
         assert_ruby_cmd(
           repo_path("report", "report.rb"),
@@ -1264,6 +1325,7 @@ class WorkspaceAndCoverageTest < Minitest::Test
         assert_path_exists File.join(pub_dir, "report", "triage", "ABRT", "deadbeef", "meta.json")
         assert_path_exists File.join(pub_dir, "report", "triage", "ABRT", "deadbeef", "input.min")
         assert_path_exists File.join(pub_dir, "report", "triage", "ABRT", "deadbeef", "verify.sh")
+        assert_path_exists File.join(pub_dir, "report", "coverage", "coverage.js")
         assert_path_exists File.join(pub_dir, "report", "coverage", "pairs", "prism_a__native", "summary.txt")
         assert_path_exists File.join(pub_dir, "report", "coverage", "pairs", "prism_a__native", "report", "index.html")
       end

@@ -64,6 +64,7 @@ PAIRS_META="$WORK_DIR/pairs_meta.json"
 LIVE_SEEDS_DIR="$WORK_DIR/live_seeds"
 COLLECT_RB="$WORK_DIR/collect_inputs.rb"
 COMMIT_CACHE_RB="$WORK_DIR/commit_cache.rb"
+EMIT_COV_RB="$WORK_DIR/emit_coverage_payload.rb"
 COVERAGE_TMP_BIN="$BUILD_ROOT/.fuzz.coverage.tmp.$$"
 CLOCK_PROBE="$WS_DIR/.cov_clock_probe.$$"
 COVERAGE_DIR="$WS_DIR/.coverage.tmp.$$"
@@ -77,6 +78,21 @@ cleanup_coverage() {
   local rc=$?
   if [ ! -e "$FINAL_COVERAGE_DIR" ] && [ -d "$OLD_COVERAGE_DIR" ]; then
     mv "$OLD_COVERAGE_DIR" "$FINAL_COVERAGE_DIR" 2>/dev/null || true
+  fi
+  if [ "$rc" -ne 0 ]; then
+    if [ -f "$FINAL_COVERAGE_DIR/coverage.json" ]; then
+      ruby -rjson -e '
+        raw = File.read(ARGV[0], encoding: "UTF-8")
+        doc = JSON.parse(raw)
+        doc["status"] ||= "complete"
+        js = JSON.generate(doc).gsub("<", "\\u003c").gsub(">", "\\u003e").gsub("\u2028", "\\u2028").gsub("\u2029", "\\u2029")
+        tmp = "#{ARGV[1]}.tmp.#{Process.pid}"
+        File.write(tmp, "if (typeof window !== \"undefined\" && typeof window.__PRISM_FUZZER_ON_COVERAGE__ === \"function\") {\n  window.__PRISM_FUZZER_ON_COVERAGE__(#{js});\n} else if (typeof window !== \"undefined\") {\n  window.__PRISM_FUZZER_PENDING_COVERAGE__ = #{js};\n}\n")
+        File.rename(tmp, ARGV[1])
+      ' "$FINAL_COVERAGE_DIR/coverage.json" "$FINAL_COVERAGE_DIR/coverage.js" 2>/dev/null || true
+    else
+      rm -f "$FINAL_COVERAGE_DIR/coverage.js" "$FINAL_COVERAGE_DIR"/.coverage.js.tmp.* 2>/dev/null || true
+    fi
   fi
   rm -rf "$WORK_DIR" "$COVERAGE_TMP_BIN" "$CLOCK_PROBE" "$COVERAGE_DIR" "$OLD_COVERAGE_DIR"
   exit "$rc"
@@ -762,6 +778,201 @@ cat << 'RUBY' > "$COMMIT_CACHE_RB"
   File.rename(state_tmp, state_dst)
 RUBY
 
+cat << 'RUBY' > "$EMIT_COV_RB"
+  require "fileutils"
+  require "json"
+  require "pathname"
+  require "time"
+
+  work_dir = ARGV[0]
+  pairs_meta_path = ARGV[1]
+  coverage_dir = ARGV[2]
+  out_json_path = ARGV[3]
+  mode = "complete"
+  stage = nil
+  i = 4
+  while i < ARGV.size
+    case ARGV[i]
+    when "--mode"
+      mode = ARGV[i + 1].to_s
+      i += 2
+    when "--stage"
+      stage = ARGV[i + 1].to_s
+      i += 2
+    else
+      i += 1
+    end
+  end
+
+  repo_root = ENV.fetch("REPO_ROOT", Dir.pwd)
+  ws_dir = ENV.fetch("WS_DIR", "tmp/fuzz")
+  report_abs = File.expand_path(ENV.fetch("REPORT_DIR", File.join(ws_dir, "report")), repo_root)
+  final_cov_abs = File.expand_path(ENV.fetch("FINAL_COVERAGE_DIR", File.join(report_abs, "coverage")), repo_root)
+  cov_rel_prefix = begin
+    Pathname.new(final_cov_abs).relative_path_from(Pathname.new(report_abs)).to_s
+  rescue ArgumentError
+    "coverage"
+  end
+  cov_rel_prefix = "." if cov_rel_prefix.empty?
+  meta_doc = JSON.parse(File.read(pairs_meta_path, encoding: "UTF-8"))
+  pairs_meta = meta_doc.fetch("pairs")
+  worker_pairs = meta_doc.fetch("worker_pairs", {})
+
+  prev_pairs_by_id = {}
+  if mode == "running"
+    prev_json_path = File.join(final_cov_abs, "coverage.json")
+    if File.file?(prev_json_path)
+      prev_doc = begin
+        JSON.parse(File.read(prev_json_path, encoding: "UTF-8"))
+      rescue SystemCallError, IOError, JSON::ParserError
+        nil
+      end
+      if prev_doc.is_a?(Hash) && prev_doc["pairs"].is_a?(Array)
+        prev_doc["pairs"].each { |pp| prev_pairs_by_id[pp["id"].to_s] = pp if pp.is_a?(Hash) && pp["id"] }
+      end
+    end
+  end
+
+  metrics = %w[lines functions instantiations regions branches].freeze
+  extract_summary = lambda do |summary_hash|
+    next {} unless summary_hash
+
+    out = {}
+    metrics.each do |m|
+      next unless summary_hash[m]
+
+      out[m] = {
+        "count" => summary_hash[m]["count"].to_i,
+        "covered" => summary_hash[m]["covered"].to_i,
+        "percent" => summary_hash[m]["percent"].to_f.round(2)
+      }
+    end
+    out
+  end
+
+  pairs_out = pairs_meta.map do |p|
+    pid = p["id"].to_s
+    sum_path = File.join(work_dir, "pairs", pid, "summary.json")
+    prof_path = File.join(coverage_dir, "pairs", pid, "coverage.profdata")
+    reused_prev_marker = File.join(work_dir, "pairs", pid, "reused_prev_html")
+    has_cov = File.exist?(sum_path) && File.exist?(prof_path)
+
+    if has_cov
+      raw = JSON.parse(File.read(sum_path, encoding: "UTF-8")).dig("data", 0) || {}
+      totals = extract_summary.call(raw["totals"])
+      src_prefix = File.expand_path(p["source_path"].to_s).sub(%r{/\z}, "") + "/"
+      files = (raw["files"] || []).filter_map do |f|
+        raw_fname = f["filename"].to_s
+        fname = raw_fname.delete_prefix(src_prefix).sub(%r{\A\./}, "")
+        fsum = extract_summary.call(f["summary"])
+        next if fsum.dig("lines", "count").to_i.zero? && fsum.dig("functions", "count").to_i.zero?
+
+        html_sub = raw_fname.sub(%r{\A\./}, "").sub(%r{\A/}, "")
+        {
+          "filename" => fname,
+          "report_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/report/coverage/#{html_sub}.html",
+          "summary" => fsum
+        }
+      end.sort_by { |f| f["filename"] }
+
+      html_ready = if mode == "complete"
+                     File.file?(File.join(coverage_dir, "pairs", pid, "report", "index.html"))
+                   else
+                     File.file?(reused_prev_marker) && File.file?(File.join(final_cov_abs, "pairs", pid, "report", "index.html"))
+                   end
+
+      {
+        "id" => pid,
+        "label" => p["label"],
+        "source" => p["source"],
+        "source_commit" => p["commit"],
+        "source_ref" => p["requested_ref"],
+        "target" => p["target"],
+        "target_label" => p["target_label"],
+        "cflags" => p["cflags"],
+        "input_count" => p["input_count"],
+        "queue_count" => p["queue_count"],
+        "crash_count" => p["crash_count"],
+        "fuzzers" => p["fuzzers"],
+        "workers" => p["workers"],
+        "generators" => p["generators"],
+        "has_coverage" => true,
+        "html_ready" => html_ready,
+        "report_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/report/index.html",
+        "lcov_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/lcov.info",
+        "summary_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/summary.txt",
+        "file_report_prefix" => "#{cov_rel_prefix}/pairs/#{pid}/report/coverage/",
+        "totals" => totals,
+        "files" => files
+      }.compact
+    elsif mode == "running" && (prev_p = prev_pairs_by_id[pid]) && prev_p["has_coverage"]
+      prev_html = File.file?(File.join(final_cov_abs, "pairs", pid, "report", "index.html"))
+      prev_p.merge("updating" => true, "html_ready" => prev_html)
+    else
+      {
+        "id" => pid,
+        "label" => p["label"],
+        "source" => p["source"],
+        "source_commit" => p["commit"],
+        "source_ref" => p["requested_ref"],
+        "target" => p["target"],
+        "target_label" => p["target_label"],
+        "cflags" => p["cflags"],
+        "input_count" => p["input_count"],
+        "queue_count" => p["queue_count"],
+        "crash_count" => p["crash_count"],
+        "fuzzers" => p["fuzzers"],
+        "workers" => p["workers"],
+        "generators" => p["generators"],
+        "has_coverage" => false,
+        "html_ready" => false,
+        "report_rel_path" => nil,
+        "lcov_rel_path" => nil,
+        "summary_rel_path" => nil,
+        "file_report_prefix" => nil,
+        "totals" => {},
+        "files" => []
+      }.compact
+    end
+  end
+
+  primary_pair = pairs_out.find { |p| p["has_coverage"] } || pairs_out.first
+  if mode == "complete" && !pairs_out.any? { |p| p["has_coverage"] }
+    abort "Error: no coverage profile data was produced for any (source, target) pair."
+  end
+
+  payload = {
+    "generated_at" => Time.now.utc.iso8601(3),
+    "sequence" => Process.clock_gettime(Process::CLOCK_REALTIME, :millisecond),
+    "status" => mode,
+    "stage" => (mode == "running" ? stage : nil),
+    "primary_pair_id" => primary_pair && primary_pair["id"],
+    "totals" => primary_pair ? (primary_pair["totals"] || {}) : {},
+    "pairs" => pairs_out,
+    "worker_pairs" => worker_pairs
+  }.compact
+
+  json_js = JSON.generate(payload).gsub("<", "\\u003c").gsub(">", "\\u003e").gsub("\u2028", "\\u2028").gsub("\u2029", "\\u2029")
+  js_body = <<~JS
+    if (typeof window !== "undefined" && typeof window.__PRISM_FUZZER_ON_COVERAGE__ === "function") {
+      window.__PRISM_FUZZER_ON_COVERAGE__(#{json_js});
+    } else if (typeof window !== "undefined") {
+      window.__PRISM_FUZZER_PENDING_COVERAGE__ = #{json_js};
+    }
+  JS
+
+  if mode == "running"
+    FileUtils.mkdir_p(final_cov_abs)
+    live_js_dst = File.join(final_cov_abs, "coverage.js")
+    live_js_tmp = File.join(final_cov_abs, ".coverage.js.tmp.#{Process.pid}")
+    File.write(live_js_tmp, js_body)
+    File.rename(live_js_tmp, live_js_dst)
+  else
+    File.write(out_json_path, JSON.pretty_generate(payload))
+    File.write(File.join(coverage_dir, "coverage.js"), js_body)
+  end
+RUBY
+
 # 1. Resolve (source, target) pairs from the topology and collect deduplicated
 #    queue, crash, hang, corpus, and grammar inputs per pair.
 ruby "$COLLECT_RB" "$WORK_DIR" "$PAIRS_META" "$LIVE_SEEDS_DIR"
@@ -830,6 +1041,7 @@ read_pair_meta() {
 
 # 2. Build (if stale) and run coverage for each (source, target) pair.
 PAIR_IDS=$(ruby -rjson -e 'JSON.parse(File.read(ARGV[0]))["pairs"].each { |p| puts p["id"] }' "$PAIRS_META")
+ruby "$EMIT_COV_RB" "$WORK_DIR" "$PAIRS_META" "$COVERAGE_DIR" "$COVERAGE_DIR/coverage.json" --mode running --stage "replaying"
 
 for pid in $PAIR_IDS; do
   P_WORK="$WORK_DIR/pairs/$pid"
@@ -1067,6 +1279,7 @@ RUBY
     rm -rf "$P_OUT" "$P_PROFRAW"
     cp -R "$PREV_PAIR_DIR" "$P_OUT"
     cp "$P_CACHE/summary.json" "$P_SUMMARY_JSON"
+    : > "$P_WORK/reused_prev_html"
     echo ""
     echo "=== Coverage Summary: ${P_LABEL} (cached) ==="
     cat "$P_SUMMARY_TXT"
@@ -1075,6 +1288,7 @@ RUBY
       cp "$P_LCOV" "$COVERAGE_DIR/lcov.info"
       cp "$P_SUMMARY_TXT" "$COVERAGE_DIR/summary.txt"
     fi
+    ruby "$EMIT_COV_RB" "$WORK_DIR" "$PAIRS_META" "$COVERAGE_DIR" "$COVERAGE_DIR/coverage.json" --mode running --stage "replaying"
     ruby "$COMMIT_CACHE_RB" "$CACHE_ROOT" "$pid" "$COVERAGE_BIN" "$P_WORK" "$P_PROFDATA" "$P_SUMMARY_JSON"
     continue
   fi
@@ -1139,16 +1353,27 @@ RUBY
   llvm-cov export "$COVERAGE_BIN" \
     -instr-profile="$P_PROFDATA" \
     --compilation-dir="$P_PRISM_ROOT" \
-    --format=lcov \
+    --summary-only \
     --ignore-filename-regex="$IGNORE_REGEX" \
-    > "$P_LCOV"
+    > "$P_SUMMARY_JSON"
 
   llvm-cov export "$COVERAGE_BIN" \
     -instr-profile="$P_PROFDATA" \
     --compilation-dir="$P_PRISM_ROOT" \
-    --summary-only \
+    --format=lcov \
     --ignore-filename-regex="$IGNORE_REGEX" \
-    > "$P_SUMMARY_JSON"
+    > "$P_LCOV"
+
+  echo ""
+  echo "=== Coverage Summary: ${P_LABEL} ==="
+  llvm-cov report "$COVERAGE_BIN" \
+    -instr-profile="$P_PROFDATA" \
+    --compilation-dir="$P_PRISM_ROOT" \
+    --ignore-filename-regex="$IGNORE_REGEX" \
+    | tee "$P_SUMMARY_TXT"
+
+  # Publish summary metrics immediately into coverage/coverage.js before slow HTML source rendering runs.
+  ruby "$EMIT_COV_RB" "$WORK_DIR" "$PAIRS_META" "$COVERAGE_DIR" "$COVERAGE_DIR/coverage.json" --mode running --stage "rendering_html"
 
   llvm-cov show "$COVERAGE_BIN" \
     -instr-profile="$P_PROFDATA" \
@@ -1159,14 +1384,6 @@ RUBY
     --ignore-filename-regex="$IGNORE_REGEX" \
     -o "$P_REPORT"
 
-  echo ""
-  echo "=== Coverage Summary: ${P_LABEL} ==="
-  llvm-cov report "$COVERAGE_BIN" \
-    -instr-profile="$P_PROFDATA" \
-    --compilation-dir="$P_PRISM_ROOT" \
-    --ignore-filename-regex="$IGNORE_REGEX" \
-    | tee "$P_SUMMARY_TXT"
-
   if [ "$P_PRIMARY" -eq 1 ]; then
     cp "$P_PROFDATA" "$COVERAGE_DIR/coverage.profdata"
     cp "$P_LCOV" "$COVERAGE_DIR/lcov.info"
@@ -1176,131 +1393,9 @@ RUBY
   ruby "$COMMIT_CACHE_RB" "$CACHE_ROOT" "$pid" "$COVERAGE_BIN" "$P_WORK" "$P_PROFDATA" "$P_SUMMARY_JSON"
 done
 
-# 3. Assemble report/coverage/coverage.json across all (source, target) pairs.
+# 3. Assemble report/coverage/coverage.json and coverage.js across all (source, target) pairs.
 JSON_FILE="$COVERAGE_DIR/coverage.json"
-ruby -rjson -rpathname -rtime - "$WORK_DIR" "$PAIRS_META" "$COVERAGE_DIR" "$JSON_FILE" << 'RUBY'
-  work_dir, pairs_meta_path, coverage_dir, out_json_path = ARGV
-  repo_root = ENV.fetch("REPO_ROOT", Dir.pwd)
-  ws_dir = ENV.fetch("WS_DIR", "tmp/fuzz")
-  report_abs = File.expand_path(ENV.fetch("REPORT_DIR", File.join(ws_dir, "report")), repo_root)
-  final_cov_abs = File.expand_path(ENV.fetch("FINAL_COVERAGE_DIR", File.join(report_abs, "coverage")), repo_root)
-  cov_rel_prefix = begin
-    Pathname.new(final_cov_abs).relative_path_from(Pathname.new(report_abs)).to_s
-  rescue ArgumentError
-    "coverage"
-  end
-  cov_rel_prefix = "." if cov_rel_prefix.empty?
-  meta_doc = JSON.parse(File.read(pairs_meta_path))
-  pairs_meta = meta_doc.fetch("pairs")
-  worker_pairs = meta_doc.fetch("worker_pairs", {})
-
-  METRICS = %w[lines functions instantiations regions branches].freeze
-
-  def extract_summary(summary_hash)
-    return {} unless summary_hash
-
-    out = {}
-    METRICS.each do |m|
-      next unless summary_hash[m]
-
-      out[m] = {
-        "count" => summary_hash[m]["count"].to_i,
-        "covered" => summary_hash[m]["covered"].to_i,
-        "percent" => summary_hash[m]["percent"].to_f.round(2)
-      }
-    end
-    out
-  end
-
-  pairs_out = pairs_meta.map do |p|
-    pid = p["id"].to_s
-    sum_path = File.join(work_dir, "pairs", pid, "summary.json")
-    prof_path = File.join(coverage_dir, "pairs", pid, "coverage.profdata")
-    has_cov = File.exist?(sum_path) && File.exist?(prof_path)
-
-    if has_cov
-      raw = JSON.parse(File.read(sum_path)).dig("data", 0) || {}
-      totals = extract_summary(raw["totals"])
-      src_prefix = File.expand_path(p["source_path"].to_s).sub(%r{/\z}, "") + "/"
-      files = (raw["files"] || []).filter_map do |f|
-        raw_fname = f["filename"].to_s
-        fname = raw_fname.delete_prefix(src_prefix).sub(%r{\A\./}, "")
-        fsum = extract_summary(f["summary"])
-        next if fsum.dig("lines", "count").to_i.zero? && fsum.dig("functions", "count").to_i.zero?
-
-        html_sub = raw_fname.sub(%r{\A\./}, "").sub(%r{\A/}, "")
-        {
-          "filename" => fname,
-          "report_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/report/coverage/#{html_sub}.html",
-          "summary" => fsum
-        }
-      end.sort_by { |f| f["filename"] }
-
-      {
-        "id" => pid,
-        "label" => p["label"],
-        "source" => p["source"],
-        "source_commit" => p["commit"],
-        "source_ref" => p["requested_ref"],
-        "target" => p["target"],
-        "target_label" => p["target_label"],
-        "cflags" => p["cflags"],
-        "input_count" => p["input_count"],
-        "queue_count" => p["queue_count"],
-        "crash_count" => p["crash_count"],
-        "fuzzers" => p["fuzzers"],
-        "workers" => p["workers"],
-        "generators" => p["generators"],
-        "has_coverage" => true,
-        "report_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/report/index.html",
-        "lcov_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/lcov.info",
-        "summary_rel_path" => "#{cov_rel_prefix}/pairs/#{pid}/summary.txt",
-        "file_report_prefix" => "#{cov_rel_prefix}/pairs/#{pid}/report/coverage/",
-        "totals" => totals,
-        "files" => files
-      }.compact
-    else
-      {
-        "id" => pid,
-        "label" => p["label"],
-        "source" => p["source"],
-        "source_commit" => p["commit"],
-        "source_ref" => p["requested_ref"],
-        "target" => p["target"],
-        "target_label" => p["target_label"],
-        "cflags" => p["cflags"],
-        "input_count" => p["input_count"],
-        "queue_count" => p["queue_count"],
-        "crash_count" => p["crash_count"],
-        "fuzzers" => p["fuzzers"],
-        "workers" => p["workers"],
-        "generators" => p["generators"],
-        "has_coverage" => false,
-        "report_rel_path" => nil,
-        "lcov_rel_path" => nil,
-        "summary_rel_path" => nil,
-        "file_report_prefix" => nil,
-        "totals" => {},
-        "files" => []
-      }.compact
-    end
-  end
-
-  primary_pair = pairs_out.find { |p| p["has_coverage"] } || pairs_out.first
-  unless pairs_out.any? { |p| p["has_coverage"] }
-    abort "Error: no coverage profile data was produced for any (source, target) pair."
-  end
-
-  payload = {
-    "generated_at" => Time.now.iso8601,
-    "primary_pair_id" => primary_pair && primary_pair["id"],
-    "totals" => primary_pair ? primary_pair["totals"] : {},
-    "pairs" => pairs_out,
-    "worker_pairs" => worker_pairs
-  }.compact
-
-  File.write(out_json_path, JSON.pretty_generate(payload))
-RUBY
+ruby "$EMIT_COV_RB" "$WORK_DIR" "$PAIRS_META" "$COVERAGE_DIR" "$JSON_FILE" --mode complete
 
 rm -rf "$OLD_COVERAGE_DIR"
 if [ -d "$FINAL_COVERAGE_DIR" ]; then

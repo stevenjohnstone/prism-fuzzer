@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require_relative "../../../harnesses/prism/gen_api_compat"
-
 module PrismFuzzer
   module Topology
     module_function
@@ -163,6 +161,29 @@ module PrismFuzzer
       true
     end
 
+    def ensure_prism_fuzz_compat!(prism_dir, gen_dir, fuzz_root: locate_fuzz_root)
+      inc_dir = File.join(prism_dir, "include")
+      return gen_dir unless Dir.exist?(inc_dir)
+
+      unless defined?(::PrismFuzzCompat)
+        compat_rb = [
+          File.join(fuzz_root, "harnesses", "prism", "gen_api_compat.rb"),
+          File.expand_path("../../../harnesses/prism/gen_api_compat.rb", __dir__)
+        ].find { |p| File.file?(p) }
+        require compat_rb if compat_rb
+      end
+      return gen_dir unless defined?(::PrismFuzzCompat)
+
+      FileUtils.mkdir_p(gen_dir)
+      locs = File.join(gen_dir, "node_locations.inc")
+      ::PrismFuzzCompat.generate!(
+        include_dir: inc_dir,
+        subloc_inc: File.file?(locs) ? locs : nil,
+        out_path: File.join(gen_dir, "prism_fuzz_compat.h")
+      )
+      gen_dir
+    end
+
     def ensure_harness_generated_inc!(prism_dir, gen_dir, fuzz_root: locate_fuzz_root)
       FileUtils.mkdir_p(gen_dir)
       cfg = File.join(prism_dir, "config.yml")
@@ -177,14 +198,7 @@ module PrismFuzzer
         run_cmd("ruby", gen_walk_rb, cfg, walk) if !File.file?(walk) || File.mtime(walk) < cfg_mtime || File.mtime(gen_walk_rb) > File.mtime(walk)
       end
 
-      inc_dir = File.join(prism_dir, "include")
-      if Dir.exist?(inc_dir)
-        PrismFuzzCompat.generate!(
-          include_dir: inc_dir,
-          subloc_inc: File.file?(locs) ? locs : nil,
-          out_path: File.join(gen_dir, "prism_fuzz_compat.h")
-        )
-      end
+      ensure_prism_fuzz_compat!(prism_dir, gen_dir, fuzz_root: fuzz_root)
       gen_dir
     end
 

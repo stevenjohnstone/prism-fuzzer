@@ -7,7 +7,7 @@ TEST_CXX := $(if $(filter default,$(origin CXX)),clang++,$(CXX))
 
 RUNTIME_TOPOLOGY_DEPS := runtime/topology.rb $(sort $(wildcard runtime/lib/topology/*.rb))
 RUNTIME_CAMPAIGN_DEPS := runtime/campaign.rb $(sort $(wildcard runtime/lib/campaign/*.rb))
-REPORT_LIB_DEPS := report/report.rb report/sankey.rb $(sort $(wildcard report/lib/*.rb report/lib/*/*.rb))
+REPORT_LIB_DEPS := report/report.rb report/sankey.rb $(sort $(wildcard report/lib/*.rb report/lib/*/*.rb report/lib/assets/*))
 TEST_RUNNER_DEPS := test/run.rb test/lib/autorun.rb test/lib/test_helpers.rb test/lib/fixtures.rb
 PRISM_A_STATE_DEP := $(wildcard $(PRISM_A_DIR)/.fuzz-target-state.json)
 PRISM_A_CONFIG_DEP := $(PRISM_A_DIR)/config.yml

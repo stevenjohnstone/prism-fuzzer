@@ -141,6 +141,19 @@ module PrismFuzzer
         Campaign.run_report!(ctx, dry_run: dry_run)
       end
 
+      def coverage!(skip_sync: false, build_ruby: false, cache_dir: nil, dry_run: false, **opts)
+        mark_invoked!
+        return true if Thread.current[:prism_fuzzer_compiling_dsl]
+
+        Campaign.run_standalone_coverage!(
+          context(**opts),
+          skip_sync: skip_sync,
+          build_ruby: build_ruby,
+          cache_dir: cache_dir,
+          dry_run: dry_run
+        )
+      end
+
       def publish!(dry_run: false, **opts)
         mark_invoked!
         return true if Thread.current[:prism_fuzzer_compiling_dsl]
@@ -231,6 +244,7 @@ module PrismFuzzer
           d = cli.delete(:duration)
           cli[:duration_seconds] = (d.nil? || d.to_s.strip == "0") ? nil : CampaignDSL.parse_duration(d)
         end
+        cli[:no_coverage] = true if cli.key?(:coverage) && cli.delete(:coverage) == false
         cli[:publish_run_id] ||= cli.delete(:run_id) if cli.key?(:run_id)
         cli[:publish_title] ||= cli.delete(:title) if cli.key?(:title)
         cli[:publish_out_dir] ||= cli.delete(:out_dir) if cli.key?(:out_dir)

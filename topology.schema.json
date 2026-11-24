@@ -149,6 +149,7 @@
               "additionalProperties": false,
               "properties": {
                 "enabled": { "type": "boolean" },
+                "coverage": { "type": "boolean" },
                 "threads": { "type": "integer", "minimum": 1 },
                 "minimize": { "type": "boolean" },
                 "recount": { "type": "boolean" },

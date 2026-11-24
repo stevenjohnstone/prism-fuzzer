@@ -555,6 +555,31 @@ td.num, th.num {
 .cov-btn-secondary:hover {
   background: rgba(255, 255, 255, 0.12);
 }
+.cov-pending-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(52, 211, 153, 0.35);
+  color: #a7f3d0;
+}
+.cov-pending-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #a7f3d0;
+}
+.cov-pulse-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  display: inline-block;
+  animation: covPulse 1.4s ease-in-out infinite;
+}
+@keyframes covPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
 .table-card-header {
   display: flex;
   justify-content: space-between;

@@ -42,6 +42,14 @@ module PrismFuzzer
         end
       end
 
+      if cli[:no_coverage]
+        if lc["report"] == true
+          lc["report"] = { "enabled" => true, "coverage" => false }
+        elsif lc["report"].is_a?(Hash)
+          lc["report"]["coverage"] = false
+        end
+      end
+
       if cli[:publish_run_id] || cli[:publish_title] || cli[:publish_out_dir] || cli.key?(:publish_commit) || cli.key?(:publish_push) || cli.key?(:publish_gh_pages) || cli[:publish_branch] || cli[:publish_remote]
         pub = lc["publish"].is_a?(Hash) ? lc["publish"] : {}
         pub["enabled"] = true unless pub.key?("enabled") && pub["enabled"] == false
@@ -122,6 +130,7 @@ module PrismFuzzer
         ws_custom_build: ws_custom_build,
         ws_custom_corpus: ws_custom_corpus,
         ws_overridden: ws_overridden,
+        cli: cli || {},
         lifecycle: lifecycle,
         container_name: cname
       }

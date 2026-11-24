@@ -10,7 +10,11 @@ module PrismFuzzerReport
   module CoverageView
     module_function
 
-    def ingest_coverage(cov_json_path:, out_dir_abs:, fuzzers:, topo_ctx: nil)
+    def pair_html_ready?(p)
+      p["html_ready"] != false && !p["report_rel_path"].to_s.empty?
+    end
+
+    def ingest_coverage(cov_json_path:, out_dir_abs:, fuzzers:, topo_ctx: nil, coverage_pending: false)
       coverage_data = PrismFuzzer::Common.read_json(cov_json_path, context: "CoverageView")
       coverage_data = nil unless coverage_data.is_a?(Hash)
 
@@ -42,6 +46,11 @@ module PrismFuzzerReport
       end
 
       topo = topo_ctx && topo_ctx[:topology]
+      expected_pairs = if topo && defined?(PrismFuzzer::Topology)
+                         PrismFuzzer::Topology.coverage_pairs(topo)
+                       else
+                         []
+                       end
       if cov_worker_pairs.empty? && topo && defined?(PrismFuzzer::Topology)
         cov_worker_pairs = PrismFuzzer::Topology.worker_coverage_pairs(topo)
       end
@@ -53,6 +62,14 @@ module PrismFuzzerReport
       end
 
       cov_dir_abs = File.expand_path(File.dirname(cov_json_path))
+      cov_base_rel = begin
+        Pathname.new(cov_dir_abs).relative_path_from(out_dir_abs).to_s
+      rescue ArgumentError
+        "coverage"
+      end
+      cov_base_rel = "." if cov_base_rel.empty?
+      cov_js_rel = cov_base_rel == "." ? "coverage.js" : "#{cov_base_rel}/coverage.js"
+
       normalize_cov_rel = lambda do |raw_rel|
         s = raw_rel.to_s
         return nil if s.empty?
@@ -82,13 +99,29 @@ module PrismFuzzerReport
       active_cov_pairs = cov_pairs.select { |p| p["has_coverage"] }
       primary_cov_pair = active_cov_pairs.find { |p| p["id"] == coverage_data&.dig("primary_pair_id") } || active_cov_pairs.first
 
+      status = if coverage_pending
+                 active_cov_pairs.any? ? "updating" : "pending"
+               elsif coverage_data
+                 raw_st = coverage_data["status"].to_s
+                 raw_st.empty? ? "complete" : raw_st
+               else
+                 "none"
+               end
+
       {
         coverage_data: coverage_data,
         cov_pairs: cov_pairs,
         cov_pairs_by_id: cov_pairs_by_id,
         cov_worker_pairs: cov_worker_pairs,
         active_cov_pairs: active_cov_pairs,
-        primary_cov_pair: primary_cov_pair
+        primary_cov_pair: primary_cov_pair,
+        expected_pairs: expected_pairs,
+        coverage_pending: coverage_pending,
+        status: status,
+        sequence: coverage_data ? coverage_data["sequence"].to_i : 0,
+        generated_at: coverage_data ? coverage_data["generated_at"].to_s : "",
+        cov_base_rel_path: cov_base_rel,
+        cov_js_rel_path: cov_js_rel
       }
     end
 
@@ -97,9 +130,12 @@ module PrismFuzzerReport
       ids.filter_map { |pid| cov_pairs_by_id[pid.to_s] }
     end
 
-    def render_worker_cov_overview_cells(worker_pairs)
+    def render_worker_cov_overview_cells(worker_pairs, coverage_pending: false)
       cov_list = worker_pairs.select { |p| p["has_coverage"] }
       if cov_list.empty?
+        if coverage_pending
+          return ["<span class=\"muted cov-pending-inline\">Collecting&hellip;</span>", "<span class=\"muted\">&mdash;</span>"]
+        end
         return ["<span class=\"muted\">&mdash;</span>", "<span class=\"muted\">&mdash;</span>"]
       end
 
@@ -111,7 +147,13 @@ module PrismFuzzerReport
         href = CGI.escapeHTML(p["report_rel_path"].to_s)
         pair_dom = CGI.escapeHTML("cov-pair-#{p['id']}")
         cov_cell = %(<div class="cov-pair-stat"><a class="pair-chip" href="javascript:void(0)" onclick="event.stopPropagation(); jumpToCoveragePair('#{pair_dom}')">#{label}</a> <strong>#{format('%.2f%%', l_pct)}</strong> <span class="muted">(#{format('%.1f%%', b_pct)} B)</span></div>)
-        rep_cell = href.empty? ? "<span class=\"muted\">&mdash;</span>" : %(<a class="cov-link" href="#{href}" target="_blank" rel="noopener" onclick="event.stopPropagation()">HTML &nearr;</a>)
+        rep_cell = if pair_html_ready?(p)
+                     %(<a class="cov-link" href="#{href}" target="_blank" rel="noopener" onclick="event.stopPropagation()">HTML &nearr;</a>)
+                   elsif p["html_ready"] == false
+                     "<span class=\"muted\" title=\"Rendering annotated HTML source views\">HTML&hellip;</span>"
+                   else
+                     "<span class=\"muted\">&mdash;</span>"
+                   end
         return [cov_cell, rep_cell]
       end
 
@@ -124,11 +166,13 @@ module PrismFuzzerReport
       end.join("\n")
 
       rep_links = cov_list.filter_map do |p|
-        href = p["report_rel_path"].to_s
-        next nil if href.empty?
-
         label = CGI.escapeHTML(p["label"].to_s)
-        %(<div><a class="cov-link" href="#{CGI.escapeHTML(href)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#{label} &nearr;</a></div>)
+        if pair_html_ready?(p)
+          href = p["report_rel_path"].to_s
+          %(<div><a class="cov-link" href="#{CGI.escapeHTML(href)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">#{label} &nearr;</a></div>)
+        elsif p["html_ready"] == false
+          %(<div><span class="muted">#{label} HTML&hellip;</span></div>)
+        end
       end.join("\n")
 
       [cov_lines, rep_links.empty? ? "<span class=\"muted\">&mdash;</span>" : rep_links]
@@ -139,11 +183,13 @@ module PrismFuzzerReport
       return "" if cov_list.empty?
 
       cov_list.map do |p|
-        href = p["report_rel_path"].to_s
-        next nil if href.empty?
-
         label = CGI.escapeHTML(p["label"].to_s)
-        %(<a class="cov-btn" href="#{CGI.escapeHTML(href)}" target="_blank" rel="noopener">#{label} llvm-cov &nearr;</a>)
+        if pair_html_ready?(p)
+          href = p["report_rel_path"].to_s
+          %(<a class="cov-btn" href="#{CGI.escapeHTML(href)}" target="_blank" rel="noopener">#{label} llvm-cov &nearr;</a>)
+        elsif p["html_ready"] == false
+          %(<span class="sched-pill cov-pending-pill">#{label} HTML&hellip;</span>)
+        end
       end.compact.join(" ")
     end
 
@@ -173,12 +219,30 @@ module PrismFuzzerReport
       end.join("\n")
     end
 
-    def render_coverage_tab_html(cov_info)
+    def render_coverage_tab_inner_html(cov_info)
       active_cov_pairs = cov_info[:active_cov_pairs]
-      return "" if active_cov_pairs.empty?
+      if active_cov_pairs.empty?
+        return "" unless cov_info[:coverage_pending]
+
+        exp = Array(cov_info[:expected_pairs])
+        pair_chips = exp.map { |ep| "<code>#{CGI.escapeHTML(ep['label'] || ep['id'])}</code>" }.join(", ")
+        pair_note = pair_chips.empty? ? "" : " for #{pair_chips}"
+        return <<~PENDING_HTML
+          <div class="fuzzer-banner">
+            <div>
+              <h2><span class="legend-dot" style="background:#34d399"></span> Source Coverage by (Source, Target) Pair</h2>
+              <p class="cmd-line"><span class="cov-pulse-dot"></span> Collecting LLVM source coverage#{pair_note}&hellip;</p>
+            </div>
+          </div>
+          <div class="table-card" style="padding: 20px; color: var(--muted);">
+            Coverage replay is running in the background. Summary percentages and per-file coverage tables will appear here automatically as each <code>(source, target)</code> pair completes, followed by annotated <code>llvm-cov</code> HTML source links.
+          </div>
+        PENDING_HTML
+      end
 
       cov_pairs = cov_info[:cov_pairs]
-      coverage_data = cov_info[:coverage_data]
+      coverage_data = cov_info[:coverage_data] || {}
+      is_updating = cov_info[:status] == "updating" || cov_info[:status] == "running"
 
       pairs_summary_section = if cov_pairs.size > 1
         pair_rows = cov_pairs.each_with_index.map do |p, p_idx|
@@ -189,10 +253,15 @@ module PrismFuzzerReport
           pf = pt["functions"] || {}
           color = Helpers::PALETTE[p_idx % Helpers::PALETTE.size]
           pair_dom = CGI.escapeHTML("cov-pair-#{p['id']}")
+          html_ready = pair_html_ready?(p)
           links = []
-          links << %(<a class="cov-link" href="#{CGI.escapeHTML(p['report_rel_path'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()">HTML &nearr;</a>) if p["report_rel_path"]
-          links << %(<a class="cov-link muted" href="#{CGI.escapeHTML(p['summary_rel_path'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Txt &nearr;</a>) if p["summary_rel_path"]
-          links << %(<a class="cov-link muted" href="#{CGI.escapeHTML(p['lcov_rel_path'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LCOV &nearr;</a>) if p["lcov_rel_path"]
+          if html_ready
+            links << %(<a class="cov-link" href="#{CGI.escapeHTML(p['report_rel_path'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()">HTML &nearr;</a>) if p["report_rel_path"]
+            links << %(<a class="cov-link muted" href="#{CGI.escapeHTML(p['summary_rel_path'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()">Txt &nearr;</a>) if p["summary_rel_path"]
+            links << %(<a class="cov-link muted" href="#{CGI.escapeHTML(p['lcov_rel_path'])}" target="_blank" rel="noopener" onclick="event.stopPropagation()">LCOV &nearr;</a>) if p["lcov_rel_path"]
+          elsif p["has_coverage"] && p["html_ready"] == false
+            links << %(<span class="muted">Rendering HTML&hellip;</span>)
+          end
           workers_list = Array(p["workers"]).map { |w| "<code>#{CGI.escapeHTML(w)}</code>" }.join(" ")
           lines_cell = if p["has_coverage"]
                          <<~CELL
@@ -279,10 +348,15 @@ module PrismFuzzerReport
           src_meta_bits << "Workers: #{Array(p['workers']).map { |w| "<code>#{CGI.escapeHTML(w)}</code>" }.join(', ')}"
         end
 
+        html_ready = pair_html_ready?(p)
         action_btns = []
-        action_btns << %(<a class="cov-btn" href="#{CGI.escapeHTML(p['report_rel_path'])}" target="_blank" rel="noopener">Open llvm-cov HTML Report &nearr;</a>) if p["report_rel_path"]
-        action_btns << %(<a class="cov-btn cov-btn-secondary" href="#{CGI.escapeHTML(p['summary_rel_path'])}" target="_blank" rel="noopener">Text Summary &nearr;</a>) if p["summary_rel_path"]
-        action_btns << %(<a class="cov-btn cov-btn-secondary" href="#{CGI.escapeHTML(p['lcov_rel_path'])}" target="_blank" rel="noopener">LCOV (IDE Gutters) &nearr;</a>) if p["lcov_rel_path"]
+        if html_ready
+          action_btns << %(<a class="cov-btn" href="#{CGI.escapeHTML(p['report_rel_path'])}" target="_blank" rel="noopener">Open llvm-cov HTML Report &nearr;</a>) if p["report_rel_path"]
+          action_btns << %(<a class="cov-btn cov-btn-secondary" href="#{CGI.escapeHTML(p['summary_rel_path'])}" target="_blank" rel="noopener">Text Summary &nearr;</a>) if p["summary_rel_path"]
+          action_btns << %(<a class="cov-btn cov-btn-secondary" href="#{CGI.escapeHTML(p['lcov_rel_path'])}" target="_blank" rel="noopener">LCOV (IDE Gutters) &nearr;</a>) if p["lcov_rel_path"]
+        elsif p["has_coverage"] && p["html_ready"] == false
+          action_btns << %(<span class="sched-pill cov-pending-pill"><span class="cov-pulse-dot"></span> Rendering llvm-cov HTML&hellip;</span>)
+        end
 
         unless p["has_coverage"]
           next <<~EMPTY_PAIR
@@ -294,7 +368,7 @@ module PrismFuzzerReport
                 </div>
               </div>
               <div class="table-card" style="padding: 18px; color: var(--muted);">
-                No coverage profile data collected for this pair yet.
+                #{is_updating ? "Replaying inputs for this pair&hellip;" : "No coverage profile data collected for this pair yet."}
               </div>
             </div>
           EMPTY_PAIR
@@ -320,7 +394,7 @@ module PrismFuzzerReport
           missed_b = fb["count"].to_i - fb["covered"].to_i
           file_href = cf_entry["report_rel_path"].to_s
           file_href = "#{file_prefix}#{fname}.html" if file_href.empty? && !file_prefix.empty?
-          file_link_html = if !file_href.empty?
+          file_link_html = if html_ready && !file_href.empty?
                              %(<a class="cov-link" href="#{CGI.escapeHTML(file_href)}" target="_blank" rel="noopener"><code>#{CGI.escapeHTML(fname)}</code> &nearr;</a>)
                            else
                              "<code>#{CGI.escapeHTML(fname)}</code>"
@@ -343,6 +417,7 @@ module PrismFuzzerReport
           ROW
         end.compact.join("\n")
 
+        sub_hint = html_ready ? "Click any source file to open its annotated HTML coverage view." : "Summary percentages ready; annotated source HTML links will activate automatically once llvm-cov finishes."
         <<~PAIR_SEC
           <div id="#{pair_dom}" style="margin-bottom: 28px;">
             <div class="fuzzer-banner">
@@ -382,7 +457,7 @@ module PrismFuzzerReport
               <div class="table-card-header">
                 <div>
                   <h3>Per-File Coverage &mdash; <code>#{CGI.escapeHTML(p["label"].to_s)}</code></h3>
-                  <p class="chart-sub">Click any source file to open its annotated HTML coverage view.</p>
+                  <p class="chart-sub">#{sub_hint}</p>
                 </div>
               </div>
               <table>
@@ -406,16 +481,24 @@ module PrismFuzzerReport
         PAIR_SEC
       end.join("\n")
 
+      updating_pill = is_updating ? %( &bull; <span class="cov-pending-inline"><span class="cov-pulse-dot"></span> Updating&hellip;</span>) : ""
+      <<~INNER_HTML
+        <div class="fuzzer-banner">
+          <div>
+            <h2><span class="legend-dot" style="background:#34d399"></span> Source Coverage by (Source, Target) Pair</h2>
+            <p class="cmd-line">#{cov_pairs.size} coverage target#{cov_pairs.size == 1 ? "" : "s"} &bull; Collected: #{CGI.escapeHTML(coverage_data["generated_at"].to_s)}#{updating_pill}</p>
+          </div>
+        </div>
+        #{pairs_summary_section}
+        #{pair_sections_html}
+      INNER_HTML
+    end
+
+    def render_coverage_tab_html(cov_info)
+      inner = render_coverage_tab_inner_html(cov_info)
       <<~HTML
         <section id="tab-coverage" class="tab-panel">
-          <div class="fuzzer-banner">
-            <div>
-              <h2><span class="legend-dot" style="background:#34d399"></span> Source Coverage by (Source, Target) Pair</h2>
-              <p class="cmd-line">#{cov_pairs.size} coverage target#{cov_pairs.size == 1 ? "" : "s"} &bull; Collected: #{CGI.escapeHTML(coverage_data["generated_at"].to_s)}</p>
-            </div>
-          </div>
-          #{pairs_summary_section}
-          #{pair_sections_html}
+          #{inner}
         </section>
       HTML
     end
