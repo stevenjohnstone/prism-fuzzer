@@ -153,11 +153,17 @@ class TriageRetriageAndMatchTest < Minitest::Test
       File.write(File.join(retriage_dir, "metadata.json"), JSON.pretty_generate(metadata))
 
       # 1) --dry-run must inspect cluster-01 without deleting/modifying anything on disk.
+      #    Also verify new primary flag names (--skip-fuzzer-build / --rebuild-verifiers) in --help and execution.
+      help_out, = assert_ruby_cmd("triage/retriage.rb", "--help")
+      assert_includes help_out, "--rebuild-verifiers"
+      assert_includes help_out, "--skip-fuzzer-build"
+      refute_includes help_out, "--no-build"
+
       dry_out, = assert_ruby_cmd(
         "triage/retriage.rb",
         "--triage-dir", retriage_dir,
         "--cluster", "cluster-01",
-        "--no-build",
+        "--skip-fuzzer-build",
         "--dry-run",
         env: base_env
       )

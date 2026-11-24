@@ -14,22 +14,33 @@ module PrismFuzzer
       [abs, display]
     end
 
+    def sync_sources!(ctx, skip_sync: false, dry_run: false, build_ruby: false, cache_dir: nil)
+      plan = ctx[:plan]
+      return plan if skip_sync || dry_run
+
+      sync_log, sync_disp = stage_log_paths(ctx, "sync")
+      Progress.stage("Sync targets", log_path: sync_log, display_log: sync_disp) do |stage|
+        plan = Topology.sync_plan!(
+          plan,
+          fuzz_root: ctx[:fuzz_root],
+          build_dir: ctx[:ws][:build_dir],
+          cache_dir: cache_dir || Topology.default_cache_dir(ctx[:fuzz_root]),
+          allow_ruby_build: build_ruby
+        )
+        summary = plan.fetch("sources", {}).map do |id, s|
+          ref = s["commit"] ? s["commit"][0, 7] : (s["requested_ref"] || s["path"] || "local")
+          "#{id}@#{ref}"
+        end.join(", ")
+        stage.custom_done = summary.empty? ? "Targets synced" : "Targets synced (#{summary})"
+      end
+      plan
+    end
+
     def build!(ctx, skip_sync: false, dry_run: false, build_ruby: false)
       logs_dir = ctx.dig(:ws, :logs_dir)
       ensure_docker_image!(fuzz_root: ctx[:fuzz_root], build_dir: ctx.dig(:ws, :build_dir), dry_run: dry_run, logs_dir: logs_dir, emit_cached: true) unless in_docker?
 
-      plan = ctx[:plan]
-      if !skip_sync && !dry_run
-        sync_log, sync_disp = stage_log_paths(ctx, "sync")
-        Progress.stage("Sync targets", log_path: sync_log, display_log: sync_disp) do |stage|
-          plan = Topology.sync_plan!(plan, fuzz_root: ctx[:fuzz_root], build_dir: ctx[:ws][:build_dir], cache_dir: Topology.default_cache_dir(ctx[:fuzz_root]), allow_ruby_build: build_ruby)
-          summary = plan.fetch("sources", {}).map do |id, s|
-            ref = s["commit"] ? s["commit"][0, 7] : (s["requested_ref"] || s["path"] || "local")
-            "#{id}@#{ref}"
-          end.join(", ")
-          stage.custom_done = summary.empty? ? "Targets synced" : "Targets synced (#{summary})"
-        end
-      end
+      plan = sync_sources!(ctx, skip_sync: skip_sync, dry_run: dry_run, build_ruby: build_ruby)
 
       fcount = plan.fetch("fuzzers", {}).size
       write_container_ir!(ctx, dry_run: dry_run)
@@ -325,15 +336,9 @@ module PrismFuzzer
       FileUtils.rm_f(tar_host) if tar_host
     end
 
-    def run_report!(ctx, dry_run: false)
+    def render_coverage_and_report!(ctx, dry_run: false)
       ws = ctx[:ws]
       rep_opts = step_opts(ctx[:lifecycle], "report")
-      sync_dirs = Topology.sync_group_dirs(ctx[:plan], base_dir: ws[:fuzz_dir])
-      sync_dirs = [ws[:afl_dir]] if sync_dirs.empty?
-
-      if dry_run || sync_dirs.any? { |d| Dir.exist?(d) }
-        run_triage!(ctx, dry_run: dry_run)
-      end
       if ENV["FUZZ_SKIP_COVERAGE"].to_s.empty? && (dry_run || Dir.exist?(ws[:afl_dir]))
         run_coverage!(ctx, dry_run: dry_run, coverage_flags: rep_opts["coverage_flags"] || rep_opts["flags"])
       end
@@ -345,6 +350,46 @@ module PrismFuzzer
       cmd.push("--sankey-top", rep_opts["top"].to_s) if rep_opts["top"]
       FileUtils.mkdir_p(ws[:report_dir]) unless dry_run
       run_host_script_stage!(ctx, "report", "Generate campaign report", cmd, fail_message: "report.rb failed", done_message: "Report written to #{Topology.path_relative_or_abs(out_html, ctx[:fuzz_root])}", dry_run: dry_run)
+    end
+
+    def run_report!(ctx, dry_run: false)
+      ws = ctx[:ws]
+      sync_dirs = Topology.sync_group_dirs(ctx[:plan], base_dir: ws[:fuzz_dir])
+      sync_dirs = [ws[:afl_dir]] if sync_dirs.empty?
+
+      if dry_run || sync_dirs.any? { |d| Dir.exist?(d) }
+        run_triage!(ctx, dry_run: dry_run)
+      end
+      render_coverage_and_report!(ctx, dry_run: dry_run)
+    end
+
+    def run_retriage!(ctx, extra_args: [], skip_sync: false, skip_build: false, run_report: false, run_publish: false, build_ruby: false, cache_dir: nil, dry_run: false)
+      ws = ctx[:ws]
+      ensure_docker_image!(fuzz_root: ctx[:fuzz_root], build_dir: ws[:build_dir], dry_run: dry_run, logs_dir: ws[:logs_dir]) unless in_docker?
+      sync_sources!(ctx, skip_sync: skip_sync, dry_run: dry_run, build_ruby: build_ruby, cache_dir: cache_dir)
+
+      fwd_args = Array(extra_args).dup
+      run_report = true if fwd_args.delete("--report")
+      effective_report_dry = dry_run || fwd_args.include?("--dry-run")
+      if skip_build && !fwd_args.include?("--skip-fuzzer-build") && !fwd_args.include?("--no-build")
+        fwd_args << "--skip-fuzzer-build"
+      end
+
+      triage_guest = guest_path_for(ws[:triage_dir], ctx, ws_key: "triage_dir")
+      run_in_container!(ctx, ["ruby", "./triage/retriage.rb", "--triage-dir", triage_guest, *fwd_args], interactive: true, dry_run: dry_run)
+      render_coverage_and_report!(ctx, dry_run: effective_report_dry) if run_report
+      run_publish!(ctx, dry_run: effective_report_dry) if run_publish
+      true
+    end
+
+    def run_verify!(ctx, extra_args: [], skip_sync: false, build_ruby: false, cache_dir: nil, dry_run: false)
+      ws = ctx[:ws]
+      ensure_docker_image!(fuzz_root: ctx[:fuzz_root], build_dir: ws[:build_dir], dry_run: dry_run, logs_dir: ws[:logs_dir]) unless in_docker?
+      sync_sources!(ctx, skip_sync: skip_sync, dry_run: dry_run, build_ruby: build_ruby, cache_dir: cache_dir)
+
+      triage_guest = guest_path_for(ws[:triage_dir], ctx, ws_key: "triage_dir")
+      run_in_container!(ctx, ["ruby", "./triage/verify.rb", "--triage-dir", triage_guest, *Array(extra_args)], interactive: true, dry_run: dry_run)
+      true
     end
 
     def run_publish!(ctx, extra_args: [], dry_run: false)

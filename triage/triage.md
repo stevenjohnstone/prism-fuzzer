@@ -174,7 +174,7 @@ Spawning a sanitized executable once per archived crash incurs ASAN initializati
 
 ### Build Profiles (`verify_bucket.sh`)
 
-`verify_bucket.sh` compiles and caches `<ws>/build/verify/verify_runner.<profile>` (rebuilding automatically whenever any file under the target `src/`, `include/`, `harnesses/prism/`, or `verify_runner.c` is newer than the binary, or when `--rebuild` is passed; falls back to `${TMPDIR:-/tmp}/prism-fuzzer-verify/<key>` if that directory is not writable). Every profile shares `-DPM_INTEGER_DIVIDE_THRESHOLD=8`, `-DPRISM_DEPTH_MAXIMUM=128`, `-DFUZZ_MAX_INPUT_SIZE`, `-DFUZZ_MAX_ALLOCATED`, and `-DFUZZ_HARD_RSS_LIMIT`, plus:
+`verify_bucket.sh` compiles and caches `<ws>/build/verify/verify_runner.<profile>` (rebuilding automatically whenever any file under the target `src/`, `include/`, `harnesses/prism/`, or `verify_runner.c` changes, or when `--rebuild-verifiers` is passed; falls back to `${TMPDIR:-/tmp}/prism-fuzzer-verify/<key>` if that directory is not writable). Every profile shares `-DPM_INTEGER_DIVIDE_THRESHOLD=8`, `-DPRISM_DEPTH_MAXIMUM=128`, `-DFUZZ_MAX_INPUT_SIZE`, `-DFUZZ_MAX_ALLOCATED`, and `-DFUZZ_HARD_RSS_LIMIT`, plus:
 
 | Profile | Selected When | Compile Flags |
 | :--- | :--- | :--- |
@@ -240,13 +240,14 @@ Forwarded by `make verify` (in [`Makefile`](../Makefile)) or accepted by `verify
 | `VERIFY_MAX_FAILURES` | `--max-failures N` | `0` (all) | Stop each bucket after `N` failing inputs (`1` enables fast fail-first checks while still detecting `PARTIAL` vs `PASS`). |
 | `VERIFY_EXTRACT_SURVIVORS` | `--extract-survivors DIR` | unset | Copy still-failing raw inputs to `DIR/<bucket_id>/<name>`. Empty directories for passing buckets are removed. |
 | `VERIFY_UNREPRODUCIBLE` | `--include-unreproducible` (`verify.rb`) | `0` | Include `unreproducible/` buckets in the sweep. |
-| `VERIFY_REBUILD` | `--rebuild` | `0` | Force recompilation of `<ws>/build/verify/verify_runner.<profile>`. |
+| `VERIFY_REBUILD` | `--rebuild-verifiers` | `0` | Force recompilation of `<ws>/build/verify/verify_runner.<profile>` (legacy `--rebuild` alias supported). |
 | `VERIFY_SYMBOLIZE` | `--symbolize` | `0` | Enable external `llvm-symbolizer` for symbolized stack traces on failures. |
 | `VERIFY_VERBOSE` | `--verbose` | `0` | List every failing input in `verify.rb` and capture full stderr in `verify_runner`. |
 | `VERIFY_QUIET` | `--quiet` | `0` | Suppress `PASS` lines in `verify.rb` and truncated stderr snippets in `verify_runner`. |
 | — | `--json [PATH]` | unset | Emit full structured JSON report to stdout or `PATH` (pass via `VERIFY_ARGS="--json ..."`). |
-| `RETRIAGE_BUILD` | `--no-build` (`retriage.rb`, `RETRIAGE_BUILD=0`) | `1` | Skip rebuilding fuzzer binaries before re-triaging surviving inputs in `retriage.rb`. |
+| `RETRIAGE_BUILD` | `--skip-fuzzer-build` (`retriage.rb`, `RETRIAGE_BUILD=0`) | `1` | Skip rebuilding campaign fuzzer binaries when surviving inputs remain in `retriage.rb` (legacy `--no-build` alias supported). |
 | `RETRIAGE_DRY_RUN` | `--dry-run` (`retriage.rb`) | `0` | Verify and print what `retriage.rb` would remove/re-triage without modifying disk. |
+| — | `--report` (`campaign retriage`) | unset | Refresh LLVM source coverage and regenerate `<ws>/report/index.html` immediately after `retriage`. |
 | — | `VERIFY_BUILD_DIR` | `<ws>/build/verify` | Override compiled `verify_runner` cache directory (`verify_bucket.sh`). |
 
 ### Snippet & Reproducer Cluster Matching (`match.rb`)

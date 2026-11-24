@@ -166,6 +166,37 @@ module PrismFuzzer
         Campaign.run_post_pipeline!(context(**opts), dry_run: dry_run)
       end
 
+      def retriage!(*extra_args, skip_sync: false, skip_build: false, report: false, publish: false, build_ruby: false, cache_dir: nil, dry_run: false, **ws_opts)
+        mark_invoked!
+        return true if Thread.current[:prism_fuzzer_compiling_dsl]
+
+        Campaign.run_retriage!(
+          context(**ws_opts),
+          extra_args: extra_args.flatten,
+          skip_sync: skip_sync,
+          skip_build: skip_build,
+          run_report: report,
+          run_publish: publish,
+          build_ruby: build_ruby,
+          cache_dir: cache_dir,
+          dry_run: dry_run
+        )
+      end
+
+      def verify!(*extra_args, skip_sync: false, build_ruby: false, cache_dir: nil, dry_run: false, **ws_opts)
+        mark_invoked!
+        return true if Thread.current[:prism_fuzzer_compiling_dsl]
+
+        Campaign.run_verify!(
+          context(**ws_opts),
+          extra_args: extra_args.flatten,
+          skip_sync: skip_sync,
+          build_ruby: build_ruby,
+          cache_dir: cache_dir,
+          dry_run: dry_run
+        )
+      end
+
       def stats(**ws_opts)
         mark_invoked!
         return {} if Thread.current[:prism_fuzzer_compiling_dsl]

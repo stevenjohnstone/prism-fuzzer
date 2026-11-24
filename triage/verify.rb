@@ -343,6 +343,7 @@ module FuzzVerify
   def parse_options(argv)
     options = default_options
     begin
+      normalized_argv = argv.map { |arg| arg == "--rebuild" ? "--rebuild-verifiers" : arg }
       OptionParser.new do |opts|
         opts.banner = "Usage: verify.rb [OPTIONS]"
         opts.on("--triage-dir DIR", "Triage directory (default: tmp/fuzz/report/triage)") { |v| options[:triage_dir] = v }
@@ -359,7 +360,7 @@ module FuzzVerify
         opts.on("--input-min-only", "Check only each bucket's minimized input.min (skip archived inputs)") { options[:input_min_only] = true }
         opts.on("--skip-min", "Skip each bucket's input.min (check archived inputs only)") { options[:skip_min] = true }
         opts.on("--include-unreproducible", "Include unreproducible/ buckets") { options[:include_unreproducible] = true }
-        opts.on("--rebuild", "Force rebuild of verify_runner binaries") { options[:rebuild] = true }
+        opts.on("--rebuild-verifiers", "Force recompilation of verify_runner binaries (bypasses source fingerprint cache)") { options[:rebuild] = true }
         opts.on("--symbolize", "Enable external llvm-symbolizer (slower when many inputs crash)") { options[:symbolize] = true }
         opts.on("--fail-fast", "Stop checking further buckets after the first failing/partial bucket") { options[:fail_fast] = true }
         opts.on("--invert", "Invert verdict exit status (exit 0 on FAIL/PARTIAL, 1 on PASS; useful when bisecting fixes)") { options[:invert] = true }
@@ -373,7 +374,8 @@ module FuzzVerify
             options[:json_stdout] = true
           end
         end
-      end.parse!(argv)
+      end.parse!(normalized_argv)
+      argv.replace(normalized_argv)
     rescue OptionParser::ParseError => e
       die_config("verify.rb: #{e.message}", options)
     end
@@ -499,7 +501,7 @@ module FuzzVerify
         "--profile", profile,
         "--build-only"
       ]
-      cmd << "--rebuild" if options[:rebuild]
+      cmd << "--rebuild-verifiers" if options[:rebuild]
       env_overrides = repo_b ? { "PRISM_B_DIR" => repo_b } : {}
       stdout, stderr, status = Open3.capture3(env_overrides, *cmd)
       unless status.success?

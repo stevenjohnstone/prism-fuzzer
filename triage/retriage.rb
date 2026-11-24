@@ -106,7 +106,7 @@ module FuzzRetriage
     options[:buckets].each { |pat| cmd.push("--bucket", pat) }
     options[:reasons].each { |pat| cmd.push("--reason", pat) }
     cmd << "--include-unreproducible" if options[:include_unreproducible]
-    cmd << "--rebuild" if options[:rebuild]
+    cmd << "--rebuild-verifiers" if options[:rebuild]
     cmd << "--quiet" if options[:quiet]
     cmd
   end
@@ -145,6 +145,13 @@ module FuzzRetriage
 
   def parse_options(argv, fuzz_root = locate_fuzz_root)
     options = default_options(fuzz_root)
+    normalized_argv = argv.map do |arg|
+      case arg
+      when "--rebuild" then "--rebuild-verifiers"
+      when "--no-build" then "--skip-fuzzer-build"
+      else arg
+      end
+    end
     OptionParser.new do |opts|
       opts.banner = "Usage: retriage.rb [OPTIONS]"
       opts.on("--triage-dir DIR", "Triage directory (default: tmp/fuzz/report/triage)") { |v| options[:triage_dir] = v }
@@ -154,15 +161,35 @@ module FuzzRetriage
       opts.on("--reason REASON", "Only retriage buckets in reason directory (repeatable)") { |v| options[:reasons] << v }
       opts.on("--include-unreproducible", "Include unreproducible/ buckets in verification") { options[:include_unreproducible] = true }
       opts.on("--timeout SEC", Integer, "Per-input verify timeout in seconds (default: 5)") { |v| options[:timeout] = v }
-      opts.on("--rebuild", "Force rebuild of verify_runner binaries") { options[:rebuild] = true }
-      opts.on("--no-build", "Skip rebuilding fuzzer binaries before re-triaging survivors") { options[:build] = false }
+      opts.on("--rebuild-verifiers", "Force recompilation of verify_runner binaries (bypasses source fingerprint cache)") { options[:rebuild] = true }
+      opts.on("--skip-fuzzer-build", "Skip rebuilding campaign fuzzer binaries when surviving inputs remain") { options[:build] = false }
       opts.on("--dry-run", "Verify and report what would be removed/re-triaged without modifying disk") { options[:dry_run] = true }
       opts.on("--verbose", "Print detailed progress") { options[:verbose] = true }
       opts.on("--quiet", "Suppress detailed verification lines") { options[:quiet] = true }
-    end.parse!(argv)
+    end.parse!(normalized_argv)
+    argv.replace(normalized_argv)
 
     options[:clusters_file] = nil if options[:clusters_file]&.empty?
     options
+  end
+
+  def rebuild_fuzzer_binaries!(fuzz_root, quiet: false)
+    in_container = File.exist?("/.dockerenv") || File.exist?("/run/.containerenv")
+    campaign_cli = File.join(fuzz_root, "bin", "campaign.rb")
+    has_campaign_env = %w[CAMPAIGN TOPOLOGY].any? { |k| !ENV[k].to_s.strip.empty? }
+
+    if File.file?(campaign_cli) && has_campaign_env
+      cmd = [RbConfig.ruby, campaign_cli, "build", "--skip-sync"]
+      cmd << "--in-container-step" if in_container
+      puts "Rebuilding campaign fuzzer binaries (#{cmd.drop(1).join(' ')})..." unless quiet
+      ok = Dir.chdir(fuzz_root) { system(*cmd) }
+      abort "Campaign fuzzer build failed; leaving triage buckets unmodified." unless ok
+    else
+      target = in_container ? "_build-all" : "build"
+      puts "Rebuilding fuzzer binaries against current working tree (make #{target})..." unless quiet
+      ok = Dir.chdir(fuzz_root) { system("make", target) }
+      abort "make #{target} failed; leaving triage buckets unmodified." unless ok
+    end
   end
 
   def run(argv = ARGV)
@@ -265,12 +292,14 @@ module FuzzRetriage
           surviving_all_shas.add(orig_sha)
           surviving_all_shas.add(content_sha)
 
-          survivors_by_sha[content_sha] ||= {
+          entry = (survivors_by_sha[content_sha] ||= {
             sha: content_sha,
+            orig_shas: Set.new,
             path: file_path,
             executable: executable,
             queue: occ&.dig("queue") == "hangs" ? "hangs" : default_queue
-          }
+          })
+          entry[:orig_shas].add(orig_sha) if orig_sha != content_sha
         end
       end
 
@@ -296,11 +325,7 @@ module FuzzRetriage
       # Rebuild classifying fuzzer binaries before modifying triage_dir so a compile failure
       # never discards existing triage buckets or archived survivors.
       if !survivors_by_sha.empty? && options[:build]
-        in_container = File.exist?("/.dockerenv") || File.exist?("/run/.containerenv")
-        target = in_container ? "_build-all" : "build"
-        puts "Rebuilding fuzzer binaries against current working tree (make #{target})..." unless options[:quiet]
-        build_ok = Dir.chdir(fuzz_root) { system("make", target) }
-        abort "make #{target} failed; leaving #{triage_dir} unmodified." unless build_ok
+        rebuild_fuzzer_binaries!(fuzz_root, quiet: options[:quiet])
       end
 
       buckets_to_remove.each do |bucket_id|
@@ -342,6 +367,20 @@ module FuzzRetriage
           fuzz_versions_overrides: fuzz_versions_overrides,
           coverage_bin: retriage_cov_bin
         )
+
+        # Mirror new bucket sentinels back to any pre-normalized raw crash hashes (e.g. IJON
+        # stream-bit inputs) so subsequent `report` / `triage.rb` passes recognize them as processed.
+        survivors_by_sha.each_value do |item|
+          next if item[:orig_shas].empty?
+
+          content_sentinel = File.join(processed_dir, item[:sha])
+          next unless File.file?(content_sentinel)
+
+          sentinel_body = File.read(content_sentinel)
+          item[:orig_shas].each do |orig_sha|
+            File.write(File.join(processed_dir, orig_sha), sentinel_body)
+          end
+        end
       end
 
       clusters_path = File.join(triage_dir, "clusters.json")

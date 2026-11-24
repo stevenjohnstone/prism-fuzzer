@@ -75,8 +75,8 @@ module PrismFuzzer
               ps             List running prism-fuzzer campaign containers with attach commands
               status / stats Show live container status (--live) or workspace campaign statistics
               report         Triage crashes, collect LLVM coverage, and generate HTML report (<ws>/report/)
-              retriage       Re-triage failing inputs in the campaign workspace
-              verify         Verify fixed inputs across triage buckets
+              retriage       Sync targets and re-triage buckets in workspace (pass --report to refresh HTML)
+              verify         Sync targets and verify fixed inputs across triage buckets
               bisect         Bisect regression/fix commit across Prism history
               match / inspect / explain / publish
               bench / accel / shell / clean
@@ -269,12 +269,27 @@ module PrismFuzzer
           PrismFuzzer::Campaign.run_publish!(ctx, extra_args: extra_args, dry_run: opts[:dry_run])
           0
         when "retriage"
-          PrismFuzzer::Campaign.ensure_docker_image!(fuzz_root: fuzz_root, dry_run: opts[:dry_run])
-          PrismFuzzer::Campaign.run_in_container!(ctx, ["ruby", "./triage/retriage.rb", "--triage-dir", PrismFuzzer::Campaign.guest_path_for(ws[:triage_dir], ctx, ws_key: "triage_dir"), *extra_args], interactive: true, dry_run: opts[:dry_run])
+          PrismFuzzer::Campaign.run_retriage!(
+            ctx,
+            extra_args: extra_args,
+            skip_sync: opts[:skip_sync],
+            skip_build: opts[:skip_build],
+            run_report: opts[:report],
+            run_publish: opts[:publish],
+            build_ruby: opts[:build_ruby],
+            cache_dir: opts[:cache_dir],
+            dry_run: opts[:dry_run]
+          )
           0
         when "verify"
-          PrismFuzzer::Campaign.ensure_docker_image!(fuzz_root: fuzz_root, dry_run: opts[:dry_run])
-          PrismFuzzer::Campaign.run_in_container!(ctx, ["ruby", "./triage/verify.rb", "--triage-dir", PrismFuzzer::Campaign.guest_path_for(ws[:triage_dir], ctx, ws_key: "triage_dir"), *extra_args], interactive: true, dry_run: opts[:dry_run])
+          PrismFuzzer::Campaign.run_verify!(
+            ctx,
+            extra_args: extra_args,
+            skip_sync: opts[:skip_sync],
+            build_ruby: opts[:build_ruby],
+            cache_dir: opts[:cache_dir],
+            dry_run: opts[:dry_run]
+          )
           0
         when "bisect"
           PrismFuzzer::Campaign.ensure_docker_image!(fuzz_root: fuzz_root, dry_run: opts[:dry_run])

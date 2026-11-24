@@ -1537,6 +1537,34 @@ class CampaignDslAndSchemaTest < Minitest::Test
           assert_equal before + 1, discover_calls, "expected cached resolve_topology to avoid repeated disk discovery"
         end
       end
+
+      # 5. Campaign `retriage --report` and `verify` auto-sync sources and chain report rendering cleanly.
+      events = []
+      with_stubbed_singleton_methods(
+        PrismFuzzer::Campaign,
+        in_docker?: -> { false },
+        ensure_docker_image!: ->(**_kw) { events << :docker; true },
+        sync_sources!: ->(_c, skip_sync: false, **_kw) { events << [:sync, skip_sync]; ctx[:plan] },
+        run_in_container!: ->(_c, args, **_kw) { events << [:container, args]; true },
+        render_coverage_and_report!: ->(_c, dry_run: false) { events << [:render_report, dry_run]; true }
+      ) do
+        rc_ret = PrismFuzzer::Campaign.run_cli(["retriage", camp_rb, "--report", "--skip-build", "--", "--cluster", "1"])
+        assert_equal 0, rc_ret
+        assert_equal :docker, events[0]
+        assert_equal [:sync, false], events[1]
+        assert_equal :container, events[2][0]
+        assert_includes events[2][1], "./triage/retriage.rb"
+        assert_includes events[2][1], "--skip-fuzzer-build"
+        assert_includes events[2][1], "--cluster"
+        assert_equal [:render_report, false], events[3]
+
+        events.clear
+        rc_ver = PrismFuzzer::Campaign.run_cli(["verify", camp_rb, "--skip-sync", "--", "--by-cluster"])
+        assert_equal 0, rc_ver
+        assert_equal [:sync, true], events[1]
+        assert_includes events[2][1], "./triage/verify.rb"
+        assert_includes events[2][1], "--by-cluster"
+      end
     end
   end
 

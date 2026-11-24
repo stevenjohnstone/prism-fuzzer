@@ -29,7 +29,7 @@ Usage: verify_bucket.sh [--repo-root DIR] [--fuzz-root DIR] [--bucket-dir DIR] [
   --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_prism | arm32_oracle | ppc_oracle
   --runner PATH             Use a precompiled verify_runner binary
   --build-only              Build (if stale) and print the runner binary path
-  --rebuild                 Force rebuild of verify_runner
+  --rebuild-verifiers       Force recompilation of verify_runner (bypasses source fingerprint cache)
   --timeout SEC             Per-input timeout in seconds (default: 5)
   --max-failures N          Stop checking after N failing inputs (default: 0 = all)
   --extract-survivors DIR   Copy any still-failing inputs into DIR
@@ -56,7 +56,7 @@ while [ "$#" -gt 0 ]; do
       RUNNER="${2:-}"; shift 2 ;;
     --build-only)
       BUILD_ONLY=1; shift ;;
-    --rebuild)
+    --rebuild-verifiers|--rebuild)
       REBUILD=1; shift ;;
     --input-min-only)
       INPUT_MIN_ONLY=1; shift ;;
