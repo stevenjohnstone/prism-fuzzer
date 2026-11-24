@@ -169,7 +169,9 @@ module PrismFuzzer
         File.join(fuzz_root, "build", "diff-oracle"),
         File.join(Topology.default_build_dir(fuzz_root), "diff-oracle"),
         *Dir.glob(File.join(fuzz_root, "tmp", "*", "build", "diff-oracle")),
-        *Dir.glob(File.join(fuzz_root, "tmp", "examples", "*", "build", "diff-oracle"))
+        *Dir.glob(File.join(fuzz_root, "tmp", "examples", "*", "build", "diff-oracle")),
+        *Dir.glob(File.join(fuzz_root, "tmp", "*", ".coverage-cache")),
+        *Dir.glob(File.join(fuzz_root, "tmp", "examples", "*", ".coverage-cache"))
       ]
       if build_dir && !build_dir.to_s.empty?
         eff_build = File.expand_path(build_dir.to_s, fuzz_root)

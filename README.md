@@ -103,7 +103,7 @@ Running `report` (or setting `after_run { report ... }`) compiles a self-contain
 - **Fleet Overview & Topology Visualization**: Interactive SVG fleet topology diagram, worker KPI summary (uptime, fleet execs/s, bitmap edge coverage %, saved crashes/hangs, triage clusters, LLVM line/region/branch coverage), and per-worker summary metrics.
 - **Time-Series SVG Charts & Sync Yield**: Plots edge coverage %, edges discovered, corpus growth, throughput (`execs/sec`), cumulative executions, pending favored queue, foreign synced imports, locally discovered items, grammar seed creation/import rates, and peer-sync import/reject/skip yield bars across workers.
 - **Crash Lineage & Interactive Triage Sankey ([`report/sankey.rb`](report/sankey.rb))**: Tracks crash provenance (grammar seeds vs. initial corpus vs. local mutations vs. synced peers) and visualizes fuzzer/origin → crash reason → root-cause cluster → signature bucket flows.
-- **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Collects corpus coverage cleanly across `(source, target)` pairs (filtering `fuzz_` harness helpers) and embeds interactive summary tables linked to full `llvm-cov` line-by-line HTML reports.
+- **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Collects corpus coverage cleanly across `(source, target)` pairs (filtering `fuzz_` harness helpers), caches cumulative `.profdata` and seen-input digests per pair across mid-run `report` snapshots (`(last_cutoff, cutoff]`, cleaned up automatically on the final post-run report; see [`docs/architecture.md`](docs/architecture.md#3-incremental-per-pair-llvm-coverage-caching-reportcoveragesh)), and embeds interactive summary tables linked to full `llvm-cov` line-by-line HTML reports.
 - **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive complete multi-run report snapshots (including `llvm-cov` HTML and `triage/` bucket artifacts) into a gitignored `reports/` `gh-pages` branch worktree.
 
 ---
@@ -161,7 +161,7 @@ RUBY_REF=v3_4_1 ./campaigns/default.rb build --build-ruby
 ### Reporting, Triage Investigation, Cleanup & Tests
 
 ```bash
-./campaigns/default.rb report                          # Triage crashes, collect LLVM coverage, and build <ws>/report/index.html
+./campaigns/default.rb report                          # Triage crashes, collect LLVM coverage (incrementally cached mid-run), and build <ws>/report/index.html
 ./campaigns/default.rb inspect -- --samples 1          # Inspect triaged clusters in <ws>/report/triage/
 ./campaigns/default.rb explain -- --cluster cluster-01 # Or add -- --disasm --all-buckets
 ./campaigns/default.rb verify -- --target /path/to/fixed-prism
@@ -201,7 +201,7 @@ Common CLI flags:
 | `--progress MODE` | Terminal stage UI mode: `auto` (default BuildKit box on TTY), `tty`, or `plain` |
 | `--relative`, `--json`, `--dry-run`, `-h`/`--help` | Emit relative `paths`, JSON output, print commands without running, or show CLI help |
 
-Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`/`PRISM_PATCHES`/`PRISM_TEMPLATES`, `PRISM_B_*`, `RUBY_REF`/`RUBY_REPO`/`RUBY_DIR`, `TARGETS_OFFLINE=1`, `FUZZ_DIR`, `FUZZ_BUILD_DIR`, `FUZZ_LOGS_DIR`, `FUZZ_CONTAINER_NAME`, `FUZZ_DOCKER_IMAGE`, `FUZZ_MAX_INPUT_SIZE`, `FUZZ_MAX_ALLOCATED`, `FUZZ_FLAGS`, `FUZZ_PROGRESS`, `FUZZ_PROGRESS_LINES`, and `FUZZ_SKIP_COVERAGE=1`.
+Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`/`PRISM_PATCHES`/`PRISM_TEMPLATES`, `PRISM_B_*`, `RUBY_REF`/`RUBY_REPO`/`RUBY_DIR`, `TARGETS_OFFLINE=1`, `FUZZ_DIR`, `FUZZ_BUILD_DIR`, `FUZZ_LOGS_DIR`, `FUZZ_CONTAINER_NAME`, `FUZZ_DOCKER_IMAGE`, `FUZZ_MAX_INPUT_SIZE`, `FUZZ_MAX_ALLOCATED`, `FUZZ_FLAGS`, `FUZZ_PROGRESS`, `FUZZ_PROGRESS_LINES`, `FUZZ_COVERAGE_NO_CACHE=1`, `FUZZ_COVERAGE_FINAL=0|1`, and `FUZZ_SKIP_COVERAGE=1`.
 
 ---
 

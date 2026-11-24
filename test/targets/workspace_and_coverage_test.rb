@@ -30,6 +30,10 @@ class WorkspaceAndCoverageTest < Minitest::Test
     "FUZZ_LOGS_DIR" => nil,
     "FUZZ_CONTAINER_NAME" => nil,
     "FUZZ_SKIP_COVERAGE" => nil,
+    "FUZZ_COVERAGE_NO_CACHE" => nil,
+    "FUZZ_COVERAGE_FINAL" => nil,
+    "FUZZ_COVERAGE_LIVE" => nil,
+    "FUZZ_COVERAGE_CACHE_DIR" => nil,
     "TRIAGE_DIR" => nil,
     "TRIAGE_CORPUS_DIR" => nil,
     "REPORTS_DIR" => nil,
@@ -1309,13 +1313,15 @@ class WorkspaceAndCoverageTest < Minitest::Test
         fake_in_docker = false
         raise_in_container = false
         seen_tar_envs = []
+        seen_cov_modes = []
         seen_tar_existed = []
+        fake_running = true
         orig_capture3 = Open3.method(:capture3)
 
         with_singleton_stubs([
           [PrismFuzzer::Campaign, :in_docker?, -> { fake_in_docker }],
           [PrismFuzzer::Campaign, :ensure_docker_image!, ->(**_kw) { "img-ok" }],
-          [PrismFuzzer::Campaign, :container_running?, ->(_name) { true }],
+          [PrismFuzzer::Campaign, :container_running?, ->(_name) { fake_running }],
           [Open3, :capture3, ->(*args, **kw) {
             if args[0] == "docker" && args[1] == "exec"
               ["FAKE_TAR_BYTES", "", fake_status.new(0)]
@@ -1327,19 +1333,21 @@ class WorkspaceAndCoverageTest < Minitest::Test
             tar_host = File.join(ctx[:ws][:fuzz_dir], ".live-seeds.#{Process.pid}.tar")
             seen_tar_existed << File.file?(tar_host)
             seen_tar_envs << extra_env["FUZZ_LIVE_SEEDS_TAR"]
+            seen_cov_modes << [extra_env["FUZZ_COVERAGE_LIVE"], extra_env["FUZZ_COVERAGE_FINAL"]]
             raise PrismFuzzer::Campaign::CampaignError, "simulated coverage failure" if raise_in_container
 
             true
           }]
         ]) do
           with_env("FUZZ_PROGRESS" => "plain") do
-            # 1. Host mode with workspace inside fuzz_root
+            # 1. Host mode with workspace inside fuzz_root (live container -> FUZZ_COVERAGE_LIVE=1)
             fake_in_docker = false
             capture_io { PrismFuzzer::Campaign.run_coverage!(in_repo_ctx) }
             tar_in_repo = File.join(in_repo_ctx[:ws][:fuzz_dir], ".live-seeds.#{Process.pid}.tar")
             assert_equal [true], seen_tar_existed
             refute_path_exists tar_in_repo
             assert_equal "/prism-fuzzer/tmp/fuzz/.live-seeds.#{Process.pid}.tar", seen_tar_envs.last
+            assert_equal ["1", nil], seen_cov_modes.last
 
             # 2. Host mode with workspace outside fuzz_root (/external/ws_dir)
             capture_io { PrismFuzzer::Campaign.run_coverage!(ext_ctx) }
@@ -1347,6 +1355,7 @@ class WorkspaceAndCoverageTest < Minitest::Test
             assert_equal [true, true], seen_tar_existed
             refute_path_exists tar_ext
             assert_equal "/external/ws_dir/.live-seeds.#{Process.pid}.tar", seen_tar_envs.last
+            assert_equal ["1", nil], seen_cov_modes.last
 
             # 3. Ensure block cleans up host tar even when run_in_container! raises
             raise_in_container = true
@@ -1365,6 +1374,15 @@ class WorkspaceAndCoverageTest < Minitest::Test
             assert_equal [true, true, true, true], seen_tar_existed
             refute_path_exists tar_in_repo
             assert_equal tar_in_repo, seen_tar_envs.last
+            assert_equal ["1", nil], seen_cov_modes.last
+
+            # 5. Stopped container marks coverage run as final (FUZZ_COVERAGE_FINAL=1) and skips live tar capture
+            fake_running = false
+            fake_in_docker = false
+            capture_io { PrismFuzzer::Campaign.run_coverage!(in_repo_ctx) }
+            assert_equal [true, true, true, true, false], seen_tar_existed
+            assert_nil seen_tar_envs.last
+            assert_equal [nil, "1"], seen_cov_modes.last
           end
         end
       end
@@ -1470,6 +1488,165 @@ class WorkspaceAndCoverageTest < Minitest::Test
       assert_includes tab_8k, "+1 <span"
       assert_includes tab_8k, "2 fleet queue items &bull; 0 crashes (0 seeds)"
       refute_includes tab_8k, "aaa11111111111111111"
+    end
+  end
+
+  def test_incremental_coverage_windowing_swar_isolation_and_final_cleanup
+    skip "clang/llvm-profdata/llvm-cov unavailable" unless find_executable("clang") && find_executable("llvm-profdata") && find_executable("llvm-cov")
+
+    real_prism_a = prism_a_dir
+    skip "synced prism_a directory unavailable" unless real_prism_a
+
+    with_tmpdir("cov-incremental-") do |workdir|
+      with_clean_ws_env do
+        inc_ws = File.join(workdir, "inc_ws")
+        inc_topo = File.join(workdir, "inc_campaign.rb")
+        afl_dir = File.join(inc_ws, "afl")
+        cov_dir = File.join(inc_ws, "report", "coverage")
+        cache_dir = File.join(inc_ws, ".coverage-cache")
+        ccache_dir = File.join(workdir, "inc_ccache")
+
+        FileUtils.mkdir_p([File.join(inc_ws, "build", "targets", "gen"), afl_dir])
+        if (gen_a = prism_a_gen_dir)
+          FileUtils.ln_s(gen_a, File.join(inc_ws, "build", "targets", "gen", "prism_a"))
+        end
+
+        File.write(inc_topo, <<~RB)
+          PrismFuzzer.campaign "cov-incremental-test" do
+            workspace #{inc_ws.dump}
+            prism :prism_a, repo: "https://example.invalid/prism.git", dir: #{real_prism_a.dump}, patches: "none", templates: "never"
+            coverage source: :prism_a, fuzzer: "fuzz"
+
+            fuzzer "fuzz",      shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
+            fuzzer "fuzz_slow", shape: :prism_parse, source: :prism_a, sanitizers: [:msan],        mode: :slow, afl: :lto
+            fuzzer "fuzz_swar", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, defines: { PRISM_ACCEL_SWAR: true }
+
+            sync_group :afl, dir: "afl", primary: true
+            worker :main, fuzzer: "fuzz",      sync_group: :afl, afl_role: :main,      schedule: "exploit"
+            worker :slow, fuzzer: "fuzz_slow", sync_group: :afl, afl_role: :secondary, schedule: "fast"
+            worker :swar, fuzzer: "fuzz_swar", sync_group: :afl, afl_role: :secondary, schedule: "fast"
+          end
+        RB
+
+        %w[main slow swar].each do |w|
+          FileUtils.mkdir_p([File.join(afl_dir, w, "queue"), File.join(afl_dir, w, "crashes")])
+          File.write(File.join(afl_dir, w, "fuzzer_stats"), "start_time : 1700000000\nrun_time : 10\nexecs_done : 100\ncorpus_count : 1\n")
+        end
+
+        # Window 1 seed in main exercises long comment + string scanning; swar starts with a tiny integer literal.
+        shared_scan_seed = "\x00\x00\x00\x00# #{'a' * 64}\n\"#{'b' * 64}\"\n".b
+        swar_init_seed = "\x00\x00\x00\x001\n".b
+        future_seed = "\x00\x00\x00\x00class Foo\n  def bar(x = /abc/i)\n    <<~HEREDOC\n      \#{x rescue :fallback}\n    HEREDOC\n  end\nend\n".b
+
+        main_q0 = File.join(afl_dir, "main/queue/id:000000,orig:scan_seed")
+        swar_q0 = File.join(afl_dir, "swar/queue/id:000000,orig:swar_init")
+        main_q1_future = File.join(afl_dir, "main/queue/id:000001,src:000000,op:havoc")
+
+        File.binwrite(main_q0, shared_scan_seed)
+        File.binwrite(swar_q0, swar_init_seed)
+        File.binwrite(main_q1_future, future_seed)
+        future_t = Time.now + 120
+        File.utime(future_t, future_t, main_q1_future)
+
+        base_env = CLEAN_WS_ENV.merge(
+          "TOPOLOGY" => inc_topo,
+          "CAMPAIGN" => inc_topo,
+          "WORKSPACE_DIR" => inc_ws,
+          "WORKSPACE_BUILD_DIR" => File.join(inc_ws, "build"),
+          "WORKSPACE_AFL_DIR" => afl_dir,
+          "WORKSPACE_REPORT_DIR" => File.join(inc_ws, "report"),
+          "WORKSPACE_COVERAGE_DIR" => cov_dir,
+          "WORKSPACE_CORPUS_DIR" => File.join(inc_ws, "corpus"),
+          "CCACHE_DIR" => ccache_dir
+        )
+
+        # 1. Run 1 (mid-run incremental): ignores main_q1_future (mtime > cutoff) and creates per-pair caches
+        out1, = assert_cmd(repo_path("report", "coverage.sh"), env: base_env, chdir: root_dir)
+        assert_includes out1, "prism_a (native)=1 inputs"
+        assert_includes out1, "prism_a (swar)=1 inputs"
+        assert_path_exists File.join(cache_dir, "prism_a__native", "cached.profdata")
+        assert_path_exists File.join(cache_dir, "prism_a__native", "seen.sha256")
+        assert_path_exists File.join(cache_dir, "prism_a__swar", "cached.profdata")
+        assert_path_exists File.join(cache_dir, "prism_a__swar", "seen.sha256")
+
+        cov1 = JSON.parse(File.read(File.join(cov_dir, "coverage.json")))
+        p1_native = cov1.fetch("pairs").find { |p| p["id"] == "prism_a__native" }
+        p1_swar = cov1.fetch("pairs").find { |p| p["id"] == "prism_a__swar" }
+        assert_equal 1, p1_native["input_count"], "future queue file (mtime > cutoff) must be deferred to next window"
+        assert_equal 1, p1_swar["input_count"]
+        native_lines_1 = p1_native.dig("totals", "lines", "covered").to_i
+        swar_lines_1 = p1_swar.dig("totals", "lines", "covered").to_i
+
+        # 2. Run 2 with zero new inputs in (last_cutoff, cutoff] hits fast reuse without target replay
+        sleep 0.05
+        out2, = assert_cmd(repo_path("report", "coverage.sh"), env: base_env, chdir: root_dir)
+        assert_includes out2, "Reusing cached coverage for prism_a (native) (0 new inputs, 1 cached)"
+        assert_includes out2, "Reusing cached coverage for prism_a (swar) (0 new inputs, 1 cached)"
+
+        # 3. Window 2:
+        #    - main_q1_future lands in (cutoff_2, cutoff_3]
+        #    - slow imports shared_scan_seed (same pair prism_a__native -> deduplicated via seen.sha256!)
+        #    - swar imports shared_scan_seed (different pair prism_a__swar -> MUST NOT be robbed of SWAR coverage!)
+        sleep 0.05
+        now_w2 = Time.now
+        File.utime(now_w2, now_w2, main_q1_future)
+        File.binwrite(File.join(afl_dir, "slow/queue/id:000000,sync:main,src:000000"), shared_scan_seed)
+        File.binwrite(File.join(afl_dir, "swar/queue/id:000001,sync:main,src:000000"), shared_scan_seed)
+
+        out3, = assert_cmd(repo_path("report", "coverage.sh"), env: base_env, chdir: root_dir)
+        assert_includes out3, "prism_a (native)=2 inputs (1 new, 1 cached)"
+        assert_includes out3, "prism_a (swar)=2 inputs (1 new, 1 cached)"
+        assert_includes out3, "Replaying 1 new inputs for prism_a (native) (+1 cached"
+        assert_includes out3, "Replaying 1 new inputs for prism_a (swar) (+1 cached"
+
+        cov3 = JSON.parse(File.read(File.join(cov_dir, "coverage.json")))
+        p3_native = cov3.fetch("pairs").find { |p| p["id"] == "prism_a__native" }
+        p3_swar = cov3.fetch("pairs").find { |p| p["id"] == "prism_a__swar" }
+        assert_equal 2, p3_native["input_count"]
+        assert_equal 2, p3_swar["input_count"]
+        assert_operator p3_native.dig("totals", "lines", "covered").to_i, :>, native_lines_1
+        assert_operator p3_swar.dig("totals", "lines", "covered").to_i, :>, swar_lines_1,
+                        "prism_a__swar must replay inputs synced from native queues against its own SWAR binary"
+
+        # 4. Final run (FUZZ_COVERAGE_FINAL=1): sweeps any remaining tail items (even without upper cutoff),
+        #    merges into cached.profdata, removes .coverage-cache, and matches an uncached full replay exactly.
+        tail_seed = "\x00\x00\x00\x00case [1, 2, 3]\nin [a, *rest] if a > 0\n  rest.map { _1 ** 2 }\nend\n".b
+        tail_path = File.join(afl_dir, "main/queue/id:000002,src:000001,op:havoc")
+        File.binwrite(tail_path, tail_seed)
+        tail_future = Time.now + 30
+        File.utime(tail_future, tail_future, tail_path)
+
+        out_final, = assert_cmd(repo_path("report", "coverage.sh"), env: base_env.merge("FUZZ_COVERAGE_FINAL" => "1"), chdir: root_dir)
+        assert_includes out_final, "prism_a (native)=3 inputs (1 new, 2 cached)"
+        assert_includes out_final, "Cleaned up incremental coverage cache"
+        refute_path_exists cache_dir
+
+        cov_final = JSON.parse(File.read(File.join(cov_dir, "coverage.json")))
+
+        # Compare against a fresh uncached full replay (FUZZ_COVERAGE_NO_CACHE=1)
+        assert_cmd(repo_path("report", "coverage.sh"), env: base_env.merge("FUZZ_COVERAGE_NO_CACHE" => "1"), chdir: root_dir)
+        refute_path_exists cache_dir
+        cov_uncached = JSON.parse(File.read(File.join(cov_dir, "coverage.json")))
+
+        %w[prism_a__native prism_a__swar].each do |pid|
+          inc_p = cov_final.fetch("pairs").find { |p| p["id"] == pid }
+          raw_p = cov_uncached.fetch("pairs").find { |p| p["id"] == pid }
+          assert_equal raw_p["input_count"], inc_p["input_count"], "input_count mismatch on #{pid}"
+          assert_equal raw_p["queue_count"], inc_p["queue_count"], "queue_count mismatch on #{pid}"
+          assert_equal raw_p["totals"], inc_p["totals"], "LLVM totals mismatch between incremental and full replay on #{pid}"
+        end
+
+        # 5. Campaign restart (changed fuzzer_stats start_time) automatically invalidates that pair's cache
+        #    while preserving unaffected pairs' caches.
+        now_w5 = Time.now
+        File.utime(now_w5, now_w5, tail_path)
+        assert_cmd(repo_path("report", "coverage.sh"), env: base_env, chdir: root_dir)
+        assert_path_exists File.join(cache_dir, "prism_a__native", "state.json")
+        File.write(File.join(afl_dir, "main/fuzzer_stats"), "start_time : 1700099999\nrun_time : 5\nexecs_done : 50\ncorpus_count : 3\n")
+        out_restart, = assert_cmd(repo_path("report", "coverage.sh"), env: base_env, chdir: root_dir)
+        assert_includes out_restart, "prism_a (native)=3 inputs,"
+        assert_includes out_restart, "prism_a (swar)=2 inputs (0 new, 2 cached)"
+      end
     end
   end
 end

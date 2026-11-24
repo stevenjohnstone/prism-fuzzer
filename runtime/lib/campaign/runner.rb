@@ -323,7 +323,15 @@ module PrismFuzzer
       }
       env["JOBS"] = ctx[:cli][:jobs].to_s if ctx.dig(:cli, :jobs)
       env["FUZZ_FLAGS"] = flags.to_s if flags && !flags.to_s.empty?
-      tar_host = dry_run ? nil : capture_live_seeds_tar(ctx)
+      live = dry_run ? false : container_running?(ctx[:container_name])
+      unless dry_run
+        if live
+          env["FUZZ_COVERAGE_LIVE"] = "1" unless ENV.key?("FUZZ_COVERAGE_LIVE")
+        else
+          env["FUZZ_COVERAGE_FINAL"] = "1" unless ENV.key?("FUZZ_COVERAGE_FINAL")
+        end
+      end
+      tar_host = (dry_run || !live) ? nil : capture_live_seeds_tar(ctx)
       env["FUZZ_LIVE_SEEDS_TAR"] = in_docker? ? tar_host : guest_path_for(tar_host, ctx, ws_key: "dir") if tar_host
       if dry_run
         puts "== Collecting LLVM coverage (#{ws[:coverage_dir]}) =="

@@ -253,14 +253,19 @@ define FUZZ_RUN_COVERAGE
 ( \
 	LIVE_SEEDS_TAR=""; \
 	GUEST_LIVE_SEEDS_TAR=""; \
+	COV_LIVE="$${FUZZ_COVERAGE_LIVE:-}"; \
+	COV_FINAL="$${FUZZ_COVERAGE_FINAL:-}"; \
 	trap 'rc=$$?; rm -f "$$LIVE_SEEDS_TAR"; exit $$rc' EXIT; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
 	if [ -n "$$(docker ps -q -f name="^/$(FUZZ_CONTAINER_NAME)$$" 2>/dev/null)" ]; then \
 		mkdir -p $(FUZZ_DIR); \
+		[ -n "$$COV_LIVE" ] || COV_LIVE=1; \
 		eval "$$($(TARGETS_ENV) FUZZ_DIR="$(if $(_FUZZ_DIR_OVR),$(FUZZ_DIR),)" FUZZ_CONTAINER_NAME="$(FUZZ_CONTAINER_NAME)" ruby -r./runtime/campaign -e 'puts PrismFuzzer::Campaign.capture_live_seeds_shell_env' 2>/dev/null || true)"; \
+	else \
+		[ -n "$$COV_FINAL" ] || COV_FINAL=1; \
 	fi; \
-	docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) $(_JOBS_DOCKER_ENV) -e FUZZ_CCACHE="$(FUZZ_CCACHE)" -e FUZZ_FLAGS="$(FUZZ_FLAGS)" -e FUZZ_IMAGE_ID="$$(docker image inspect -f '{{.Id}}' $(FUZZ_DOCKER_IMAGE) 2>/dev/null || true)" -e FUZZ_LIVE_SEEDS_TAR="$$GUEST_LIVE_SEEDS_TAR" -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ./report/coverage.sh \
+	docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) $(_JOBS_DOCKER_ENV) -e FUZZ_CCACHE="$(FUZZ_CCACHE)" -e FUZZ_FLAGS="$(FUZZ_FLAGS)" -e FUZZ_COVERAGE_NO_CACHE -e FUZZ_COVERAGE_CACHE_DIR -e FUZZ_COVERAGE_LIVE="$$COV_LIVE" -e FUZZ_COVERAGE_FINAL="$$COV_FINAL" -e FUZZ_IMAGE_ID="$$(docker image inspect -f '{{.Id}}' $(FUZZ_DOCKER_IMAGE) 2>/dev/null || true)" -e FUZZ_LIVE_SEEDS_TAR="$$GUEST_LIVE_SEEDS_TAR" -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ./report/coverage.sh \
 )
 endef
 
@@ -268,7 +273,7 @@ _report:
 	$(ECHO) "triaging findings"
 	@$(FUZZ_RUN_TRIAGE)
 	@if [ -z "$(FUZZ_SKIP_COVERAGE)" ] && [ -d "$(FUZZ_AFL_DIR)" ]; then \
-		if [ ! -f "$(FUZZ_COVERAGE_DIR)/coverage.json" ] || [ -n "$$(find $(FUZZ_DIR) -maxdepth 4 \( -name 'queue' -o -name 'crashes' -o -name 'hangs' \) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ] || [ -n "$$(find $(FUZZ_SEEDS_DIR) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ]; then \
+		if [ -d "$(FUZZ_DIR)/.coverage-cache" ] || [ ! -f "$(FUZZ_COVERAGE_DIR)/coverage.json" ] || [ -n "$$(find $(FUZZ_DIR) -maxdepth 4 \( -name 'queue' -o -name 'crashes' -o -name 'hangs' \) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ] || [ -n "$$(find $(FUZZ_SEEDS_DIR) -newer $(FUZZ_COVERAGE_DIR)/coverage.json -print -quit 2>/dev/null)" ]; then \
 			echo "collecting coverage (set FUZZ_SKIP_COVERAGE=1 to skip)"; \
 			$(FUZZ_RUN_COVERAGE); \
 		fi; \
