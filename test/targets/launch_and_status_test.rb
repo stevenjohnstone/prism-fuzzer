@@ -458,6 +458,32 @@ class LaunchAndStatusTest < Minitest::Test
           assert_equal 2, contribs[:descendants]["gen_ijon"]
           assert_equal 0, contribs[:shared]["grammar"], "did not expect leaked 'grammar' shared bucket: #{contribs.inspect}"
           assert_equal 0, contribs[:descendants]["grammar"], "did not expect leaked 'grammar' descendants bucket: #{contribs.inspect}"
+
+          # Verify dynamic column alignment when worker/generator names exceed 10 characters.
+          long_workers = %w[gen_hub small-prism-diff-very-long 8k-main]
+          [1, 2].each do |pg|
+            _, rendered = capture_stdout do
+              PrismFuzzer::Status.render(afl_hub, long_workers, now - 10, pg, contribs)
+            end
+            plain_lines = rendered.gsub(/\e\[[0-9;?]*[A-Za-z]/, "").lines.map(&:chomp)
+            fuzzer_hdr = plain_lines.find { |l| l.start_with?("FUZZER ") }
+            gen_hdr = plain_lines.find { |l| l.start_with?("GENERATOR ") }
+            long_row = plain_lines.find { |l| l.start_with?("small-prism-diff-very-long ") }
+            short_row = plain_lines.find { |l| l.start_with?("8k-main ") }
+            gen_row = plain_lines.find { |l| l.start_with?("gen_hub ") }
+            rules = plain_lines.select { |l| l.match?(/\A-{20,}\z/) }
+
+            refute_nil fuzzer_hdr
+            refute_nil gen_hdr
+            refute_nil long_row
+            refute_nil short_row
+            refute_nil gen_row
+            assert_equal [fuzzer_hdr.length], [gen_hdr.length, long_row.length, short_row.length, gen_row.length, *rules.map(&:length)].uniq,
+                         "expected all table rows and rules on page #{pg} to align to width #{fuzzer_hdr.length}"
+            assert_equal fuzzer_hdr.index("STATE"), long_row.index(/RUNNING|STARTING|STOPPED/)
+            assert_equal fuzzer_hdr.index("STATE"), short_row.index(/RUNNING|STARTING|STOPPED/)
+            assert_equal gen_hdr.index("STATE"), gen_row.index(/RUNNING|STARTING|STOPPED/)
+          end
         end
       ensure
         PrismFuzzer::Status.instance_variable_set(:@queue_entry_cache, {})

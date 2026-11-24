@@ -555,14 +555,17 @@ module PrismFuzzer
         total_hangs
       )
 
+      name_width = ([10] + rows.map { |r| r[:name].to_s.length }).max
+      sched_width = ([8] + rows.map { |r| r[:sched].to_s.length }).max
+
       header = if page == 1
                  format(
-                   "%-10s %-9s %-8s %12s %8s %17s %8s %6s",
+                   "%-#{name_width}s %-9s %-#{sched_width}s %12s %8s %17s %8s %6s",
                    "FUZZER", "STATE", "SCHED", "EXEC/S", "COV %", "EDGES", "CRASHES", "HANGS"
                  )
                else
                  format(
-                   "%-10s %-9s %-8s %12s %14s %6s %8s %8s %11s %14s %8s %8s",
+                   "%-#{name_width}s %-9s %-#{sched_width}s %12s %14s %6s %8s %8s %11s %14s %8s %8s",
                    "FUZZER", "STATE", "SCHED", "EXEC/S", "TOTAL EXECS", "CYCLES",
                    "CORPUS", "SHARED", "DESCENDANTS", "LAST FIND", "PENDING", "PEND FAV"
                  )
@@ -593,7 +596,7 @@ module PrismFuzzer
                       end
 
           out << format(
-            "%-10s %s %-8s %12s %8s %17s %s %s\n",
+            "%-#{name_width}s %s %-#{sched_width}s %12s %8s %17s %s %s\n",
             r[:name],
             state_str,
             r[:sched],
@@ -614,7 +617,7 @@ module PrismFuzzer
           desc_count = contribs[:descendants][r[:name]] || 0
 
           out << format(
-            "%-10s %s %-8s %12s %14s %6d %8s %8s %11s %14s %8s %8s\n",
+            "%-#{name_width}s %s %-#{sched_width}s %12s %14s %6d %8s %8s %11s %14s %8s %8s\n",
             r[:name],
             state_str,
             r[:sched],
@@ -636,12 +639,12 @@ module PrismFuzzer
       if gen_rows.any?
         gen_header = if page == 1
                        format(
-                         "%-10s %-9s %-8s %12s %8s %17s %8s %6s",
+                         "%-#{name_width}s %-9s %-#{sched_width}s %12s %8s %17s %8s %6s",
                          "GENERATOR", "STATE", "MODE", "FILES/S", "CREATED", "PENDING", "CRASHES", "PRUNED"
                        )
                      else
                        format(
-                         "%-10s %-9s %-8s %12s %14s %6s %8s %8s %11s %14s %8s %8s",
+                         "%-#{name_width}s %-9s %-#{sched_width}s %12s %14s %6s %8s %8s %11s %14s %8s %8s",
                          "GENERATOR", "STATE", "MODE", "FILES/S", "ATTEMPTS", "UNIQ %",
                          "CREATED", "SHARED", "DESCENDANTS", "LAST FIND", "PENDING", "PRUNED"
                        )
@@ -661,7 +664,7 @@ module PrismFuzzer
 
           if page == 1
             out << format(
-              "%-10s %s %-8s %12s %8s %s %s %6s\n",
+              "%-#{name_width}s %s %-#{sched_width}s %12s %8s %s %s %6s\n",
               g[:name],
               state_str,
               g[:sched],
@@ -682,7 +685,7 @@ module PrismFuzzer
             desc_count = contribs[:descendants][g[:name]] || 0
 
             out << format(
-              "%-10s %s %-8s %12s %14s %6s %8s %8s %11s %14s %8s %8s\n",
+              "%-#{name_width}s %s %-#{sched_width}s %12s %14s %6s %8s %8s %11s %14s %8s %8s\n",
               g[:name],
               state_str,
               g[:sched],
