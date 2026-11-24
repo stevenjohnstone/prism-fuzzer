@@ -1,28 +1,40 @@
-From 2a6873d079f8b9329ab8e1d9929ec608409d4783 Mon Sep 17 00:00:00 2001
+From 1309d15d0d015a971c580d9c0a7ca3bb4fe05418 Mon Sep 17 00:00:00 2001
 From: prism-fuzzer <fuzz@prism-fuzzer.local>
-Date: Tue, 24 Nov 2026 00:25:09 +0000
+Date: Tue, 24 Nov 2026 10:39:51 +0000
 Subject: [PATCH] Add optional source-level IJON fuzzing guidance and regexp
  depth guard
 
 ---
- include/prism/internal/ijon.h | 91 +++++++++++++++++++++++++++++++++++
- src/arena.c                   |  2 +
- src/constant_pool.c           | 11 +++++
- src/double.c                  |  4 ++
- src/integer.c                 |  3 ++
- src/prism.c                   | 19 ++++++++
- src/regexp.c                  | 15 ++++++
- src/static_literals.c         | 13 +++++
- src/xxh3.c                    |  2 +
- 9 files changed, 160 insertions(+)
+ include/prism/compiler/inline.h |  2 +
+ include/prism/internal/ijon.h   | 97 +++++++++++++++++++++++++++++++++
+ src/arena.c                     |  1 +
+ src/constant_pool.c             |  2 +
+ src/double.c                    |  3 +
+ src/integer.c                   |  2 +
+ src/prism.c                     | 18 ++++++
+ src/regexp.c                    | 14 +++++
+ src/static_literals.c           |  4 ++
+ src/xxh3.c                      |  2 +
+ 10 files changed, 145 insertions(+)
  create mode 100644 include/prism/internal/ijon.h
 
+diff --git a/include/prism/compiler/inline.h b/include/prism/compiler/inline.h
+index 856a3756917c00bf7d3452db8e40c2d48e523566..2f9973fb891b4f3204229ec7fd85062b239de3ec 100644
+--- a/include/prism/compiler/inline.h
++++ b/include/prism/compiler/inline.h
+@@ -14,4 +14,6 @@
+ #   define PRISM_INLINE inline
+ #endif
+ 
++#include "prism/internal/ijon.h"
++
+ #endif
 diff --git a/include/prism/internal/ijon.h b/include/prism/internal/ijon.h
 new file mode 100644
-index 000000000..d23b7277a
+index 0000000000000000000000000000000000000000..11c5cf14ca086b372f24ae256e68673bca738799
 --- /dev/null
 +++ b/include/prism/internal/ijon.h
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,97 @@
 +#ifndef PRISM_INTERNAL_IJON_H
 +#define PRISM_INTERNAL_IJON_H
 +
@@ -40,8 +52,14 @@ index 000000000..d23b7277a
 +#include <stdint.h>
 +
 +#ifndef _USE_IJON
++#ifdef __cplusplus
++extern "C" {
++#endif
 +extern void ijon_set(uint32_t addr, uint32_t val);
 +extern void ijon_max(uint32_t addr, uint64_t val);
++#ifdef __cplusplus
++}
++#endif
 +#endif
 +
 +#ifndef FUZZ_IJON_SIDE_SALT
@@ -115,18 +133,10 @@ index 000000000..d23b7277a
 +
 +#endif
 diff --git a/src/arena.c b/src/arena.c
-index bbe698daf..47efbc183 100644
+index bbe698daffc2bded0586d588d12bc2c0cab72ff1..e0cbf35b28b664b79470e8e1585d1dee4bd64a4c 100644
 --- a/src/arena.c
 +++ b/src/arena.c
-@@ -2,6 +2,7 @@
- 
- #include "prism/internal/allocator.h"
- #include "prism/internal/assert.h"
-+#include "prism/internal/ijon.h"
- #include "prism/internal/oom.h"
- 
- #include <stdint.h>
-@@ -79,6 +80,7 @@ pm_arena_block_new(pm_arena_t *arena, size_t data_size, size_t initial_used) {
+@@ -79,6 +79,7 @@ pm_arena_block_new(pm_arena_t *arena, size_t data_size, size_t initial_used) {
      pm_arena_block_t *block = pm_arena_block_alloc(arena->current, data_size, initial_used);
      arena->current = block;
      arena->block_count++;
@@ -135,59 +145,23 @@ index bbe698daf..47efbc183 100644
  }
  
 diff --git a/src/constant_pool.c b/src/constant_pool.c
-index e5c906633..ae4f536fd 100644
+index 1fbb445c5ab7062804fc935beef09fd026d59a6b..3d926cbdf5bebf4e220b5f120a8e1c7dbeb169e2 100644
 --- a/src/constant_pool.c
 +++ b/src/constant_pool.c
-@@ -4,6 +4,7 @@
- #include "prism/compiler/inline.h"
- #include "prism/internal/arena.h"
- #include "prism/internal/assert.h"
-+#include "prism/internal/ijon.h"
- 
- #include <stdbool.h>
- 
-@@ -323,6 +324,9 @@ pm_constant_pool_insert(pm_arena_t *arena, pm_constant_pool_t *pool, const uint8
-     uint32_t hash = pm_constant_pool_hash(start, length);
-     uint32_t index = hash & mask;
-     pm_constant_pool_bucket_t *bucket;
-+#ifdef PRISM_FUZZ_IJON_ENABLED
-+    uint32_t probe_steps = 0;
-+#endif
- 
-     while (bucket = &pool->buckets[index], bucket->id != PM_CONSTANT_ID_UNSET) {
-         // If there is a collision, then we need to check if the content is the
-@@ -344,11 +348,18 @@ pm_constant_pool_insert(pm_arena_t *arena, pm_constant_pool_t *pool, const uint8
-         }
- 
-         index = (index + 1) & mask;
-+#ifdef PRISM_FUZZ_IJON_ENABLED
-+        probe_steps++;
-+#endif
-     }
-+#ifdef PRISM_FUZZ_IJON_ENABLED
-+    PM_IJON_MAX_IF(probe_steps > 0, 0x302u, probe_steps);
-+#endif
- 
+@@ -351,6 +351,8 @@ pm_constant_pool_insert(pm_arena_t *arena, pm_constant_pool_t *pool, const uint8
      // IDs are allocated starting at 1, since the value 0 denotes a non-existent
      // constant.
      uint32_t id = ++pool->size;
++    PM_IJON_MAX_IF(index != (hash & mask), 0x302u, (index - (hash & mask)) & mask);
 +    PM_IJON_MAX_IF(id >= 16, 0x301u, id);
      PRISM_ASSERT(pool->size < ((uint32_t) (1 << 30)));
  
      *bucket = (pm_constant_pool_bucket_t) {
 diff --git a/src/double.c b/src/double.c
-index 8bcdea96f..e0a4d0c8f 100644
+index 8bcdea96f660d8c419336163773515724372b54e..08d9d31e414a7d0d127838810459535a553fe680 100644
 --- a/src/double.c
 +++ b/src/double.c
-@@ -9,6 +9,7 @@
- #include <stdbool.h>
- #include <stdint.h>
- #include <string.h>
-+#include "prism/internal/ijon.h"
- 
- /* The conversion builds the bits of the result directly, so it depends on the
-  * layout of a binary64 double. */
-@@ -187,6 +188,8 @@ pm_binary64_round(uint64_t mantissa, int64_t exponent, bool inexact) {
+@@ -187,6 +187,8 @@ pm_binary64_round(uint64_t mantissa, int64_t exponent, bool inexact) {
       * subnormal if the value is that small. */
      int64_t shift = (int64_t) pm_bsrll(mantissa) + 1 - 53;
      if (shift < -1074 - exponent) shift = -1074 - exponent;
@@ -196,7 +170,7 @@ index 8bcdea96f..e0a4d0c8f 100644
  
      uint64_t bits;
      if (shift <= 0) {
-@@ -197,6 +200,7 @@ pm_binary64_round(uint64_t mantissa, int64_t exponent, bool inexact) {
+@@ -197,6 +199,7 @@ pm_binary64_round(uint64_t mantissa, int64_t exponent, bool inexact) {
      } else {
          uint64_t half = (uint64_t) 1 << (shift - 1);
          uint64_t rest = mantissa & (half - 1 + half);
@@ -205,18 +179,10 @@ index 8bcdea96f..e0a4d0c8f 100644
          if (rest > half || (rest == half && (inexact || (bits & 1)))) bits++;
      }
 diff --git a/src/integer.c b/src/integer.c
-index 6f53afb16..15b67ef37 100644
+index 9361dc4e87c38ccd50560a1046178e86d6e77c98..79a07a5d847fa40c4275116227bd91af66e0ce16 100644
 --- a/src/integer.c
 +++ b/src/integer.c
-@@ -6,6 +6,7 @@
- #include "prism/internal/allocator.h"
- #include "prism/internal/arena.h"
- #include "prism/internal/assert.h"
-+#include "prism/internal/ijon.h"
- #include "prism/internal/bignum.h"
- #include "prism/internal/bit.h"
- #include "prism/internal/buffer.h"
-@@ -261,6 +262,7 @@ pm_integer_parse_decimal_divide(pm_arena_t *arena, pm_integer_t *integer, uint32
+@@ -260,6 +260,7 @@ pm_integer_parse_decimal_divide(pm_arena_t *arena, pm_integer_t *integer, uint32
          powers[level].words = pm_bignum_scratch_take(&scratch, 2 * previous->length);
          pm_bignum_multiply(&powers[level], previous, previous, &scratch);
      }
@@ -224,7 +190,7 @@ index 6f53afb16..15b67ef37 100644
  
      pm_integer_parse_decimal_divide_chunks(&result, nchunks, chunks, powers, &scratch);
      xfree_sized(allocation, sizeof(uint32_t) * (size_t) scratch_size);
-@@ -337,6 +339,7 @@ pm_integer_parse_digits(pm_arena_t *arena, pm_integer_t *integer, uint32_t base,
+@@ -336,6 +337,7 @@ pm_integer_parse_digits(pm_arena_t *arena, pm_integer_t *integer, uint32_t base,
      for (; cursor < end; cursor++) {
          if (pm_integer_separator(*cursor)) continue;
          uint64_t digit = (uint64_t) pm_integer_parse_digit(*cursor);
@@ -233,18 +199,10 @@ index 6f53afb16..15b67ef37 100644
          if (value > limit || (value == limit && digit > limit_digit)) {
              uint32_t digits = 0;
 diff --git a/src/prism.c b/src/prism.c
-index 0bcbb20d2..5521bb16e 100644
+index 34f84a09af29a85caf52a766a9f5ffc48892b79f..13662fee6b0406eb363dd5a6a5eb7e69a79cd5f9 100644
 --- a/src/prism.c
 +++ b/src/prism.c
-@@ -14,6 +14,7 @@
- #include "prism/internal/diagnostic.h"
- #include "prism/internal/double.h"
- #include "prism/internal/encoding.h"
-+#include "prism/internal/ijon.h"
- #include "prism/internal/integer.h"
- #include "prism/internal/line_offset_list.h"
- #include "prism/internal/list.h"
-@@ -13515,6 +13516,13 @@ parse_shareable_constant_write(pm_parser_t *parser, pm_node_t *write) {
+@@ -13506,6 +13506,13 @@ parse_shareable_constant_write(pm_parser_t *parser, pm_node_t *write) {
   */
  static pm_node_t *
  parse_write(pm_parser_t *parser, pm_node_t *target, pm_token_t *operator, pm_node_t *value) {
@@ -258,7 +216,7 @@ index 0bcbb20d2..5521bb16e 100644
      switch (PM_NODE_TYPE(target)) {
          case PM_ERROR_RECOVERY_NODE:
              return target;
-@@ -17965,6 +17973,8 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_set_t *captures, uint8_t flags
+@@ -17941,6 +17948,8 @@ parse_pattern(pm_parser_t *parser, pm_constant_id_set_t *captures, uint8_t flags
          return parse_resource_recovery(parser, depth);
      }
  
@@ -267,7 +225,7 @@ index 0bcbb20d2..5521bb16e 100644
      pm_node_t *node = NULL;
  
      bool leading_rest = false;
-@@ -20268,6 +20278,7 @@ parse_uninterpolated_symbol_array(pm_parser_t *parser) {
+@@ -20244,6 +20253,7 @@ parse_uninterpolated_symbol_array(pm_parser_t *parser) {
          }
  
          if (parts.size > 0) {
@@ -275,7 +233,7 @@ index 0bcbb20d2..5521bb16e 100644
              pm_array_elements_append(parser, &elements, UP(pm_interpolated_symbol_node_create(parser, NULL, &parts, NULL)));
              parts = (pm_node_list_t) { 0 };
          } else if (current != NULL) {
-@@ -20458,6 +20469,7 @@ parse_uninterpolated_string_array(pm_parser_t *parser) {
+@@ -20434,6 +20444,7 @@ parse_uninterpolated_string_array(pm_parser_t *parser) {
          }
  
          if (parts.size > 0) {
@@ -283,7 +241,7 @@ index 0bcbb20d2..5521bb16e 100644
              pm_array_elements_append(parser, &elements, UP(pm_interpolated_string_node_create(parser, NULL, &parts, NULL)));
              parts = (pm_node_list_t) { 0 };
          } else if (current != NULL) {
-@@ -22326,6 +22338,13 @@ parse_aref(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_bin
+@@ -22302,6 +22313,13 @@ parse_aref(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_bin
  static PRISM_INLINE pm_node_t *
  parse_expression_infix(pm_parser_t *parser, pm_node_t *node, pm_binding_power_t previous_binding_power, pm_binding_power_t binding_power, uint8_t flags, uint16_t depth) {
      pm_token_t token = parser->current;
@@ -298,18 +256,10 @@ index 0bcbb20d2..5521bb16e 100644
      switch (token.type) {
          case PM_TOKEN_EQUAL:
 diff --git a/src/regexp.c b/src/regexp.c
-index 3d5cff345..069d5e775 100644
+index abe8b82921bdd8334b0fb623c3aa7309191baf7c..7121f5ccbe011890fba11657360fffeb435ee08d 100644
 --- a/src/regexp.c
 +++ b/src/regexp.c
-@@ -9,6 +9,7 @@
- #include "prism/internal/char.h"
- #include "prism/internal/diagnostic.h"
- #include "prism/internal/encoding.h"
-+#include "prism/internal/ijon.h"
- #include "prism/internal/memchr.h"
- #include "prism/internal/node.h"
- #include "prism/internal/options.h"
-@@ -20,7 +21,13 @@
+@@ -21,7 +21,13 @@
  #include <string.h>
  
  /** The maximum depth of nested groups allowed in a regular expression. */
@@ -323,7 +273,7 @@ index 3d5cff345..069d5e775 100644
  
  /**
   * Whether an ASCII byte is written as it is when a regular expression is
-@@ -2035,6 +2042,7 @@ pm_regexp_class_add_set(pm_regexp_parser_t *parser, pm_regexp_class_t *character
+@@ -2018,6 +2024,7 @@ pm_regexp_class_add_set(pm_regexp_parser_t *parser, pm_regexp_class_t *character
  static bool
  pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
      const uint8_t *open = parser->cursor - 1;
@@ -331,7 +281,7 @@ index 3d5cff345..069d5e775 100644
  
      if (depth >= PM_REGEXP_PARSE_DEPTH_MAX) {
          pm_regexp_parse_error(parser, parser->start, parser->end, "parse depth limit over");
-@@ -2069,6 +2077,11 @@ pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
+@@ -2052,6 +2059,11 @@ pm_regexp_parse_character_class(pm_regexp_parser_t *parser, uint16_t depth) {
  
      while (token.type != PM_REGEXP_CLASS_TOKEN_CLOSE) {
          bool fetched = false;
@@ -343,7 +293,7 @@ index 3d5cff345..069d5e775 100644
  
          switch (token.type) {
              case PM_REGEXP_CLASS_TOKEN_EOF:
-@@ -2544,6 +2557,7 @@ pm_regexp_parse_item(pm_regexp_parser_t *parser, uint16_t depth) {
+@@ -2528,6 +2540,7 @@ pm_regexp_parse_item(pm_regexp_parser_t *parser, uint16_t depth) {
   */
  static bool
  pm_regexp_parse_expression(pm_regexp_parser_t *parser, uint16_t depth) {
@@ -351,7 +301,7 @@ index 3d5cff345..069d5e775 100644
      if (depth >= PM_REGEXP_PARSE_DEPTH_MAX) {
          pm_regexp_parse_error(parser, parser->start, parser->end, "parse depth limit over");
          return false;
-@@ -3083,6 +3097,7 @@ static const bool pm_regexp_preprocess_stops[128] = {
+@@ -3067,6 +3080,7 @@ static const bool pm_regexp_preprocess_stops[128] = {
   */
  static bool
  pm_regexp_preprocess_scan(pm_regexp_preprocessor_t *preprocessor, const uint8_t **parent_cursor, bool extended, bool nested, uint16_t depth) {
@@ -360,26 +310,18 @@ index 3d5cff345..069d5e775 100644
       * reports. Past that depth, this leaves the cursor where it is, so that
       * the caller reads the escapes of the subexpression as part of its own
 diff --git a/src/static_literals.c b/src/static_literals.c
-index 4b6d767f6..25a3735bb 100644
+index 0b0bfe9a957ab11dc71fe21719e23c786aa3adaf..aa65a902ab59e03ec6e81e86018dd7c730c7f20e 100644
 --- a/src/static_literals.c
 +++ b/src/static_literals.c
-@@ -3,6 +3,7 @@
- #include "prism/compiler/inline.h"
- #include "prism/compiler/unused.h"
- 
-+#include "prism/internal/ijon.h"
- #include "prism/internal/allocator.h"
- #include "prism/internal/assert.h"
- #include "prism/internal/buffer.h"
-@@ -247,6 +248,7 @@ compare_nodes(const pm_parser_t *parser, const pm_node_t *left, const pm_node_t
-     enum pm_node_type left_type = static_literal_type(left);
-     enum pm_node_type right_type = static_literal_type(right);
-     if (left_type != right_type) return COMPARE(left_type, right_type);
-+    PM_IJON_SET(0x201u, (uint32_t) left_type);
- 
-     switch (left_type) {
-         case PM_INTEGER_NODE:
-@@ -378,6 +380,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+@@ -191,6 +191,7 @@ string_nodes_equal(const pm_node_t *left, const pm_node_t *right, pm_node_flags_
+  */
+ static enum pm_node_type
+ static_literal_type(const pm_node_t *node) {
++    PM_IJON_SET(0x201u, (uint32_t) PM_NODE_TYPE(node));
+     switch (PM_NODE_TYPE(node)) {
+         case PM_SOURCE_LINE_NODE:
+             return PM_INTEGER_NODE;
+@@ -337,6 +338,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
  
          if (literals->size < PM_STATIC_LITERALS_INLINE_CAPACITY) {
              literals->nodes[literals->size++] = node;
@@ -387,31 +329,11 @@ index 4b6d767f6..25a3735bb 100644
              return NULL;
          }
  
-@@ -393,6 +396,9 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
-     uint64_t hash = node_hash(parser, node);
-     uint32_t mask = literals->capacity - 1;
-     uint32_t index = (uint32_t) (hash & mask);
-+#ifdef PRISM_FUZZ_IJON_ENABLED
-+    uint32_t probe_steps = 0;
-+#endif
- 
-     /* We use linear probing to resolve collisions. This means that if the
-      * current index is occupied, we will move to the next index and try again.
-@@ -403,7 +409,13 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
-         const pm_static_literals_entry_t *entry = &literals->entries[index];
-         if (entry->hash == hash && compare_nodes(parser, entry->node, node) == 0) break;
-         index = (index + 1) & mask;
-+#ifdef PRISM_FUZZ_IJON_ENABLED
-+        probe_steps++;
-+#endif
-     }
-+#ifdef PRISM_FUZZ_IJON_ENABLED
-+    PM_IJON_MAX_IF(probe_steps > 0, 0x203u, probe_steps);
-+#endif
- 
-     /* If the current index is occupied, we need to return the node that was
+@@ -368,9 +370,11 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
       * already in the hash. Otherwise, we can just increment the size and insert
-@@ -412,6 +424,7 @@ pm_static_literals_add(const pm_parser_t *parser, pm_static_literals_t *literals
+      * the new node. */
+     pm_node_t *result = literals->entries[index].node;
++    PM_IJON_MAX_IF(index != (uint32_t) (hash & mask), 0x203u, (index - (uint32_t) (hash & mask)) & mask);
  
      if (result == NULL) {
          literals->size++;
@@ -420,7 +342,7 @@ index 4b6d767f6..25a3735bb 100644
      } else if (replace) {
          literals->entries[index].node = node;
 diff --git a/src/xxh3.c b/src/xxh3.c
-index 3e4fd4822..12c5415ed 100644
+index 3e4fd48220c03e428c22b42a60e38023509640f9..12c5415edb30374f8020ca7a3a773497dc80543d 100644
 --- a/src/xxh3.c
 +++ b/src/xxh3.c
 @@ -16,6 +16,7 @@

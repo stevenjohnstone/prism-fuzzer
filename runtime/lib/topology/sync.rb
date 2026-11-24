@@ -106,9 +106,9 @@ module PrismFuzzer
 
       patch_files.each do |patch|
         name = File.basename(patch)
-        _, _, can_apply = run_cmd("git", "-C", worktree_dir, "apply", "--check", patch, allow_fail: true)
+        _, _, can_apply = run_cmd("git", "-C", worktree_dir, "apply", "--check", "--index", patch, allow_fail: true)
         if can_apply.success?
-          run_cmd("git", "-C", worktree_dir, "apply", patch)
+          run_cmd("git", "-C", worktree_dir, "apply", "--index", patch)
           applied << name
           next
         end
@@ -116,6 +116,13 @@ module PrismFuzzer
         _, _, already_in = run_cmd("git", "-C", worktree_dir, "apply", "--reverse", "--check", patch, allow_fail: true)
         if already_in.success?
           skipped << { "patch" => name, "reason" => "already_upstream" }
+          next
+        end
+
+        _, _, can_c1 = run_cmd("git", "-C", worktree_dir, "apply", "-C1", "--check", "--index", patch, allow_fail: true)
+        if can_c1.success?
+          run_cmd("git", "-C", worktree_dir, "apply", "-C1", "--index", patch)
+          applied << name
           next
         end
 

@@ -46,14 +46,16 @@ module PrismFuzzerTest
           adj = shifts.select { |threshold, _| h[:start] >= threshold }.sum(&:last)
           pos = h[:start] + adj # 1-indexed
           lines << "/* pad */" while lines.length < pos - 1
+          opened_if0 = false
           if pos >= 2 && (lines[pos - 2] == "/* pad */" || lines[pos - 2].to_s.start_with?("/* line "))
             lines[pos - 2] = "#if 0"
+            opened_if0 = true
           end
           h[:lines].each_with_index do |hl, idx|
             lines[pos - 1 + idx] = hl
           end
           after_idx = pos - 1 + h[:lines].length
-          if lines[after_idx].nil? || lines[after_idx] == "/* pad */" || lines[after_idx].to_s.start_with?("/* line ")
+          if opened_if0 && (lines[after_idx].nil? || lines[after_idx] == "/* pad */" || lines[after_idx].to_s.start_with?("/* line "))
             lines[after_idx] = "#endif"
           end
         end
@@ -184,6 +186,26 @@ module PrismFuzzerTest
         #endif
       C
 
+      File.write(File.join(dir, "include/prism/compiler/inline.h"), <<~C)
+        /**
+         * @file compiler/inline.h
+         */
+        #ifndef PRISM_COMPILER_INLINE_H
+        #define PRISM_COMPILER_INLINE_H
+
+        /**
+         * Old Visual Studio versions do not support the inline keyword, so we need to
+         * define it to be __inline.
+         */
+        #if defined(_MSC_VER) && !defined(inline)
+        #   define PRISM_INLINE __inline
+        #else
+        #   define PRISM_INLINE inline
+        #endif
+
+        #endif
+      C
+
       integer_lines = ["#include \"prism.h\"", ""]
       (3..26).each { |n| integer_lines << "/* line #{n} */" }
       integer_lines.concat([
@@ -201,13 +223,11 @@ module PrismFuzzerTest
       File.write(File.join(dir, "src/integer.c"), integer_lines.join("\n"))
       populate_patch_preimage!(
         dir,
-        File.join(root_dir, "patches/prism/0004-ijon-source-guidance.patch"),
-        line_shifts: { "src/integer.c" => [[32, -2]] }
+        File.join(root_dir, "patches/prism/0004-ijon-source-guidance.patch")
       )
       populate_patch_preimage!(
         dir,
-        File.join(root_dir, "patches/prism/0005-inline-span-assertions.patch"),
-        line_shifts: { "src/prism.c" => [[95, -1]] }
+        File.join(root_dir, "patches/prism/0005-inline-span-assertions.patch")
       )
 
       git.call("add", "-A")

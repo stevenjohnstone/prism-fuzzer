@@ -391,18 +391,31 @@ class TargetsSyncAndPatchesTest < Minitest::Test
       ws = prepare_dsl_workspace(workdir)
       repo = ws[:upstream][:repo]
 
-      # Checkout v1 in synthetic upstream and rewrite an adjacent context line in
-      # include/prism/internal/arena.h so direct `git apply --check` fails on 0001,
-      # requiring `git apply --3way` to fetch preimage blobs from the cached mirror.
+      # Checkout v1 in synthetic upstream and:
+      # 1. Tweak outer context in include/prism/internal/arena.h so 0001 exercises `-C1 --index`.
+      # 2. Tweak immediate 1-line context in include/prism/compiler/inline.h (whose v1 blob
+      #    matches 0004's exact preimage SHA in the cached mirror) so 0004 MUST fall back to
+      #    `git apply --3way` via GIT_ALTERNATE_OBJECT_DIRECTORIES *after* 0003 has already
+      #    modified src/integer.c (which 0004 also patches).
       arena_h = File.join(repo, "include/prism/internal/arena.h")
+      inline_h = File.join(repo, "include/prism/compiler/inline.h")
       run_cmd("git", "-C", repo, "checkout", "-q", ws[:upstream][:v1])
-      patched_ctx = File.read(arena_h).sub(
-        "    /* The number of bytes consumed so far. */",
-        "    /* Bytes consumed so far (upstream doc tweak shifting 0001 context). */"
+      File.write(
+        arena_h,
+        File.read(arena_h).sub(
+          "    /* The number of bytes consumed so far. */",
+          "    /* Bytes consumed so far (upstream doc tweak shifting 0001 context). */"
+        )
       )
-      File.write(arena_h, patched_ctx)
-      run_cmd("git", "-C", repo, "add", "include/prism/internal/arena.h")
-      run_cmd("git", "-C", repo, "commit", "-q", "-m", "Upstream context tweak requiring 3-way")
+      File.write(
+        inline_h,
+        File.read(inline_h).sub(
+          "#   define PRISM_INLINE inline\n#endif\n",
+          "#   define PRISM_INLINE inline\n#endif /* _MSC_VER */\n"
+        )
+      )
+      run_cmd("git", "-C", repo, "add", "include/prism/internal/arena.h", "include/prism/compiler/inline.h")
+      run_cmd("git", "-C", repo, "commit", "-q", "-m", "Upstream context tweaks requiring -C1 and chained 3-way")
       v4_sha, = run_cmd("git", "-C", repo, "rev-parse", "HEAD")
       v4_sha = v4_sha.strip
 
@@ -422,6 +435,12 @@ class TargetsSyncAndPatchesTest < Minitest::Test
       merged_arena = File.read(File.join(b["path"], "include/prism/internal/arena.h"))
       assert_includes merged_arena, "pm_arena_align_t"
       assert_includes merged_arena, "upstream doc tweak shifting 0001 context"
+      merged_inline = File.read(File.join(b["path"], "include/prism/compiler/inline.h"))
+      assert_includes merged_inline, "#endif /* _MSC_VER */"
+      assert_includes merged_inline, "#include \"prism/internal/ijon.h\""
+      merged_integer = File.read(File.join(b["path"], "src/integer.c"))
+      assert_includes merged_integer, "#ifndef PM_INTEGER_DIVIDE_THRESHOLD"
+      assert_includes merged_integer, "PM_IJON_MAX(0x601u, level);"
     end
   end
 

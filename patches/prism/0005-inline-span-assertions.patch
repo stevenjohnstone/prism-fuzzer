@@ -1,6 +1,6 @@
-From f91e89bedfbf5a9b3ff3cdefb7901429b2a57651 Mon Sep 17 00:00:00 2001
+From 49e097c4f63aeddc67ba485267e3300a0d5f9589 Mon Sep 17 00:00:00 2001
 From: prism-fuzzer <fuzz@prism-fuzzer.local>
-Date: Tue, 24 Nov 2026 00:25:09 +0000
+Date: Tue, 24 Nov 2026 10:39:51 +0000
 Subject: [PATCH] Add optional inline AST and diagnostic span invariant
  assertions
 
@@ -14,7 +14,7 @@ Subject: [PATCH] Add optional inline AST and diagnostic span invariant
 
 diff --git a/include/prism/internal/fuzz_assert.h b/include/prism/internal/fuzz_assert.h
 new file mode 100644
-index 000000000..acb0ee7b2
+index 0000000000000000000000000000000000000000..acb0ee7b25d883a698ab0a169adb68f1e1981bbf
 --- /dev/null
 +++ b/include/prism/internal/fuzz_assert.h
 @@ -0,0 +1,131 @@
@@ -150,7 +150,7 @@ index 000000000..acb0ee7b2
 +
 +#endif
 diff --git a/include/prism/internal/node.h b/include/prism/internal/node.h
-index 9519a3ed0..a08c45a7d 100644
+index 9519a3ed01cdce70e63b50f5ae31e448961add2f..a08c45a7d4a3a3081293f30dfc16322829d5296c 100644
 --- a/include/prism/internal/node.h
 +++ b/include/prism/internal/node.h
 @@ -8,6 +8,7 @@
@@ -182,7 +182,7 @@ index 9519a3ed0..a08c45a7d 100644
  }
  
 diff --git a/src/prism.c b/src/prism.c
-index 5521bb16e..112ae77f2 100644
+index 34f84a09af29a85caf52a766a9f5ffc48892b79f..b390f5fa1760ea12a1588f36143d453f493f5700 100644
 --- a/src/prism.c
 +++ b/src/prism.c
 @@ -94,14 +94,108 @@ pm_version(void) {
@@ -350,7 +350,7 @@ index 5521bb16e..112ae77f2 100644
  }
  
 diff --git a/templates/src/node.c.erb b/templates/src/node.c.erb
-index 842a978b4..e9404f012 100644
+index 842a978b4a5eb4f350806439a11a64a33562ee1c..e9404f01201b7deef191b91b0cb5e990802567db 100644
 --- a/templates/src/node.c.erb
 +++ b/templates/src/node.c.erb
 @@ -2,8 +2,28 @@
