@@ -291,12 +291,46 @@ module PrismFuzzerReport
       triage_crashes = load_lineage_triage_crashes(triage_dir)
       worker_diff_flags = worker_diff_flags_for(afl_dir, topo_ctx: topo_ctx)
       fuzz_root = File.dirname(afl_dir)
-      corpus_dir = File.join(fuzz_root, "corpus")
+      default_corpus_dir = File.join(fuzz_root, "corpus")
+      corpus_dirs_by_gen = {}
+      corpus_dirs = []
       gen_dirs = []
       topo = topo_ctx && topo_ctx[:topology]
       if topo && topo["generators"].is_a?(Hash)
-        topo["generators"].each_value do |g|
-          gen_dirs << g["seeds_dir"] if g.is_a?(Hash) && g["seeds_dir"]
+        ws_raw = topo.dig("workspace", "dir")
+        topo["generators"].each do |gid, g|
+          next unless g.is_a?(Hash)
+
+          if g["kind"].to_s == "corpus"
+            cdir = if defined?(PrismFuzzer::Topology) && PrismFuzzer::Topology.respond_to?(:resolve_corpus_generator_dir)
+                     PrismFuzzer::Topology.resolve_corpus_generator_dir(
+                       g["dir"],
+                       fuzz_dir: fuzz_root,
+                       ws_raw_dir: ws_raw,
+                       default_corpus_dir: default_corpus_dir
+                     )
+                   elsif g["dir"] && !g["dir"].to_s.strip.empty?
+                     File.expand_path(g["dir"].to_s, fuzz_root)
+                   else
+                     default_corpus_dir
+                   end
+            corpus_dirs_by_gen[gid.to_s] = cdir
+            corpus_dirs << cdir
+          elsif g["seeds_dir"]
+            gen_dirs << g["seeds_dir"]
+          end
+        end
+      end
+      corpus_dirs << default_corpus_dir
+      corpus_dirs.uniq!
+      worker_corpus_dir = {}
+      if topo && topo["workers"].is_a?(Array)
+        topo["workers"].each do |wspec|
+          next unless wspec.is_a?(Hash)
+
+          from_gid = wspec.dig("seeds", "from")&.to_s
+          cdir = from_gid && corpus_dirs_by_gen[from_gid]
+          worker_corpus_dir[wspec["id"].to_s] = cdir if cdir
         end
       end
       seeds_dirs = (gen_dirs + ["/tmp/afl-tmpdir/grammar/seeds", File.join(fuzz_root, "seeds")]).uniq.select { |d| Dir.exist?(d) }
@@ -371,8 +405,9 @@ module PrismFuzzerReport
                   best && !best.empty? ? (best + [step]) : [step]
                 elsif base =~ /\Aid:\d+(?:,time:\d+,execs:\d+)?,orig:([^,]+)/
                   orig_name = Regexp.last_match(1)
-                  corpus_file = File.join(corpus_dir, orig_name)
-                  root_path = File.file?(corpus_file) ? corpus_file : path
+                  cand_cdirs = worker_corpus_dir[w] ? [worker_corpus_dir[w], *corpus_dirs].uniq : corpus_dirs
+                  corpus_file = cand_cdirs.map { |cd| File.join(cd, orig_name) }.find { |cp| File.file?(cp) }
+                  root_path = corpus_file || path
                   [{ path: root_path, worker: "corpus", kind: "corpus", base: orig_name, id: orig_name }, step]
                 else
                   [step]

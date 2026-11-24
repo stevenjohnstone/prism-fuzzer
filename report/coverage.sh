@@ -306,7 +306,17 @@ ruby -rdigest -rjson -rfileutils -rshellwords - "$WORK_DIR" "$PAIRS_META" "$LIVE
       next unless g.is_a?(Hash)
 
       if g["kind"].to_s == "corpus"
-        c_dir = g["dir"] ? File.expand_path(g["dir"], repo_root) : File.expand_path(ws_corpus, repo_root)
+        c_dir = if defined?(PrismFuzzer::Topology)
+                  PrismFuzzer::Topology.resolve_corpus_generator_dir(
+                    g["dir"],
+                    fuzz_dir: File.expand_path(ws_dir, repo_root),
+                    fuzz_root: repo_root,
+                    ws_raw_dir: topo&.dig("workspace", "dir"),
+                    default_corpus_dir: File.expand_path(ws_corpus, repo_root)
+                  )
+                else
+                  g["dir"] ? File.expand_path(g["dir"], repo_root) : File.expand_path(ws_corpus, repo_root)
+                end
         if Dir.exist?(c_dir)
           Dir.children(c_dir).sort.each do |fname|
             next if fname.start_with?(".") || fname.start_with?("README")

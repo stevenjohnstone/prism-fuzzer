@@ -189,7 +189,12 @@ for (( i = 0; i < ${#WORKER_NAMES[@]}; i++ )); do
     printf '# [%s] worker=%s cmd=%s\n' "$(date -u +%FT%TZ)" "$wname" "$wcmd" > "$wlog"
     pane_id=$(tmux new-window -P -F '#{pane_id}' -d -t "$SESSION" -n "$wname" "$wcmd") || exit $?
     printf -v wlog_q '%q' "$wlog"
-    tmux pipe-pane -o -t "$pane_id" "cat >> $wlog_q" || exit $?
+    if ! tmux pipe-pane -o -t "$pane_id" "cat >> $wlog_q"; then
+        tmux capture-pane -p -J -t "$pane_id" >> "$wlog" 2>/dev/null || true
+        echo "Error: Worker '$wname' exited immediately during startup:" >&2
+        tail -n 30 "$wlog" >&2 || true
+        exit 1
+    fi
 done
 
 tmux select-window -t "$SESSION:0"

@@ -885,7 +885,15 @@ class LaunchAndStatusTest < Minitest::Test
     assert_equal 22, plan_fn["workers"].size
     assert_equal 8192, PrismFuzzer::Topology.effective_compiled_max_input_size(plan_fn)
     assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/afl-8k"), lp_fn["primary_afl_dir"]
+    assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/corpus-8k"), lp_fn["corpus_dir"]
     assert_equal [256, 8192], Array(lp_fn["corpus_populations"]).map { |c| c["max_input_size"] }
+    assert_equal(
+      [
+        File.join(root_dir, "tmp/fuzz-ijon-funnel/corpus-256"),
+        File.join(root_dir, "tmp/fuzz-ijon-funnel/corpus-8k")
+      ],
+      Array(lp_fn["corpus_populations"]).map { |c| c["output_dir"] }
+    )
 
     gram_256 = lp_fn["workers"].find { |w| w["id"] == "grammar-256" }
     gram_8k = lp_fn["workers"].find { |w| w["id"] == "grammar-8k" }
@@ -893,10 +901,14 @@ class LaunchAndStatusTest < Minitest::Test
     assert_equal "8192", gram_8k.dig("env", "FUZZ_MAX_INPUT_SIZE")
 
     small_scout = lp_fn["workers"].find { |w| w["id"] == "small-scout" }
+    small_lsan = lp_fn["workers"].find { |w| w["id"] == "small-lsan" }
     main_8k = lp_fn["workers"].find { |w| w["id"] == "8k-main" }
     arm_8k = lp_fn["workers"].find { |w| w["id"] == "8k-arm32" }
     ppc_8k = lp_fn["workers"].find { |w| w["id"] == "8k-ppc" }
     assert_includes Shellwords.split(small_scout["cmd"]).last, "-G 260 "
+    lsan_tok = small_lsan.dig("afl_launch", "env_prefix").find { |t| t.start_with?("LSAN_OPTIONS=") }
+    refute_nil lsan_tok
+    assert_includes lsan_tok, "symbolize=0"
     assert_includes Shellwords.split(main_8k["cmd"]).last, "-G 8196 "
     # 8K cross-oracle envelope -G must stay clamped <= AFL++ MAX_FILE (1,048,576)
     assert_includes Shellwords.split(arm_8k["cmd"]).last, "-G 1048576 "
@@ -911,6 +923,148 @@ class LaunchAndStatusTest < Minitest::Test
       ir_fn_b, = PrismFuzzer::Topology.load_ir(funnel_camp, fuzz_root: root_dir)
       plan_fn_b = PrismFuzzer::Topology.compile_plan(ir_fn_b, fuzz_root: root_dir)
       assert_equal 24, plan_fn_b["workers"].size
+    end
+  end
+
+  def test_multi_corpus_snapshot_plan_launch_and_corpus_override
+    worker_ids = %w[t5_mc_small_scout t5_mc_small_diff t5_mc_8k_main t5_mc_8k_diff]
+
+    with_afl_tmpdirs(worker_ids) do
+      with_tmpdir("t5-multi-corpus-snap-") do |tmpdir|
+        upstream = PrismFuzzerTest::Fixtures.build_synthetic_upstream_prism(File.join(tmpdir, "upstream"))
+        ws = File.join(tmpdir, "funnel_ws")
+        build_dir = File.join(ws, "build")
+        bin_dir = File.join(ws, "bin")
+        snap_dir = File.join(ws, "snapshot")
+        mock_bin = File.join(tmpdir, "mock_bin")
+        camp = File.join(tmpdir, "multi_corpus_campaign.rb")
+
+        FileUtils.mkdir_p([build_dir, bin_dir, mock_bin, File.join(upstream[:repo], "test/prism/fixtures")])
+        File.write(File.join(upstream[:repo], "test/prism/fixtures/sample.txt"), "alpha = 1\nbeta = 2\n")
+
+        write_executable(File.join(build_dir, "fuzz"), "#!/bin/sh\nexit 0\n")
+        write_executable(
+          File.join(build_dir, "fuzz.diff"),
+          <<~'SH'
+            #!/bin/sh
+            if grep -q "DROP_ME" "$1" 2>/dev/null; then
+              exit 1
+            fi
+            exit 0
+          SH
+        )
+        # Mock afl-cmin for host-side corpus.rb execution without requiring AFL++ on macOS.
+        write_executable(
+          File.join(mock_bin, "afl-cmin"),
+          <<~'SH'
+            #!/bin/sh
+            out=""
+            inp=""
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                -o) out="$2"; shift 2 ;;
+                -i) inp="$2"; shift 2 ;;
+                --) break ;;
+                *) shift ;;
+              esac
+            done
+            mkdir -p "$out"
+            cp -R "$inp"/. "$out"/
+          SH
+        )
+
+        File.write(camp, <<~RUBY)
+          PrismFuzzer.campaign "multi-corpus-snap-test" do
+            workspace #{ws.inspect}, build_dir: #{build_dir.inspect}
+            defaults max_input_size: 256, max_allocated_mb: 128
+            prism :prism_a, repo: #{upstream[:repo].inspect}, dir: #{upstream[:repo].inspect}, patches: "none", templates: "never"
+            corpus_generator :corpus_small, source: :prism_a, fuzzer: "fuzz", dir: "corpus-256", max_input_size: 256
+            corpus_generator :corpus_8k,    source: :prism_a, fuzzer: "fuzz", dir: "corpus-8k",  max_input_size: 8192
+            fuzzer "fuzz",      shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
+            fuzzer "fuzz.diff", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :pcguard
+            sync_group "afl-8k",    dir: "afl-8k",    primary: true
+            sync_group "afl-small", dir: "afl-small"
+            worker :t5_mc_small_scout, fuzzer: "fuzz",      sync_group: "afl-small", afl_role: :main,      max_input_size: 256 do
+              seeds from: :corpus_small, shard_group: :sg_small
+            end
+            worker :t5_mc_small_diff,  fuzzer: "fuzz.diff", sync_group: "afl-small", afl_role: :secondary, max_input_size: 256 do
+              seeds from: :corpus_small, filter: :self_pass, cache_key: "mc_small_diff"
+            end
+            worker :t5_mc_8k_main,     fuzzer: "fuzz",      sync_group: "afl-8k",    afl_role: :main,      max_input_size: 8192 do
+              seeds from: :corpus_8k, shard_group: :sg_8k
+            end
+            worker :t5_mc_8k_diff,     fuzzer: "fuzz.diff", sync_group: "afl-8k",    afl_role: :secondary, max_input_size: 8192 do
+              seeds from: :corpus_8k, filter: :self_pass, cache_key: "mc_8k_diff"
+            end
+          end
+        RUBY
+
+        ir, = PrismFuzzer::Topology.load_ir(camp, fuzz_root: root_dir)
+        plan = PrismFuzzer::Topology.compile_plan(ir, fuzz_root: root_dir, build_dir: build_dir)
+        plan["sources"]["prism_a"]["path"] = upstream[:repo]
+        File.write(File.join(build_dir, "topology.resolved.json"), JSON.pretty_generate(plan))
+
+        env = {
+          "CAMPAIGN" => camp,
+          "TOPOLOGY" => camp,
+          "PATH" => "#{mock_bin}:#{ENV.fetch('PATH', '')}"
+        }
+
+        # 1. Exact run.sh flow: snapshot into ws/snapshot, read WORKSPACE_CORPUS_DIR, and invoke snapshot/bin/topology.rb.
+        assert_ruby_cmd(repo_path("runtime/provenance.rb"), "snapshot", build_dir, bin_dir, snap_dir, env: env)
+        paths_out, = assert_ruby_cmd(repo_path("bin/topology.rb"), "paths", "--json", env: env)
+        ws_paths = JSON.parse(paths_out)
+        assert_equal File.join(ws, "corpus-8k"), ws_paths["WORKSPACE_CORPUS_DIR"]
+
+        snap_topo_rb = File.join(snap_dir, "bin/topology.rb")
+        assert_path_exists snap_topo_rb
+        launch_out, = assert_ruby_cmd(
+          snap_topo_rb, "plan-launch",
+          "--build-dir", build_dir,
+          "--fuzz-dir", ws,
+          "--corpus-dir", ws_paths["WORKSPACE_CORPUS_DIR"],
+          "--bin-dir", bin_dir,
+          env: env
+        )
+        lp = JSON.parse(launch_out)
+
+        refute File.exist?(File.join(snap_dir, "tmp")), "snapshot topology.rb must not nest corpus dirs under snapshot/tmp"
+        assert Dir.exist?(File.join(ws, "corpus-256")), "expected workspace corpus-256 to be populated"
+        assert Dir.exist?(File.join(ws, "corpus-8k")), "expected workspace corpus-8k to be populated"
+
+        small_files = Dir.glob(File.join(ws, "corpus-256", "*")).select { |p| File.file?(p) }
+        large_files = Dir.glob(File.join(ws, "corpus-8k", "*")).select { |p| File.file?(p) }
+        refute_empty small_files
+        refute_empty large_files
+        assert small_files.all? { |p| File.size(p) <= 260 }, "expected all corpus-256 seeds <= 260 bytes"
+        assert large_files.any? { |p| File.size(p) > 2000 }, "expected corpus-8k to include >2KB boundary seeds"
+
+        small_diff_seeds = Dir.glob("/tmp/afl-tmpdir/t5_mc_small_diff/seeds/*").select { |p| File.file?(p) }
+        large_diff_seeds = Dir.glob("/tmp/afl-tmpdir/t5_mc_8k_diff/seeds/*").select { |p| File.file?(p) }
+        assert_equal small_files.size, small_diff_seeds.size
+        assert_equal large_files.size, large_diff_seeds.size
+        assert large_diff_seeds.any? { |p| File.size(p) > 2000 }, "8k-diff should receive >2KB seeds from corpus-8k"
+        assert lp["workers"].all? { |w| w["staged"] == true }
+
+        # 2. Explicit custom --corpus-dir override redirects all islands to the custom corpus.
+        custom_corpus = File.join(tmpdir, "custom_override_corpus")
+        FileUtils.mkdir_p(custom_corpus)
+        File.binwrite(File.join(custom_corpus, "ovr_ok"), seed_bytes("override = 1\n"))
+        File.binwrite(File.join(custom_corpus, "ovr_drop"), seed_bytes("DROP_ME\n"))
+
+        ovr_out, = assert_ruby_cmd(
+          snap_topo_rb, "plan-launch",
+          "--build-dir", build_dir,
+          "--fuzz-dir", ws,
+          "--corpus-dir", custom_corpus,
+          "--bin-dir", bin_dir,
+          env: env
+        )
+        ovr_lp = JSON.parse(ovr_out)
+        assert_equal true, ovr_lp["corpus_overridden"]
+        assert_equal ["ovr_ok"], Dir.children("/tmp/afl-tmpdir/t5_mc_small_diff/seeds").sort
+        assert_equal ["ovr_ok"], Dir.children("/tmp/afl-tmpdir/t5_mc_8k_diff/seeds").sort
+      end
     end
   end
 

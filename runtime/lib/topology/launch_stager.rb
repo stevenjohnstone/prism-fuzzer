@@ -27,16 +27,18 @@ module PrismFuzzer
     def stage_launch!(launch_plan, fuzz_root: locate_fuzz_root, corpus_dir: nil, bin_dir: nil)
       staged = deep_dup(launch_plan)
       fuzz_dir = staged.fetch("fuzz_dir")
-      effective_corpus_dir = corpus_dir ? File.expand_path(corpus_dir, fuzz_root) : staged.fetch("corpus_dir")
-      effective_bin_dir = bin_dir ? File.expand_path(bin_dir, fuzz_root) : staged.fetch("bin_dir")
+      repo_root = outer_repo_root(fuzz_root, fuzz_dir: fuzz_dir)
+      default_cdir = staged["default_corpus_dir"] || staged.fetch("corpus_dir")
+      effective_corpus_dir = corpus_dir ? File.expand_path(corpus_dir, repo_root) : staged.fetch("corpus_dir")
+      effective_bin_dir = bin_dir ? File.expand_path(bin_dir, repo_root) : staged.fetch("bin_dir")
       bin_overridden = effective_bin_dir != staged["bin_dir"]
+      corpus_overridden = !!staged["corpus_overridden"] || (!corpus_dir.nil? && effective_corpus_dir != default_cdir)
       staged["corpus_dir"] = effective_corpus_dir
       staged["bin_dir"] = effective_bin_dir
 
       primary_afl_dir = staged["primary_afl_dir"]
       FileUtils.mkdir_p(primary_afl_dir) if primary_afl_dir
 
-      corpus_overridden = !corpus_dir.nil?
       cpops = if staged["corpus_populations"].is_a?(Array)
                 staged["corpus_populations"]
               elsif staged["corpus_population"].is_a?(Hash)
@@ -45,7 +47,7 @@ module PrismFuzzer
                 []
               end
       cpops.each do |cpop|
-        target_cdir = if corpus_overridden && (cpop["default_dir"] || cpops.size == 1)
+        target_cdir = if corpus_overridden
                         effective_corpus_dir
                       else
                         cpop["output_dir"] || effective_corpus_dir
@@ -59,6 +61,7 @@ module PrismFuzzer
         if (frel = cpop["fuzzer_binary_rel"])
           cands << File.join(effective_bin_dir, File.basename(frel))
           cands.concat(Array(cpop["fuzzer_bin_candidates"]))
+          cands << File.expand_path(frel, repo_root)
           cands << File.expand_path(frel, fuzz_root)
         end
         c_bin = cands.compact.uniq.find { |p| File.executable?(p) }

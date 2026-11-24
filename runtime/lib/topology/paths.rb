@@ -61,6 +61,42 @@ module PrismFuzzer
       ordered.uniq
     end
 
+    def outer_repo_root(fuzz_root = locate_fuzz_root, fuzz_dir: nil)
+      root_abs = File.expand_path(fuzz_root)
+      return root_abs unless File.basename(root_abs) == "snapshot"
+
+      ws_candidate = fuzz_dir ? File.expand_path(fuzz_dir) : File.dirname(root_abs)
+      parent_start = File.dirname(ws_candidate)
+      outer = PrismFuzzer::Common.locate_fuzz_root(parent_start, fallback: nil)
+      return outer if outer && outer != root_abs
+
+      cwd_root = PrismFuzzer::Common.locate_fuzz_root(Dir.pwd, fallback: nil)
+      (cwd_root && cwd_root != root_abs) ? cwd_root : root_abs
+    end
+
+    def resolve_corpus_generator_dir(raw_dir, fuzz_dir:, fuzz_root: locate_fuzz_root, ws_raw_dir: nil, default_corpus_dir: nil)
+      return default_corpus_dir || File.join(fuzz_dir, "corpus") if blank?(raw_dir)
+
+      p = raw_dir.to_s
+      if !Dir.exist?(p) && (ENV["PRISM_FUZZER_PATH_MAPS"] || ENV["RUBY_FUZZ_PATH_MAPS"])
+        mapped = remap_external_path(p)
+        return mapped if mapped
+      end
+      return File.expand_path(p) if p.start_with?("/")
+      return File.expand_path(p, fuzz_dir) unless p.include?("/")
+
+      unless blank?(ws_raw_dir)
+        clean_ws = ws_raw_dir.to_s.sub(%r{\A\./}, "").chomp("/")
+        clean_p = p.sub(%r{\A\./}, "")
+        if !clean_ws.empty? && (clean_p == clean_ws || clean_p.start_with?("#{clean_ws}/"))
+          rel_sub = clean_p == clean_ws ? "." : clean_p.delete_prefix("#{clean_ws}/")
+          return File.expand_path(rel_sub, fuzz_dir)
+        end
+      end
+
+      File.expand_path(p, outer_repo_root(fuzz_root, fuzz_dir: fuzz_dir))
+    end
+
     def expand_workspace_path(raw, fuzz_root:)
       p = raw.to_s
       if !Dir.exist?(p) && (ENV["PRISM_FUZZER_PATH_MAPS"] || ENV["RUBY_FUZZ_PATH_MAPS"])
@@ -73,39 +109,54 @@ module PrismFuzzer
     def workspace_paths(topo = nil, fuzz_root: locate_fuzz_root, build_dir: nil, fuzz_dir: nil, corpus_dir: nil, bin_dir: nil)
       ws = topo.is_a?(Hash) && topo["workspace"].is_a?(Hash) ? topo["workspace"] : {}
       raw_ws_dir = ws["dir"] || "tmp/fuzz"
-      res_dir = expand_workspace_path(fuzz_dir || env_override("FUZZ_DIR") || raw_ws_dir, fuzz_root: fuzz_root)
-      ws_dir_abs = expand_workspace_path(raw_ws_dir, fuzz_root: fuzz_root)
+      repo_root = outer_repo_root(fuzz_root, fuzz_dir: fuzz_dir)
+      res_dir = expand_workspace_path(fuzz_dir || env_override("FUZZ_DIR") || raw_ws_dir, fuzz_root: repo_root)
+      ws_dir_abs = expand_workspace_path(raw_ws_dir, fuzz_root: repo_root)
       default_ws_build = File.join(res_dir, "build")
       explicit_build = build_dir || env_override("FUZZ_BUILD_DIR")
       raw_build = explicit_build || (res_dir != ws_dir_abs ? default_ws_build : (ws["build_dir"] || default_ws_build))
-      res_build = expand_workspace_path(raw_build, fuzz_root: fuzz_root)
+      res_build = expand_workspace_path(raw_build, fuzz_root: repo_root)
 
       sgs = topo.is_a?(Hash) && topo["sync_groups"].is_a?(Hash) ? topo["sync_groups"] : {}
       gram_gen = topo.is_a?(Hash) && topo["generators"].is_a?(Hash) ? topo["generators"].values.find { |g| g.is_a?(Hash) && g["kind"] == "grammar" } : nil
-      corp_gen = topo.is_a?(Hash) && topo["generators"].is_a?(Hash) ? topo["generators"].values.find { |g| g.is_a?(Hash) && g["kind"] == "corpus" } : nil
+      corp_gens = topo.is_a?(Hash) && topo["generators"].is_a?(Hash) ? topo["generators"].select { |_, g| g.is_a?(Hash) && g["kind"] == "corpus" } : {}
       primary_sg_id = sgs.find { |_, g| g.is_a?(Hash) && g["primary"] }&.first || gram_gen&.dig("sync_group") || sgs.keys.first
       primary_afl_sub = (primary_sg_id && sgs.dig(primary_sg_id, "dir")) || "afl"
 
-      res_corpus = expand_workspace_path(corpus_dir || env_override("TRIAGE_CORPUS_DIR") || ws["corpus_dir"] || corp_gen&.dig("dir") || File.join(res_dir, "corpus"), fuzz_root: fuzz_root)
-      res_bin = bin_dir ? File.expand_path(bin_dir, fuzz_root) : File.join(res_dir, "bin")
+      primary_main_from = if primary_sg_id && topo.is_a?(Hash) && topo["workers"].is_a?(Array)
+                            pm_w = topo["workers"].find { |w| w.is_a?(Hash) && w["sync_group"].to_s == primary_sg_id.to_s && w["afl_role"].to_s == "main" } ||
+                                   topo["workers"].find { |w| w.is_a?(Hash) && w["sync_group"].to_s == primary_sg_id.to_s && w["kind"].to_s != "generator" }
+                            pm_w&.dig("seeds", "from")&.to_s
+                          end
+      corp_gen = (primary_main_from && corp_gens[primary_main_from]) || corp_gens.values.first
 
-      res_report = expand_workspace_path(ws["report_dir"] || File.join(res_dir, "report"), fuzz_root: fuzz_root)
+      explicit_corpus = corpus_dir || env_override("TRIAGE_CORPUS_DIR") || ws["corpus_dir"]
+      res_corpus = if explicit_corpus
+                     expand_workspace_path(explicit_corpus, fuzz_root: repo_root)
+                   elsif corp_gen&.dig("dir")
+                     resolve_corpus_generator_dir(corp_gen["dir"], fuzz_dir: res_dir, fuzz_root: fuzz_root, ws_raw_dir: raw_ws_dir)
+                   else
+                     File.join(res_dir, "corpus")
+                   end
+      res_bin = bin_dir ? File.expand_path(bin_dir, repo_root) : File.join(res_dir, "bin")
+
+      res_report = expand_workspace_path(ws["report_dir"] || File.join(res_dir, "report"), fuzz_root: repo_root)
 
       {
         fuzz_dir: res_dir,
         build_dir: res_build,
-        build_rel: path_relative_or_abs(res_build, fuzz_root),
+        build_rel: path_relative_or_abs(res_build, repo_root),
         afl_subdir: primary_afl_sub,
         afl_dir: File.join(res_dir, primary_afl_sub),
         bin_dir: res_bin,
         snapshot_dir: File.join(res_dir, "snapshot"),
         corpus_dir: res_corpus,
         seeds_dir: File.join(res_dir, "seeds"),
-        triage_dir: expand_workspace_path(env_override("TRIAGE_DIR") || ws["triage_dir"] || File.join(res_report, "triage"), fuzz_root: fuzz_root),
+        triage_dir: expand_workspace_path(env_override("TRIAGE_DIR") || ws["triage_dir"] || File.join(res_report, "triage"), fuzz_root: repo_root),
         report_dir: res_report,
-        coverage_dir: expand_workspace_path(ws["coverage_dir"] || File.join(res_report, "coverage"), fuzz_root: fuzz_root),
-        logs_dir: expand_workspace_path(env_override("FUZZ_LOGS_DIR") || ws["logs_dir"] || File.join(res_dir, "logs"), fuzz_root: fuzz_root),
-        reports_dir: expand_workspace_path(env_override("REPORTS_DIR") || ws["reports_dir"] || "reports", fuzz_root: fuzz_root)
+        coverage_dir: expand_workspace_path(ws["coverage_dir"] || File.join(res_report, "coverage"), fuzz_root: repo_root),
+        logs_dir: expand_workspace_path(env_override("FUZZ_LOGS_DIR") || ws["logs_dir"] || File.join(res_dir, "logs"), fuzz_root: repo_root),
+        reports_dir: expand_workspace_path(env_override("REPORTS_DIR") || ws["reports_dir"] || "reports", fuzz_root: repo_root)
       }
     end
 

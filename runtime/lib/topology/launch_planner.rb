@@ -55,16 +55,21 @@ module PrismFuzzer
     # and staging descriptors without creating directories, mutating /tmp/afl-tmpdir,
     # invoking corpus.rb, or executing target binaries.
     def plan_launch(plan, fuzz_root: locate_fuzz_root, fuzz_dir: nil, corpus_dir: nil, bin_dir: nil)
+      default_ws = workspace_paths(plan, fuzz_root: fuzz_root, fuzz_dir: fuzz_dir, bin_dir: bin_dir)
       ws = workspace_paths(plan, fuzz_root: fuzz_root, fuzz_dir: fuzz_dir, corpus_dir: corpus_dir, bin_dir: bin_dir)
       fuzz_dir = ws[:fuzz_dir]
       corpus_dir = ws[:corpus_dir]
       bin_dir = ws[:bin_dir]
+      corpus_overridden = !corpus_dir.nil? && corpus_dir != default_ws[:corpus_dir]
+      repo_root = outer_repo_root(fuzz_root, fuzz_dir: fuzz_dir)
+      ws_raw_dir = plan.dig("workspace", "dir")
       max_input_size = Integer(plan.dig("defaults", "max_input_size") || 1024)
       max_alloc_mb = Integer(plan.dig("defaults", "max_allocated_mb") || 128)
       hard_rss = max_alloc_mb * 16
       asan_opts = "abort_on_error=1:handle_abort=1:detect_leaks=0:quarantine_size_mb=16:malloc_context_size=0:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"
       ubsan_opts = "abort_on_error=1:symbolize=0"
       msan_opts = "exit_code=86:abort_on_error=1:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"
+      lsan_opts = "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}:symbolize=0"
       diff_bt = ENV.fetch("FUZZ_DIFF_BACKTRACE", "0")
 
       dict_cand = File.join(fuzz_dir, "snapshot", "dict", "prism.dict")
@@ -88,13 +93,21 @@ module PrismFuzzer
           c_fspec = plan.fetch("fuzzers").fetch(corpus_gen["fuzzer"])
           c_bin_rel = c_fspec.fetch("binary")
           c_bin_candidates << File.join(bin_dir, File.basename(c_bin_rel))
+          c_bin_candidates << File.expand_path(c_bin_rel, repo_root)
           c_bin_candidates << File.expand_path(c_bin_rel, fuzz_root)
+          c_bin_candidates.uniq!
         end
-        out_cdir = corpus_gen["dir"] ? File.expand_path(corpus_gen["dir"], fuzz_root) : corpus_dir
+        out_cdir = resolve_corpus_generator_dir(
+          corpus_gen["dir"],
+          fuzz_dir: fuzz_dir,
+          fuzz_root: fuzz_root,
+          ws_raw_dir: ws_raw_dir,
+          default_corpus_dir: corpus_dir
+        )
         {
           "id" => cg_id.to_s,
           "output_dir" => out_cdir,
-          "default_dir" => corpus_gen["dir"].nil?,
+          "default_dir" => blank?(corpus_gen["dir"]),
           "corpus_rb" => File.join(fuzz_root, "runtime", "corpus.rb"),
           "fixtures_dir" => fixtures_dir,
           "fuzzer_binary_rel" => c_bin_rel,
@@ -243,12 +256,21 @@ module PrismFuzzer
         seed_from_dir = nil
         if seed_cfg["from"]
           src_gen = plan.dig("generators", seed_cfg["from"].to_s)
-          seed_from_dir = File.expand_path(src_gen["dir"], fuzz_root) if src_gen && src_gen["dir"]
+          if src_gen && !blank?(src_gen["dir"])
+            seed_from_dir = resolve_corpus_generator_dir(
+              src_gen["dir"],
+              fuzz_dir: fuzz_dir,
+              fuzz_root: fuzz_root,
+              ws_raw_dir: ws_raw_dir,
+              default_corpus_dir: corpus_dir
+            )
+          end
         end
+        eff_seed_from_dir = corpus_overridden ? nil : seed_from_dir
 
         base_seed_files = existing_corpus_files
-        if seed_from_dir && Dir.exist?(seed_from_dir) && !Dir.children(seed_from_dir).reject { |f| f.start_with?(".") }.empty?
-          base_seed_files = Dir.glob(File.join(seed_from_dir, "*")).select { |p| File.file?(p) }.sort
+        if eff_seed_from_dir && Dir.exist?(eff_seed_from_dir) && !Dir.children(eff_seed_from_dir).reject { |f| f.start_with?(".") }.empty?
+          base_seed_files = Dir.glob(File.join(eff_seed_from_dir, "*")).select { |p| File.file?(p) }.sort
         end
 
         seed_filter = seed_cfg["filter"]&.to_s
@@ -269,11 +291,11 @@ module PrismFuzzer
             input_dir = seed_dir
             selected_preview = nil
           else
-            input_dir = seed_from_dir || corpus_dir
+            input_dir = eff_seed_from_dir || corpus_dir
             selected_preview = []
           end
         else
-          input_dir = seed_from_dir || corpus_dir
+          input_dir = eff_seed_from_dir || corpus_dir
           selected_preview = base_seed_files
         end
 
@@ -283,7 +305,6 @@ module PrismFuzzer
                       plan.dig("fuzzers", w["aux_fuzzer"].to_s)
                     end
         sans = aux_fspec ? (fspec_sans | Array(aux_fspec["sanitizers"]).map(&:to_s)) : fspec_sans
-        lsan_opts = "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_alloc_mb}:hard_rss_limit_mb=#{hard_rss}"
 
         env_prefix = []
         env_prefix << "FUZZ_DIFF_BACKTRACE=#{diff_bt}" if fspec["shape"] == "prism_diff_ruby"
@@ -423,6 +444,8 @@ module PrismFuzzer
         "schema_version" => TOPOLOGY_SCHEMA_VERSION,
         "fuzz_dir" => fuzz_dir,
         "corpus_dir" => corpus_dir,
+        "default_corpus_dir" => default_ws[:corpus_dir],
+        "corpus_overridden" => corpus_overridden ? true : nil,
         "bin_dir" => bin_dir,
         "primary_afl_dir" => primary_afl_dir,
         "sync_dirs" => sync_dirs,

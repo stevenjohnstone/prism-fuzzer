@@ -89,12 +89,12 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   corpus_generator :corpus_small,
                    source: :prism_a,
                    fuzzer: "fuzz",
-                   dir: "tmp/fuzz-ijon-funnel/corpus-256",
+                   dir: "corpus-256",
                    max_input_size: small_max_input
   corpus_generator :corpus_8k,
                    source: :prism_a,
                    fuzzer: "fuzz",
-                   dir: "tmp/fuzz-ijon-funnel/corpus-8k",
+                   dir: "corpus-8k",
                    max_input_size: large_max_input
 
   # Two size-specialized grammar generators:
