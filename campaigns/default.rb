@@ -6,7 +6,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a1d1d96c368d49b752d06e361823a098b54f9a9d"
-DEFAULT_RUBY_REF = "495f3778a4020ecc828083239e945e60c51245ae"
+DEFAULT_RUBY_REF = "dec1bb786f718840e7ea828fafdcc3cd29c64448"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip

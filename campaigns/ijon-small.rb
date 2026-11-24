@@ -17,8 +17,8 @@ fuzz_lib = File.expand_path("../lib", __dir__)
 $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
-DEFAULT_PRISM_REF = "a1d1d96c368d49b752d06e361823a098b54f9a9d"
-DEFAULT_RUBY_REF = "e10a8eea54c38f0326472d7266e9e81ecc7d7bf9"
+DEFAULT_PRISM_REF = "19396fe2fdc499d7969c159cbe13028b98ab9ce9"
+DEFAULT_RUBY_REF = "dec1bb786f718840e7ea828fafdcc3cd29c64448"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
