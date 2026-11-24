@@ -223,6 +223,7 @@ module FuzzTriage
     def sig_lines_for_reason(reason)
       case reason
       when "undefined-behavior" then 3
+      when "stack-overflow", "allocation-size-too-big", "out-of-memory" then 6
       when "ABRT" then 15
       when "use-of-uninitialized-value" then 5
       when "heap-use-after-free" then 7

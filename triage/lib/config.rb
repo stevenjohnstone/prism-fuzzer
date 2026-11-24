@@ -85,16 +85,46 @@ module FuzzTriage
     FORWARDING_CHARS = PrismFuzzer::FuzzHeader::FORWARDING_CHARS
     CROSS_ORACLE_TARGETS = FuzzVerifyProfile::CROSS_ORACLE_TARGETS
 
-    def env_max_allocated_mb
-      Integer(ENV.fetch("FUZZ_MAX_ALLOCATED", "128"))
+    def env_max_allocated_mb(triage_dir: nil)
+      raw = ENV["FUZZ_MAX_ALLOCATED"].to_s.strip
+      return Integer(raw) unless raw.empty?
+
+      eff_dir = triage_dir || Thread.current[:active_triage_dir]
+      if eff_dir
+        topo_mb = nil
+        triage_ws_roots(eff_dir).each do |root|
+          [File.join(root, "bin", "topology.json"), File.join(root, "topology.json")].each do |cand|
+            next unless File.file?(cand)
+
+            data = begin
+              JSON.parse(File.read(cand))
+            rescue StandardError
+              nil
+            end
+            topo_mb = data&.dig("defaults", "max_allocated_mb")
+            break if topo_mb
+          end
+          break if topo_mb
+        end
+        if topo_mb.nil?
+          topo = begin
+            resolve_topology(triage_dir: eff_dir)
+          rescue StandardError
+            nil
+          end
+          topo_mb = topo&.dig("defaults", "max_allocated_mb")
+        end
+        return Integer(topo_mb) if topo_mb
+      end
+      128
     end
 
-    def env_hard_rss_limit_mb
-      env_max_allocated_mb * 16
+    def env_hard_rss_limit_mb(triage_dir: nil)
+      env_max_allocated_mb(triage_dir: triage_dir) * 16
     end
 
     def env_sanitizer_env(executable: nil, triage_dir: nil, detect_leaks: nil, symbolize: true)
-      max_mb = env_max_allocated_mb
+      max_mb = env_max_allocated_mb(triage_dir: triage_dir)
       disable_leaks = if !detect_leaks.nil?
                         !detect_leaks
                       elsif executable

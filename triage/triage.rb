@@ -25,6 +25,8 @@ module FuzzTriage
   extend self
 
   def run_cli(_argv = ARGV)
+    $stdout.sync = true
+    $stderr.sync = true
     eff_triage_dir = (TESTCASES_DIR == "tmp/fuzz/report/triage") ? workspace_default_triage_dir : TESTCASES_DIR
     run_triage_pipeline(output_dirs: OUTPUT_DIRS, testcases_dir: eff_triage_dir)
   end

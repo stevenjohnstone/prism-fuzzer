@@ -70,8 +70,11 @@ module FuzzTriage
       buffered_occurrences: nil,
       buffered_inputs: nil,
       buffered_sentinels: nil,
-      dup_log_counts: nil
+      dup_log_counts: nil,
+      active_minimizations: nil
     )
+      prev_active_triage_dir = Thread.current[:active_triage_dir]
+      Thread.current[:active_triage_dir] = testcases_dir
       recount_enabled = recount.nil? ? env_recount? : recount
       should_minimize = minimize_enabled.nil? ? env_minimize? : minimize_enabled
       verbose_dups = ENV["TRIAGE_VERBOSE"] == "1"
@@ -284,7 +287,12 @@ module FuzzTriage
               testcase_output = sym_out if sym_crashed
             end
           else
-            minimize(crash_input, reason, minimized_input, executable, sig_lines)
+            semaphore.synchronize { active_minimizations[crash] = Process.clock_gettime(Process::CLOCK_MONOTONIC) } if active_minimizations
+            begin
+              minimize(crash_input, reason, minimized_input, executable, sig_lines)
+            ensure
+              semaphore.synchronize { active_minimizations.delete(crash) } if active_minimizations
+            end
             if reason != "hang"
               min_output, min_crashed, = run_testcase(executable, minimized_input, symbolize: true)
               if min_crashed
@@ -420,7 +428,8 @@ module FuzzTriage
               buffered_occurrences: buffered_occurrences,
               buffered_inputs: buffered_inputs,
               buffered_sentinels: buffered_sentinels,
-              dup_log_counts: dup_log_counts
+              dup_log_counts: dup_log_counts,
+              active_minimizations: active_minimizations
             )
           rescue StandardError => retry_err
             warn "Error recovering coalesced crash #{item[:crash]}: #{retry_err.class}: #{retry_err.message}"
@@ -430,6 +439,7 @@ module FuzzTriage
       ensure
         normalized_crash_file&.close!
         semaphore.synchronize { in_progress.delete(crash_hash) unless handed_off_to_leader || released_in_progress }
+        Thread.current[:active_triage_dir] = prev_active_triage_dir
       end
     end
 
@@ -471,6 +481,7 @@ module FuzzTriage
         buffered_inputs = Hash.new { |h, k| h[k] = [] }
         buffered_sentinels = {}
         dup_log_counts = Hash.new(0)
+        active_minimizations = {}
 
         dispatch = lambda do |crash_dir, crash, executable|
           work = lambda do
@@ -499,7 +510,8 @@ module FuzzTriage
               buffered_occurrences: buffered_occurrences,
               buffered_inputs: buffered_inputs,
               buffered_sentinels: buffered_sentinels,
-              dup_log_counts: dup_log_counts
+              dup_log_counts: dup_log_counts,
+              active_minimizations: active_minimizations
             )
           rescue StandardError => e
             warn "Error processing #{crash}: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}"
@@ -521,7 +533,19 @@ module FuzzTriage
         ensure
           if pool
             pool.shutdown
-            pool.wait_for_termination
+            heartbeat_interval = Float(ENV.fetch("TRIAGE_HEARTBEAT_SECONDS", "10"))
+            until pool.wait_for_termination(heartbeat_interval)
+              now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+              inflight = semaphore.synchronize do
+                active_minimizations.map { |path, started| [path, now - started] }
+              end
+              next if inflight.empty?
+
+              sample = inflight.sort_by { |_, dt| -dt }.first(3).map do |path, dt|
+                "#{File.basename(File.dirname(File.dirname(path)))}/#{File.basename(path)} (#{format('%.0fs', dt)})"
+              end.join(", ")
+              puts "[triage] still minimizing #{inflight.size} bucket(s): #{sample}"
+            end
           end
           buffered_occurrences.each do |bdir, recs|
             append_occurrences(bdir, recs) if !recs.empty? && File.directory?(bdir)

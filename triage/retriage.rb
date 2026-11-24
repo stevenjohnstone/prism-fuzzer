@@ -406,5 +406,7 @@ module FuzzRetriage
 end
 
 if __FILE__ == $PROGRAM_NAME
+  $stdout.sync = true
+  $stderr.sync = true
   exit(FuzzRetriage.run(ARGV))
 end

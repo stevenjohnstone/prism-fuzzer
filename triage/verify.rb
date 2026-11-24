@@ -773,5 +773,7 @@ module FuzzVerify
 end
 
 if __FILE__ == $PROGRAM_NAME
+  $stdout.sync = true
+  $stderr.sync = true
   exit(FuzzVerify.run(ARGV))
 end

@@ -481,8 +481,110 @@ class TriagePipelineTest < Minitest::Test
         assert refreshed_meta.dig("input", "source_preview"), "expected finalize_triage_metadata to backfill source_preview"
 
         verify_coalescing_races(workdir)
+        verify_topology_max_allocated_and_heartbeat(workdir)
       end
     end
+  end
+
+  def verify_topology_max_allocated_and_heartbeat(workdir)
+    ws_256 = File.join(workdir, "ws_256_alloc")
+    triage_256 = File.join(ws_256, "report", "triage")
+    FileUtils.mkdir_p(triage_256)
+    File.write(File.join(ws_256, "topology.json"), JSON.generate({
+      "schema_version" => 2,
+      "name" => "alloc-256-test",
+      "workspace" => { "dir" => ws_256, "build_dir" => File.join(ws_256, "build"), "triage_dir" => triage_256 },
+      "defaults" => { "max_input_size" => 8192, "max_allocated_mb" => 256 },
+      "sources" => { "prism_a" => { "kind" => "prism", "repo" => "https://example.invalid/prism.git", "ref" => "main" } },
+      "fuzzers" => { "fuzz" => { "shape" => "prism_parse", "source" => "prism_a", "sanitizers" => %w[asan ubsan] } },
+      "sync_groups" => { "afl" => { "dir" => "afl" } },
+      "workers" => []
+    }))
+
+    with_env("FUZZ_MAX_ALLOCATED" => nil) do
+      FuzzTriage.with_cached_topology do
+        assert_equal 256, FuzzTriage.env_max_allocated_mb(triage_dir: triage_256)
+        san_env = FuzzTriage.env_sanitizer_env(triage_dir: triage_256)
+        assert_includes san_env.fetch("MSAN_OPTIONS"), "max_allocation_size_mb=256"
+        assert_includes san_env.fetch("ASAN_OPTIONS"), "max_allocation_size_mb=256"
+      end
+    end
+
+    # Also verify fallback when topology.json is a minimal partial stub without full schema fields.
+    ws_partial = File.join(workdir, "ws_partial_alloc")
+    triage_partial = File.join(ws_partial, "report", "triage")
+    FileUtils.mkdir_p(triage_partial)
+    File.write(File.join(ws_partial, "topology.json"), JSON.generate({ "defaults" => { "max_allocated_mb" => 384 } }))
+    with_env("FUZZ_MAX_ALLOCATED" => nil) do
+      assert_equal 384, FuzzTriage.env_max_allocated_mb(triage_dir: triage_partial)
+    end
+
+    require_relative "../../runtime/campaign"
+    camp_rb = File.join(workdir, "camp_alloc_256.rb")
+    File.write(camp_rb, <<~RB)
+      PrismFuzzer.campaign "camp-alloc-256" do
+        workspace #{ws_256.inspect}
+        defaults max_input_size: 8192, max_allocated_mb: 256
+        prism :prism_a, repo: "https://example.invalid/prism.git", ref: "main"
+        fuzzer "fuzz", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan]
+        sync_group :afl, dir: "afl", primary: true
+        worker :w1, fuzzer: "fuzz", sync_group: :afl, afl_role: :main
+      end
+    RB
+    with_env("FUZZ_MAX_ALLOCATED" => nil) do
+      ctx = PrismFuzzer::Campaign.resolve_context(campaign_path: camp_rb, cli: {})
+      captured_env = nil
+      sc = PrismFuzzer::Campaign.singleton_class
+      orig_ric = PrismFuzzer::Campaign.method(:run_in_container!)
+      orig_edi = PrismFuzzer::Campaign.method(:ensure_docker_image!)
+      begin
+        sc.undef_method(:ensure_docker_image!)
+        sc.define_method(:ensure_docker_image!) { |**_kw| true }
+        sc.undef_method(:run_in_container!)
+        sc.define_method(:run_in_container!) do |c, cmd_args, **kw|
+          captured_env = kw[:extra_env]
+          puts PrismFuzzer::Campaign.docker_cmd_for(c, cmd_args, extra_env: kw[:extra_env] || {}).join(" ")
+          true
+        end
+        dry_triage, = capture_io { PrismFuzzer::Campaign.run_triage!(ctx, dry_run: true) }
+      ensure
+        sc.undef_method(:run_in_container!) if sc.method_defined?(:run_in_container!)
+        sc.define_method(:run_in_container!, orig_ric)
+        sc.undef_method(:ensure_docker_image!) if sc.method_defined?(:ensure_docker_image!)
+        sc.define_method(:ensure_docker_image!, orig_edi)
+      end
+      assert_equal "256", captured_env&.fetch("FUZZ_MAX_ALLOCATED", nil)
+      assert_includes dry_triage, "-e FUZZ_MAX_ALLOCATED=256",
+                      "expected Campaign.run_triage! to forward defaults.max_allocated_mb=256:\n#{dry_triage}"
+    end
+
+    # Verify in-flight minimization heartbeat emits live progress lines when a slow minimization is running.
+    hb_root = File.join(workdir, "hb_triage")
+    hb_afl = File.join(hb_root, "afl", "w1", "crashes")
+    hb_out_dir = File.join(hb_root, "triage")
+    FileUtils.mkdir_p([hb_afl, hb_out_dir])
+    hb_bin = write_executable(File.join(hb_root, "hb_fuzz"), "#!/bin/sh\necho 'Assertion `hb' failed.' >&2\nexit 134\n")
+    File.write(File.join(hb_root, "afl", "w1", "cmdline"), "#{hb_bin}\n")
+    File.binwrite(File.join(hb_afl, "id:000000,sig:06"), "\x00\x00\x03\x01hb_boom\n".b)
+
+    hb_mod = Module.new
+    hb_mod.extend(FuzzTriage)
+    hb_mod.define_singleton_method(:minimize) do |src, _r, dst, _e, _sl|
+      sleep 0.12
+      FileUtils.cp(src, dst)
+    end
+    hb_log, = capture_io do
+      with_env("TRIAGE_HEARTBEAT_SECONDS" => "0.04") do
+        hb_mod.run_triage_pipeline(
+          output_dirs: [File.join(hb_root, "afl")],
+          testcases_dir: hb_out_dir,
+          coverage_bin: "",
+          diff_coverage_bin: "",
+          threads: 2
+        )
+      end
+    end
+    assert_includes hb_log, "[triage] still minimizing 1 bucket(s):"
   end
 
   def test_afl_showmap_bucket_coverage_edge_df_document_ids_cache_and_recount

@@ -131,24 +131,35 @@ module FuzzTriage
       end
     end
 
+    COARSE_ONLY_REASONS = %w[stack-overflow allocation-size-too-big out-of-memory].freeze
+
     def minimize(crash, reason, minimized_input, executable, sig_lines)
       puts "minimizing #{crash}"
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
       pre_min_size = File.size(crash)
       if reason == "hang"
         run_afl_tmin_hang(crash, minimized_input, executable)
       else
+        extra_he_env = {
+          "SIGLINES" => sig_lines.to_s,
+          "HALFEMPTY_THREADS" => env_halfempty_threads.to_s
+        }
+        if COARSE_ONLY_REASONS.include?(reason.to_s)
+          extra_he_env["HALFEMPTY_SKIP_FINE"] = "1"
+          extra_he_env["HALFEMPTY_MAX_TIME"] = ENV.fetch("HALFEMPTY_MAX_TIME", "20")
+        end
         Open3.capture2e(
-          env_sanitizer_env(executable: executable).merge({
-            "SIGLINES" => sig_lines.to_s,
-            "HALFEMPTY_THREADS" => env_halfempty_threads.to_s
-          }),
+          env_sanitizer_env(executable: executable).merge(extra_he_env),
           triage_script_path("halfempty.sh"), executable, crash, minimized_input
         )
       end
       FileUtils.cp(crash, minimized_input) unless File.exist?(minimized_input) && File.size(minimized_input) >= 4
-      minimize_options_header(minimized_input, executable, sig_lines) if reason != "hang"
+      if reason != "hang" && !COARSE_ONLY_REASONS.include?(reason.to_s)
+        minimize_options_header(minimized_input, executable, sig_lines)
+      end
       post_min_size = File.size(minimized_input)
-      puts "#{crash} minimized #{pre_min_size} => #{post_min_size}"
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+      puts "#{crash} minimized #{pre_min_size} => #{post_min_size} (#{format('%.1fs', elapsed)})"
     end
 
     def normalize_ijon_crash_bytes(raw)

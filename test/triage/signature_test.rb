@@ -459,7 +459,83 @@ class TriageSignatureTest < Minitest::Test
       )
       assert_equal File.binread(drift_in), File.binread(drift_min),
                    "expected halfempty.sh to fall back to exact original input when bisect rejects signature drift"
+
+      # 2g. Two-phase 8 KiB minimization: localized INVARIANT inside 8 KiB shrinks to <= 18 B,
+      #     while a slow irreducible 5+ KiB crash respects HALFEMPTY_MAX_TIME without stalling in O(N^2) zeroing.
+      inv8k_in = File.join(workdir, "inv8k.in")
+      inv8k_min = File.join(workdir, "inv8k.min")
+      inv8k_body = ("pad_line = 12345\n".b * 240) + "INV_DECOY\n".b + ("mid_line = 67890\n".b * 120) + "INV_TARGET\n".b + ("tail_line = 111\n".b * 100)
+      assert_operator inv8k_body.bytesize, :>, 6000
+      File.binwrite(inv8k_in, inv_hdr + inv8k_body)
+
+      assert_cmd(halfempty_sh, synth_target, inv8k_in, inv8k_min, env: he_env.merge("SIGLINES" => "15"))
+      mini_inv8k = File.binread(inv8k_min)
+      assert_equal inv_hdr, mini_inv8k.byteslice(0, 4)
+      assert_includes mini_inv8k.byteslice(4..), "INV_TARGET".b
+      refute_includes mini_inv8k.byteslice(4..), "INV_DECOY".b
+      assert_operator mini_inv8k.bytesize, :<=, 18, "expected 8 KiB localized bug to shrink to <= 18 B, got #{mini_inv8k.bytesize}"
+
+      slow_big_target = write_executable(File.join(workdir, "slow_big_target.sh"), <<~'SH')
+        #!/bin/sh
+        sz=$(wc -c < "$1" | tr -d ' ')
+        sleep 0.03
+        if [ "$sz" -ge 5004 ]; then
+          echo "ERROR: MemorySanitizer: allocation-size-too-big: 200000000 exceeds 134217728" >&2
+          echo "SUMMARY: MemorySanitizer: allocation-size-too-big src/arena.c:63" >&2
+          exit 1
+        fi
+        exit 0
+      SH
+      big_in = File.join(workdir, "big_irreducible.in")
+      big_min = File.join(workdir, "big_irreducible.min")
+      File.binwrite(big_in, "\x00\x00\x03\x01".b + ("A".b * 8192))
+
+      t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      assert_cmd(
+        halfempty_sh, slow_big_target, big_in, big_min,
+        env: he_env.merge("HALFEMPTY_MAX_TIME" => "2", "HALFEMPTY_SKIP_FINE" => "1", "SIGLINES" => "6")
+      )
+      dt = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+      assert_operator dt, :<, 8.0, "expected bounded halfempty.sh to finish promptly under HALFEMPTY_MAX_TIME=2, took #{dt}s"
+      assert_operator File.size(big_min), :>=, 5004
+      assert_equal "\x00\x00\x03\x01".b, File.binread(big_min, 4)
     end
+  end
+
+  def test_stack_overflow_siglines_deduplicates_deep_caller_frames
+    require_relative "../../triage/triage"
+    assert_equal 6, FuzzTriage.sig_lines_for_reason("stack-overflow")
+    assert_equal 6, FuzzTriage.sig_lines_for_reason("allocation-size-too-big")
+
+    so_a = <<~TRACE
+      AddressSanitizer:DEADLYSIGNAL
+      =================================================================
+      ==10==ERROR: AddressSanitizer: stack-overflow on address 0xffffc19be9f0 (pc 0xaaaa bp 0xbbbb sp 0xcccc T0)
+          #0 0xaaaa1111 in __asan_memcpy (/prism-fuzzer/tmp/ws/bin/fuzz.diff+0x1c1d14)
+          #1 0xaaaa2222 in parser_lex /prism/src/prism.c:10266:32
+          #2 0xaaaa3333 in parse_ternary /prism/src/prism.c:21970:9
+          #3 0xaaaa4444 in parse_expression_infix /prism/src/prism.c:22777:9
+          #4 0xaaaa5555 in parse_unary_plus /prism/src/prism.c:21281:9
+      SUMMARY: AddressSanitizer: stack-overflow (/prism-fuzzer/tmp/ws/bin/fuzz.diff+0x1c1d14) in __asan_memcpy
+    TRACE
+    so_b = <<~TRACE
+      AddressSanitizer:DEADLYSIGNAL
+      =================================================================
+      ==99==ERROR: AddressSanitizer: stack-overflow on address 0xffff99999990 (pc 0xdddd bp 0xeeee sp 0xffff T0)
+          #0 0xbbbb1111 in __asan_memcpy (/prism-fuzzer/tmp/ws/bin/fuzz.diff+0x1c1d14)
+          #1 0xbbbb2222 in parser_lex /prism/src/prism.c:10266:32
+          #2 0xbbbb3333 in parse_ternary /prism/src/prism.c:21970:9
+          #3 0xbbbb4444 in parse_expression_infix /prism/src/prism.c:22777:9
+          #4 0xbbbb5555 in parse_unary_minus /prism/src/prism.c:21293:9
+      SUMMARY: AddressSanitizer: stack-overflow (/prism-fuzzer/tmp/ws/bin/fuzz.diff+0x1c1d14) in __asan_memcpy
+    TRACE
+    so_other = so_a.sub("parse_ternary /prism/src/prism.c:21970:9", "parse_array /prism/src/prism.c:19759:9")
+
+    sl = FuzzTriage.sig_lines_for_reason("stack-overflow")
+    assert_equal run_signature(so_a, siglines: sl), run_signature(so_b, siglines: sl),
+                 "stack-overflow traces sharing #0..#2 should deduplicate regardless of deeper recursion frames"
+    refute_equal run_signature(so_a, siglines: sl), run_signature(so_other, siglines: sl),
+                 "stack-overflow traces with distinct #2 caller should stay distinct"
   end
 
   private

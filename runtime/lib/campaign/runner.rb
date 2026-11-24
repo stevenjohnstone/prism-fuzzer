@@ -292,6 +292,9 @@ module PrismFuzzer
       env["TRIAGE_MINIMIZE"] = (rep_opts["minimize"] ? "1" : "0") if rep_opts.key?("minimize")
       env["TRIAGE_RECOUNT"] = (rep_opts["recount"] ? "1" : "0") if rep_opts.key?("recount")
       env["TRIAGE_LIVE_SCRIPTS"] = (rep_opts["live_scripts"] ? "1" : "0") if rep_opts.key?("live_scripts")
+      max_alloc = ENV["FUZZ_MAX_ALLOCATED"].to_s.strip
+      max_alloc = ctx[:plan].dig("defaults", "max_allocated_mb").to_s if max_alloc.empty?
+      env["FUZZ_MAX_ALLOCATED"] = max_alloc unless max_alloc.empty?
       env["TRIAGE_DIR"] = guest_path_for(ws[:triage_dir], ctx, ws_key: "triage_dir")
       env["TRIAGE_CORPUS_DIR"] = guest_path_for(ws[:corpus_dir], ctx, ws_key: "corpus_dir")
 
