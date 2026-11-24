@@ -1444,6 +1444,102 @@ class CampaignDslAndSchemaTest < Minitest::Test
     end
   end
 
+  def test_topology_read_json_toctou_resilience_idempotent_ir_write_and_triage_cache
+    with_tmpdir("topo-toctou-") do |workdir|
+      ir_path = File.join(workdir, "build", "topology.ir.json")
+      bin_topo = File.join(workdir, "bin", "topology.json")
+      triage_dir = File.join(workdir, "report", "triage")
+      FileUtils.mkdir_p([File.dirname(ir_path), File.dirname(bin_topo), triage_dir])
+
+      sample_topo = {
+        "schema_version" => 2,
+        "name" => "toctou-test",
+        "sources" => { "prism_a" => { "kind" => "prism", "dir" => workdir } },
+        "fuzzers" => { "fuzz" => { "shape" => "prism_parse", "source" => "prism_a", "binary" => File.join(workdir, "bin", "fuzz") } },
+        "sync_groups" => { "afl" => { "dir" => "afl", "primary" => true } },
+        "workers" => [{ "id" => "main", "kind" => "afl", "fuzzer" => "fuzz", "sync_group" => "afl", "afl_role" => "main" }],
+        "explain_binaries" => {}
+      }
+      PrismFuzzer::Topology.write_json_atomic(ir_path, sample_topo)
+      PrismFuzzer::Topology.write_json_atomic(bin_topo, sample_topo)
+
+      # 1. Transient ENOENT between File.file? and File.read retries and succeeds cleanly.
+      orig_read = File.method(:read)
+      flaky_calls = 0
+      with_stubbed_singleton_methods(File, read: lambda do |path, *args, **kwargs|
+        if path == ir_path && (flaky_calls += 1) == 1
+          raise Errno::ENOENT, path
+        end
+        orig_read.call(path, *args, **kwargs)
+      end) do
+        parsed = PrismFuzzer::Topology.read_json(ir_path)
+        assert_equal "toctou-test", parsed["name"]
+        assert_equal 2, flaky_calls
+      end
+
+      # 2. Persistent ENOENT after File.file? returns nil without raising, allowing discover fallback to bin/topology.json.
+      saved_camp = ENV["CAMPAIGN"]
+      begin
+        ENV["CAMPAIGN"] = ir_path
+        with_stubbed_singleton_methods(File, read: lambda do |path, *args, **kwargs|
+          raise Errno::ENOENT, path if path == ir_path
+          orig_read.call(path, *args, **kwargs)
+        end) do
+          discovered = PrismFuzzer::Topology.discover(triage_dir: triage_dir, bin_dir: File.dirname(bin_topo))
+          assert_equal "toctou-test", discovered["name"]
+        end
+      ensure
+        ENV["CAMPAIGN"] = saved_camp
+      end
+
+      # 3. write_container_ir! skips atomic rename churn when serialized IR is unchanged.
+      camp_rb = File.join(workdir, "camp.rb")
+      File.write(camp_rb, <<~RUBY)
+        PrismFuzzer.campaign "idempotent-ir" do
+          workspace #{workdir.inspect}, build_dir: #{File.join(workdir, "build").inspect}
+          prism :prism_a, dir: #{workdir.inspect}
+          fuzzer "fuzz", shape: :prism_parse, source: :prism_a
+          sync_group :afl, dir: "afl", primary: true
+          worker :main, kind: :afl, fuzzer: "fuzz", sync_group: :afl, afl_role: :main
+        end
+      RUBY
+      ctx = PrismFuzzer::Campaign.resolve_context(campaign_path: camp_rb)
+      written = PrismFuzzer::Campaign.write_container_ir!(ctx)
+      stat1 = File.stat(written)
+      sleep 0.02
+      PrismFuzzer::Campaign.write_container_ir!(ctx)
+      stat2 = File.stat(written)
+      assert_equal stat1.ino, stat2.ino, "expected unchanged topology.ir.json inode when IR is identical"
+      assert_equal stat1.mtime, stat2.mtime
+
+      # 4. FuzzTriage#with_cached_topology memoizes discover across concurrent worker lookups.
+      discover_calls = 0
+      orig_discover = PrismFuzzer::Topology.method(:discover)
+      with_stubbed_singleton_methods(PrismFuzzer::Topology, discover: lambda do |**kw|
+        discover_calls += 1
+        orig_discover.call(**kw)
+      end) do
+        FuzzTriage.with_cached_topology do
+          threads = Array.new(6) do
+            Thread.new { FuzzTriage.resolve_topology(triage_dir: triage_dir) }
+          end
+          results = threads.map(&:value)
+          assert(results.all? { |r| r && r["name"] == "toctou-test" })
+        end
+        assert_operator discover_calls, :<=, 6
+
+        before = discover_calls
+        FuzzTriage.with_cached_topology do
+          first = FuzzTriage.resolve_topology(triage_dir: triage_dir)
+          assert_equal "toctou-test", first["name"]
+          assert_equal before + 1, discover_calls
+          5.times { FuzzTriage.resolve_topology(triage_dir: triage_dir) }
+          assert_equal before + 1, discover_calls, "expected cached resolve_topology to avoid repeated disk discovery"
+        end
+      end
+    end
+  end
+
   private
 
   def with_stubbed_singleton_methods(target, stubs)

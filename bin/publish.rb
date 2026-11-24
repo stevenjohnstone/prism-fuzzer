@@ -22,7 +22,7 @@ module PrismFuzzerPublish
     return nil unless path && File.file?(path)
 
     JSON.parse(File.read(path, encoding: "UTF-8"))
-  rescue JSON::ParserError
+  rescue Errno::ENOENT, Errno::ENOTDIR, SystemCallError, IOError, JSON::ParserError, EncodingError
     nil
   end
 

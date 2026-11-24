@@ -163,12 +163,38 @@ module FuzzTriage
       end
     end
 
+    TOPOLOGY_CACHE_MUTEX = Mutex.new
+
+    def with_cached_topology
+      prev = TOPOLOGY_CACHE_MUTEX.synchronize do
+        old = @topology_lookup_cache
+        @topology_lookup_cache = {}
+        old
+      end
+      yield
+    ensure
+      TOPOLOGY_CACHE_MUTEX.synchronize { @topology_lookup_cache = prev }
+    end
+
     def resolve_topology(triage_dir: TESTCASES_DIR, output_dirs: nil)
       return nil unless defined?(PrismFuzzer::Topology)
 
+      cache_key = [File.expand_path(triage_dir.to_s), Array(output_dirs).map(&:to_s)]
+      cached = TOPOLOGY_CACHE_MUTEX.synchronize do
+        @topology_lookup_cache && @topology_lookup_cache[cache_key]
+      end
+      return PrismFuzzer::Topology.deep_dup(cached) if cached
+
       bin_dir = triage_ws_roots(triage_dir).map { |r| File.join(r, "bin") }.find { |d| File.directory?(d) }
       afl_cand = Array(output_dirs).first
-      PrismFuzzer::Topology.discover(triage_dir: triage_dir, afl_dir: afl_cand, bin_dir: bin_dir)
+      resolved = PrismFuzzer::Topology.discover(triage_dir: triage_dir, afl_dir: afl_cand, bin_dir: bin_dir)
+
+      if resolved
+        TOPOLOGY_CACHE_MUTEX.synchronize do
+          @topology_lookup_cache[cache_key] = resolved if @topology_lookup_cache
+        end
+      end
+      resolved
     end
 
     def resolve_triage_output_dirs(output_dirs:, testcases_dir: TESTCASES_DIR)

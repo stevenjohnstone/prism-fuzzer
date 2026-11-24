@@ -112,9 +112,18 @@ module PrismFuzzer
     def read_json(path)
       return nil unless path && !path.to_s.empty? && File.file?(path)
 
-      data = JSON.parse(File.read(path, encoding: "UTF-8"))
-      data.is_a?(Hash) ? data : nil
-    rescue JSON::ParserError
+      retries = 0
+      begin
+        data = JSON.parse(File.read(path, encoding: "UTF-8"))
+        data.is_a?(Hash) ? data : nil
+      rescue Errno::ENOENT
+        if (retries += 1) <= 1
+          sleep(0.005)
+          retry
+        end
+        nil
+      end
+    rescue Errno::ENOTDIR, SystemCallError, IOError, JSON::ParserError, EncodingError
       nil
     end
 

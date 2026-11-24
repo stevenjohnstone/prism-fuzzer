@@ -216,7 +216,9 @@ module PrismFuzzer
            end
 
       [ir, expanded]
-    rescue JSON::ParserError => e
+    rescue Errno::ENOENT, Errno::ENOTDIR, SystemCallError => e
+      raise TopologyError, "Campaign/topology file not found: #{expanded} (#{e.message})"
+    rescue JSON::ParserError, EncodingError => e
       raise TopologyError, "Invalid JSON in #{expanded}: #{e.message}"
     end
 

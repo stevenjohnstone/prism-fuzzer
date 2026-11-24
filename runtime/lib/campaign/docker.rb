@@ -126,7 +126,16 @@ module PrismFuzzer
 
     def write_container_ir!(ctx, dry_run: false)
       host_path = ir_snapshot_host_path(ctx)
-      Topology.write_json_atomic(host_path, container_ir(ctx)) unless dry_run
+      unless dry_run
+        ir_data = container_ir(ctx)
+        serialized = "#{JSON.pretty_generate(ir_data)}\n"
+        existing = begin
+          File.read(host_path, encoding: "UTF-8")
+        rescue SystemCallError, IOError
+          nil
+        end
+        Topology.write_json_atomic(host_path, ir_data) unless existing == serialized
+      end
       host_path
     end
 

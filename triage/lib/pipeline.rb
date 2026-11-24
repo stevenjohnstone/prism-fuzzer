@@ -305,77 +305,79 @@ module FuzzTriage
       minimize_enabled: nil,
       threads: nil
     )
-      resolved_output_dirs = resolve_triage_output_dirs(output_dirs: output_dirs, testcases_dir: testcases_dir)
-      FileUtils.mkdir_p(File.join(testcases_dir, ".processed"))
-      effective_threads = [threads.nil? ? env_triage_threads : threads.to_i, 1].max
-      use_pool = defined?(Concurrent) && effective_threads > 1
-      pool = use_pool ? Concurrent::FixedThreadPool.new(effective_threads) : nil
-      semaphore = Mutex.new
-      in_progress = Set.new
-      pending_sentinels = {}
-      pending_occurrences = {}
-      pending_inputs = {}
-      pending_hashes = {}
-      pending_retries = {}
-      recorded_hashes = load_all_recorded_occurrence_hashes(testcases_dir)
-      archived_hashes = load_all_archived_input_hashes(testcases_dir)
+      with_cached_topology do
+        resolved_output_dirs = resolve_triage_output_dirs(output_dirs: output_dirs, testcases_dir: testcases_dir)
+        FileUtils.mkdir_p(File.join(testcases_dir, ".processed"))
+        effective_threads = [threads.nil? ? env_triage_threads : threads.to_i, 1].max
+        use_pool = defined?(Concurrent) && effective_threads > 1
+        pool = use_pool ? Concurrent::FixedThreadPool.new(effective_threads) : nil
+        semaphore = Mutex.new
+        in_progress = Set.new
+        pending_sentinels = {}
+        pending_occurrences = {}
+        pending_inputs = {}
+        pending_hashes = {}
+        pending_retries = {}
+        recorded_hashes = load_all_recorded_occurrence_hashes(testcases_dir)
+        archived_hashes = load_all_archived_input_hashes(testcases_dir)
 
-      dispatch = lambda do |crash_dir, crash, executable|
-        work = lambda do
-          process_crash(
-            crash_dir,
-            crash,
-            executable,
-            semaphore,
-            in_progress,
-            pending_sentinels,
-            pending_occurrences,
-            pending_inputs,
-            recorded_hashes,
-            archived_hashes,
-            testcases_dir: testcases_dir,
-            occurrence_overrides: occurrence_overrides,
-            fuzz_versions_overrides: fuzz_versions_overrides,
-            pending_hashes: pending_hashes,
-            pending_retries: pending_retries,
-            recount: recount,
-            minimize_enabled: minimize_enabled
-          )
-        rescue StandardError => e
-          warn "Error processing #{crash}: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}"
+        dispatch = lambda do |crash_dir, crash, executable|
+          work = lambda do
+            process_crash(
+              crash_dir,
+              crash,
+              executable,
+              semaphore,
+              in_progress,
+              pending_sentinels,
+              pending_occurrences,
+              pending_inputs,
+              recorded_hashes,
+              archived_hashes,
+              testcases_dir: testcases_dir,
+              occurrence_overrides: occurrence_overrides,
+              fuzz_versions_overrides: fuzz_versions_overrides,
+              pending_hashes: pending_hashes,
+              pending_retries: pending_retries,
+              recount: recount,
+              minimize_enabled: minimize_enabled
+            )
+          rescue StandardError => e
+            warn "Error processing #{crash}: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}"
+          end
+
+          pool ? pool.post(&work) : work.call
         end
 
-        pool ? pool.post(&work) : work.call
-      end
+        begin
+          resolved_output_dirs.flat_map { |d| Dir.glob(File.join(d, "**/{crashes*,hangs*}")) }.each do |crash_dir|
+            cmdline_file = File.join(crash_dir, "../cmdline")
+            next unless File.exist?(cmdline_file)
 
-      begin
-        resolved_output_dirs.flat_map { |d| Dir.glob(File.join(d, "**/{crashes*,hangs*}")) }.each do |crash_dir|
-          cmdline_file = File.join(crash_dir, "../cmdline")
-          next unless File.exist?(cmdline_file)
-
-          executable = resolve_cmdline_executable(File.read(cmdline_file))
-          Dir.glob(File.join(crash_dir, "/id*")) do |crash|
-            dispatch.call(crash_dir, crash, executable)
+            executable = resolve_cmdline_executable(File.read(cmdline_file))
+            Dir.glob(File.join(crash_dir, "/id*")) do |crash|
+              dispatch.call(crash_dir, crash, executable)
+            end
+          end
+        ensure
+          if pool
+            pool.shutdown
+            pool.wait_for_termination
           end
         end
-      ensure
-        if pool
-          pool.shutdown
-          pool.wait_for_termination
-        end
-      end
 
-      finalize_triage_metadata(
-        testcases_dir,
-        coverage_bin: coverage_bin,
-        coverage_ids: coverage_ids,
-        output_dirs: resolved_output_dirs,
-        diff_coverage_bin: diff_coverage_bin,
-        diff_coverage_ids: diff_coverage_ids,
-        corpus_dir: corpus_dir,
-        recount: recount,
-        digest_workers: effective_threads
-      )
+        finalize_triage_metadata(
+          testcases_dir,
+          coverage_bin: coverage_bin,
+          coverage_ids: coverage_ids,
+          output_dirs: resolved_output_dirs,
+          diff_coverage_bin: diff_coverage_bin,
+          diff_coverage_ids: diff_coverage_ids,
+          corpus_dir: corpus_dir,
+          recount: recount,
+          digest_workers: effective_threads
+        )
+      end
     end
   end
 end
