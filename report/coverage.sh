@@ -386,7 +386,16 @@ if [ "$TOTAL_INPUTS" -eq 0 ]; then
   exit 1
 fi
 
-JOBS=$(nproc 2>/dev/null || echo 4)
+DETECTED_CPUS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+EXPLICIT_JOBS="${JOBS:-${FUZZ_BUILD_JOBS:-}}"
+JOBS="${EXPLICIT_JOBS:-$DETECTED_CPUS}"
+if [ -n "$EXPLICIT_JOBS" ]; then
+  BUILD_JOBS="$EXPLICIT_JOBS"
+elif [ "$DETECTED_CPUS" -gt 16 ]; then
+  BUILD_JOBS=16
+else
+  BUILD_JOBS="$DETECTED_CPUS"
+fi
 rm -rf "$COVERAGE_DIR"
 mkdir -p "$COVERAGE_DIR/pairs"
 
@@ -456,33 +465,177 @@ for pid in $PAIR_IDS; do
   fi
 
   if [ "$NEED_BUILD" -eq 1 ]; then
-    src_files=()
-    while IFS= read -r -d '' file; do
-      src_files+=("$file")
-    done < <(find "$P_PRISM_ROOT/src" -name '*.c' -print0)
-
-    gen_inc=()
-    [ -d "$P_PRISM_GEN" ] && gen_inc=("-I$P_PRISM_GEN")
-
-    reach_bin="$P_WORK/fuzz.reach"
-    keeplist="$P_WORK/keeplist"
-
-    echo "Building reachability binary for ${P_LABEL}..."
-    clang -O0 "-I$P_PRISM_ROOT/include" "${gen_inc[@]}" -Iharnesses/prism -Iharnesses/prism/include -DSLOW -flto -ffunction-sections -fdata-sections "${P_FLAGS[@]}" -Wl,--gc-sections \
-      "${src_files[@]}" harnesses/prism/coverage.c harnesses/prism/parse.c -o "$reach_bin"
-
-    llvm-nm --defined-only "$reach_bin" | grep " [Tt] " | grep -Ev '[Tt] (main|run_file|run_stdin|setup_signal_handlers|handle_crash_signal|handle_stop_signal|harness|harness_parse|check_node_location|fuzz_.*|pm_fuzz_.*|pm_node_type|pm_diagnostic_type|pm_diagnostic_id_name)$' | awk '{print $3}' | sed 's/^/fun:/' > "$keeplist"
-    rm -f "$reach_bin"
-
-    echo "Building coverage binary for ${P_LABEL} (${COVERAGE_BIN})..."
     rm -f "$COVERAGE_TMP_BIN"
-    clang -O1 "-I$P_PRISM_ROOT/include" "${gen_inc[@]}" -Iharnesses/prism -Iharnesses/prism/include -DSLOW -DPROFILE "${P_FLAGS[@]}" \
-      -fcoverage-prefix-map="${P_PRISM_ROOT}=." \
-      -fprofile-instr-generate -fcoverage-mapping \
-      -fprofile-list="$keeplist" \
-      "${src_files[@]}" harnesses/prism/coverage.c harnesses/prism/parse.c -o "$COVERAGE_TMP_BIN"
+    ruby -rfileutils -ropen3 -rrbconfig - "$REPO_ROOT" "$P_WORK" "$P_LABEL" "$P_PRISM_ROOT" "$P_PRISM_GEN" "$COVERAGE_TMP_BIN" "$BUILD_JOBS" "${P_FLAGS[@]}" << 'RUBY'
+      repo_root, p_work, label, raw_prism_root, raw_prism_gen, raw_cov_tmp_bin, raw_jobs, *p_flags = ARGV
+      repo_root = File.expand_path(repo_root)
+      p_work = File.expand_path(p_work)
+      prism_root = File.expand_path(raw_prism_root, repo_root)
+      prism_gen = raw_prism_gen.to_s.empty? ? nil : File.expand_path(raw_prism_gen, repo_root)
+      cov_tmp_bin = File.expand_path(raw_cov_tmp_bin, repo_root)
+      build_jobs = [raw_jobs.to_i, 1].max
 
-    rm -f "$keeplist"
+      src_files = Dir.glob(File.join(prism_root, "src", "**", "*.c")).sort + [
+        File.join(repo_root, "harnesses/prism/coverage.c"),
+        File.join(repo_root, "harnesses/prism/parse.c")
+      ]
+
+      inc_flags = ["-I#{File.join(prism_root, 'include')}"]
+      inc_flags << "-I#{prism_gen}" if prism_gen && Dir.exist?(prism_gen)
+      inc_flags.push("-I#{File.join(repo_root, 'harnesses/prism')}", "-I#{File.join(repo_root, 'harnesses/prism/include')}")
+
+      find_exe = lambda do |name|
+        ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).each do |dir|
+          next if dir.empty?
+
+          cand = File.join(dir, name)
+          return cand if File.file?(cand) && File.executable?(cand)
+        end
+        nil
+      end
+
+      ccache_bin = ENV["FUZZ_CCACHE"].to_s.strip == "0" ? nil : find_exe.call("ccache")
+      ccache_dir = nil
+      if ccache_bin
+        cands = []
+        env_cdir = ENV["CCACHE_DIR"].to_s.strip
+        cands << env_cdir unless env_cdir.empty?
+        cands << "/ccache"
+        cands << File.join(repo_root, ".cache", "ccache")
+        cands << File.join(ENV.fetch("TMPDIR", "/tmp"), "prism-fuzzer-ccache-#{Process.uid}")
+        ccache_dir = cands.find do |d|
+          begin
+            FileUtils.mkdir_p(d) unless Dir.exist?(d)
+            Dir.exist?(d) && File.writable?(d)
+          rescue SystemCallError
+            false
+          end
+        end
+        ccache_bin = nil unless ccache_dir
+      end
+
+      img_id = ENV["FUZZ_IMAGE_ID"].to_s.strip
+      ccache_base_env = if ccache_bin
+                          ns = ["cc=clang", "cov=1"]
+                          ns << "img=#{img_id[0, 19]}" unless img_id.empty?
+                          {
+                            "CCACHE_DIR" => ccache_dir,
+                            "CCACHE_NOHASHDIR" => "1",
+                            "CCACHE_SLOPPINESS" => "include_file_mtime,include_file_ctime,time_macros",
+                            "CCACHE_NAMESPACE" => ns.join("|")
+                          }
+                        else
+                          {}
+                        end
+      cc_prefix = ccache_bin ? [ccache_bin, "clang"] : ["clang"]
+
+      ld_flags = []
+      if find_exe.call("ld.lld")
+        _o, st = Open3.capture2e("clang", "-fuse-ld=lld", "-x", "c", "-", "-o", File::NULL, stdin_data: "int main(void){return 0;}\n")
+        ld_flags << "-fuse-ld=lld" if st.success?
+      end
+      gc_flags = RbConfig::CONFIG["host_os"].to_s.include?("darwin") ? ["-Wl,-dead_strip"] : ["-Wl,--gc-sections"]
+
+      compile_parallel = lambda do |obj_dir, extra_cflags, extra_env: {}, chdir: p_work|
+        FileUtils.rm_rf(obj_dir)
+        FileUtils.mkdir_p(obj_dir)
+        objs = Array.new(src_files.size)
+        q = Thread::Queue.new
+        src_files.each_with_index { |src, idx| q.push([src, idx]) }
+        err_mu = Mutex.new
+        first_err = nil
+        env = ccache_base_env.merge(extra_env)
+        n_threads = [src_files.size, build_jobs].min
+
+        Array.new(n_threads) do
+          Thread.new do
+            loop do
+              break if err_mu.synchronize { !first_err.nil? }
+
+              item = begin
+                q.pop(true)
+              rescue ThreadError
+                break
+              end
+              src, idx = item
+              obj = File.join(obj_dir, "#{idx}_#{File.basename(src, '.c')}.o")
+              cmd = [*cc_prefix, *inc_flags, *extra_cflags, "-c", src, "-o", obj]
+              out, st = Open3.capture2e(env, *cmd, chdir: chdir)
+              if st.success?
+                objs[idx] = obj
+              else
+                err_mu.synchronize { first_err ||= "Command failed (#{cmd.join(' ')}):\n#{out}" }
+                break
+              end
+            end
+          end
+        end.each(&:join)
+
+        abort(first_err) if first_err
+        objs
+      end
+
+      run_link = lambda do |*cmd|
+        out, st = Open3.capture2e(*cmd, chdir: p_work)
+        abort("Link failed (#{cmd.join(' ')}):\n#{out}") unless st.success?
+      end
+
+      reach_obj_dir = File.join(p_work, "obj_reach")
+      cov_obj_dir = File.join(p_work, "obj_cov")
+      reach_bin = File.join(p_work, "fuzz.reach")
+      keeplist = File.join(p_work, "keeplist")
+
+      begin
+        puts "Building reachability binary for #{label} (#{build_jobs} jobs#{ccache_bin ? ', ccache' : ''})..."
+        reach_objs = compile_parallel.call(
+          reach_obj_dir,
+          ["-O0", "-DSLOW", "-flto", "-ffunction-sections", "-fdata-sections", *p_flags]
+        )
+        run_link.call("clang", "-O0", "-flto", *ld_flags, *gc_flags, *reach_objs, "-o", reach_bin)
+
+        nm_out, nm_st = Open3.capture2("llvm-nm", "--defined-only", reach_bin)
+        abort("llvm-nm failed on #{reach_bin}") unless nm_st.success?
+
+        skip_re = /\A_?(?:main|run_file|run_stdin|setup_signal_handlers|handle_crash_signal|handle_stop_signal|harness|harness_parse|check_node_location|fuzz_.*|pm_fuzz_.*|pm_node_type|pm_diagnostic_type|pm_diagnostic_id_name)\z/
+        syms = []
+        nm_out.each_line do |line|
+          cols = line.strip.split(/\s+/)
+          next unless cols.size >= 3 && %w[T t].include?(cols[1])
+
+          sym = cols[2]
+          next if sym.match?(skip_re)
+
+          syms << "fun:#{sym}"
+        end
+        File.write(keeplist, syms.uniq.sort.map { |s| "#{s}\n" }.join)
+        fixed_t = Time.at(946_684_800)
+        File.utime(fixed_t, fixed_t, keeplist)
+      ensure
+        FileUtils.rm_rf(reach_obj_dir)
+        FileUtils.rm_f(reach_bin)
+      end
+
+      begin
+        puts "Building coverage binary for #{label} (#{cov_tmp_bin})..."
+        prof_instr_args = ccache_bin ? ["--ccache-skip", "-fprofile-instr-generate"] : ["-fprofile-instr-generate"]
+        prof_list_args = ccache_bin ? ["--ccache-skip", "-fprofile-list=keeplist"] : ["-fprofile-list=keeplist"]
+        cov_objs = compile_parallel.call(
+          cov_obj_dir,
+          [
+            "-O1", "-DSLOW", "-DPROFILE", *p_flags,
+            "-fcoverage-prefix-map=#{prism_root}=.",
+            *prof_instr_args, "-fcoverage-mapping",
+            *prof_list_args
+          ],
+          extra_env: ccache_bin ? { "CCACHE_EXTRAFILES" => "keeplist" } : {}
+        )
+        run_link.call("clang", "-O1", "-fprofile-instr-generate", "-fcoverage-mapping", *ld_flags, *cov_objs, "-o", cov_tmp_bin)
+      ensure
+        FileUtils.rm_rf(cov_obj_dir)
+        FileUtils.rm_f(keeplist)
+      end
+RUBY
+
     if ! smoke_check_coverage_bin "$COVERAGE_TMP_BIN"; then
       echo "Error: newly built coverage binary for ${P_LABEL} failed smoke check." >&2
       exit 1

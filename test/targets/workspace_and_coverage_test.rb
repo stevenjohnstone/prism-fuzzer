@@ -1070,6 +1070,7 @@ class WorkspaceAndCoverageTest < Minitest::Test
           FileUtils.ln_s(gen_a, File.join(real_ws, "build", "targets", "gen", "prism_b"))
         end
 
+        ccache_test_dir = File.join(workdir, "cov_ccache")
         cov_env = CLEAN_WS_ENV.merge(
           "TOPOLOGY" => real_topo,
           "CAMPAIGN" => real_topo,
@@ -1078,9 +1079,15 @@ class WorkspaceAndCoverageTest < Minitest::Test
           "WORKSPACE_AFL_DIR" => File.join(real_ws, "afl"),
           "WORKSPACE_REPORT_DIR" => File.join(real_ws, "report"),
           "WORKSPACE_COVERAGE_DIR" => File.join(real_ws, "report", "coverage"),
-          "WORKSPACE_CORPUS_DIR" => File.join(real_ws, "corpus")
+          "WORKSPACE_CORPUS_DIR" => File.join(real_ws, "corpus"),
+          "CCACHE_DIR" => ccache_test_dir
         )
         assert_cmd(repo_path("report", "coverage.sh"), env: cov_env, chdir: root_dir)
+        if find_executable("ccache")
+          ccache_stats, = assert_cmd("ccache", "-s", env: { "CCACHE_DIR" => ccache_test_dir })
+          assert_match(/Hits:\s+[1-9]\d*/, ccache_stats, "expected ccache hits across shared prism_a/prism_b coverage pairs:\n#{ccache_stats}")
+          refute_match(/Uncacheable calls:\s+[1-9]/, ccache_stats, "expected zero uncacheable calls during coverage.sh:\n#{ccache_stats}")
+        end
 
         cov_dir = File.join(real_ws, "report", "coverage")
         cov = JSON.parse(File.read(File.join(cov_dir, "coverage.json")))

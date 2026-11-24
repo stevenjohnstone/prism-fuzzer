@@ -256,7 +256,7 @@ define FUZZ_RUN_COVERAGE
 		mkdir -p $(FUZZ_DIR); \
 		eval "$$($(TARGETS_ENV) FUZZ_DIR="$(if $(_FUZZ_DIR_OVR),$(FUZZ_DIR),)" FUZZ_CONTAINER_NAME="$(FUZZ_CONTAINER_NAME)" ruby -r./runtime/campaign -e 'puts PrismFuzzer::Campaign.capture_live_seeds_shell_env' 2>/dev/null || true)"; \
 	fi; \
-	docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -e FUZZ_FLAGS="$(FUZZ_FLAGS)" -e FUZZ_LIVE_SEEDS_TAR="$$GUEST_LIVE_SEEDS_TAR" -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ./report/coverage.sh \
+	docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) $(_JOBS_DOCKER_ENV) -e FUZZ_CCACHE="$(FUZZ_CCACHE)" -e FUZZ_FLAGS="$(FUZZ_FLAGS)" -e FUZZ_IMAGE_ID="$$(docker image inspect -f '{{.Id}}' $(FUZZ_DOCKER_IMAGE) 2>/dev/null || true)" -e FUZZ_LIVE_SEEDS_TAR="$$GUEST_LIVE_SEEDS_TAR" -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ./report/coverage.sh \
 )
 endef
 

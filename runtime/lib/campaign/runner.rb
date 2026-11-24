@@ -321,6 +321,7 @@ module PrismFuzzer
         "WORKSPACE_REPORT_DIR" => guest_path_for(ws[:report_dir], ctx, ws_key: "report_dir"),
         "WORKSPACE_COVERAGE_DIR" => guest_path_for(ws[:coverage_dir], ctx, ws_key: "coverage_dir")
       }
+      env["JOBS"] = ctx[:cli][:jobs].to_s if ctx.dig(:cli, :jobs)
       env["FUZZ_FLAGS"] = flags.to_s if flags && !flags.to_s.empty?
       tar_host = dry_run ? nil : capture_live_seeds_tar(ctx)
       env["FUZZ_LIVE_SEEDS_TAR"] = in_docker? ? tar_host : guest_path_for(tar_host, ctx, ws_key: "dir") if tar_host
