@@ -86,13 +86,25 @@ module PrismFuzzer
       partial = +""
       while (chunk = io.readpartial(4096))
         buf << chunk if buf
-        chunk.each_char do |ch|
-          if ch == "\n" || ch == "\r"
-            on_line&.call(partial, ch == "\n")
-            partial.clear
-          else
-            partial << ch
+        pos = 0
+        len = chunk.bytesize
+        while pos < len
+          nl_idx = chunk.byteindex("\n", pos)
+          cr_idx = chunk.byteindex("\r", pos)
+          sep_idx = if nl_idx && cr_idx
+                      nl_idx < cr_idx ? nl_idx : cr_idx
+                    else
+                      nl_idx || cr_idx
+                    end
+          unless sep_idx
+            partial << (pos == 0 ? chunk : chunk.byteslice(pos, len - pos))
+            break
           end
+
+          partial << chunk.byteslice(pos, sep_idx - pos) if sep_idx > pos
+          on_line&.call(partial, sep_idx == nl_idx)
+          partial.clear
+          pos = sep_idx + 1
         end
       end
     rescue EOFError
@@ -179,8 +191,8 @@ module PrismFuzzer
         if @log_path
           FileUtils.mkdir_p(File.dirname(@log_path))
           @log_file = File.open(@log_path, "w", encoding: "UTF-8")
-          @log_file.sync = true
           @log_file.puts("# [#{Time.now.utc.iso8601}] STAGE: #{@title}")
+          @log_file.flush
         end
 
         @lock.synchronize do
@@ -197,7 +209,10 @@ module PrismFuzzer
       def log_command(cmd)
         str = cmd.is_a?(Array) ? cmd.map { |t| Shellwords.escape(t.to_s) }.join(" ") : cmd.to_s
         @lock.synchronize do
-          @log_file&.puts("# [#{Time.now.utc.iso8601}] $ #{str}")
+          if @log_file
+            @log_file.puts("# [#{Time.now.utc.iso8601}] $ #{str}")
+            @log_file.flush
+          end
         end
       end
 
@@ -212,7 +227,10 @@ module PrismFuzzer
         end
 
         @lock.synchronize do
-          @log_file&.puts("# [#{Time.now.utc.iso8601}] #{clean}")
+          if @log_file
+            @log_file.puts("# [#{Time.now.utc.iso8601}] #{clean}")
+            @log_file.flush
+          end
           push_preview_locked(clean, record_error: true)
           if @mode == "tty"
             render_locked!(force: true)
@@ -392,6 +410,7 @@ module PrismFuzzer
         return if !force && (now - @last_render) < REDRAW_INTERVAL
 
         @last_render = now
+        @log_file&.flush
         cols = Progress.terminal_width(@io)
         max_w = [cols - 1, 20].max
 

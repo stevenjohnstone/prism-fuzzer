@@ -10,6 +10,41 @@ module FuzzTriage
     include MetadataBuilder
     extend self
 
+    DUPLICATE_LOG_CAP_PER_BUCKET = 3
+
+    def ensure_bucket_hashes_loaded!(bucket_dir, loaded_buckets, bucket_load_mutex, semaphore, recorded_hashes, archived_hashes)
+      return if semaphore.synchronize { loaded_buckets.include?(bucket_dir) }
+
+      bucket_load_mutex.synchronize do
+        return if semaphore.synchronize { loaded_buckets.include?(bucket_dir) }
+
+        rec_h, arch_h = load_bucket_recorded_and_archived_hashes(bucket_dir)
+        semaphore.synchronize do
+          recorded_hashes.merge(rec_h)
+          archived_hashes.merge(arch_h)
+          loaded_buckets.add(bucket_dir)
+        end
+      end
+    end
+
+    def queue_sentinel!(sentinel_path, value, sentinel_states: nil, buffered_sentinels: nil)
+      if buffered_sentinels
+        buffered_sentinels[sentinel_path] = value
+      else
+        write_processed_sentinel(sentinel_path, value)
+      end
+      return unless sentinel_states
+
+      sha = File.basename(sentinel_path)
+      sentinel_states[sha] = if value == "#skip"
+                               { status: :skip }
+                             elsif value.to_s.empty?
+                               { status: :empty }
+                             else
+                               { status: :bucket, bucket_id: value }
+                             end
+    end
+
     def process_crash(
       crash_dir,
       crash,
@@ -27,10 +62,19 @@ module FuzzTriage
       pending_hashes: {},
       pending_retries: {},
       recount: nil,
-      minimize_enabled: nil
+      minimize_enabled: nil,
+      sentinel_states: nil,
+      published_buckets: nil,
+      loaded_buckets: nil,
+      bucket_load_mutex: nil,
+      buffered_occurrences: nil,
+      buffered_inputs: nil,
+      buffered_sentinels: nil,
+      dup_log_counts: nil
     )
       recount_enabled = recount.nil? ? env_recount? : recount
       should_minimize = minimize_enabled.nil? ? env_minimize? : minimize_enabled
+      verbose_dups = ENV["TRIAGE_VERBOSE"] == "1"
       raw_crash = File.binread(crash)
       crash_hash = Digest::SHA2.hexdigest(raw_crash)
       worker_executable = executable
@@ -38,10 +82,29 @@ module FuzzTriage
       handed_off_to_leader = false
       released_in_progress = false
 
+      # Fast lock-only check when sentinel_states is preloaded; lazily loads bucket hashes only if recount is active.
+      if recount_enabled && sentinel_states && loaded_buckets && bucket_load_mutex
+        pre_state = semaphore.synchronize { sentinel_states[crash_hash] || { status: :absent } }
+        if pre_state[:status] == :bucket && pre_state[:bucket_id]
+          ensure_bucket_hashes_loaded!(
+            File.join(testcases_dir, pre_state[:bucket_id]),
+            loaded_buckets,
+            bucket_load_mutex,
+            semaphore,
+            recorded_hashes,
+            archived_hashes
+          )
+        end
+      end
+
       recount_only = false
       cached_bucket_id = nil
       claimed = semaphore.synchronize do
-        state = read_sentinel_state(sentinel, testcases_dir)
+        state = if sentinel_states
+                  sentinel_states[crash_hash] || { status: :absent }
+                else
+                  read_sentinel_state(sentinel, testcases_dir)
+                end
         if state[:status] != :absent
           if recount_enabled && state[:status] != :skip &&
              (!recorded_hashes.include?(crash_hash) || !archived_hashes.include?(crash_hash)) &&
@@ -69,13 +132,24 @@ module FuzzTriage
 
         if recount_only && cached_bucket_id
           target_directory = File.join(testcases_dir, cached_bucket_id)
+          if loaded_buckets && bucket_load_mutex
+            ensure_bucket_hashes_loaded!(target_directory, loaded_buckets, bucket_load_mutex, semaphore, recorded_hashes, archived_hashes)
+          end
           semaphore.synchronize do
             unless recorded_hashes.include?(crash_hash)
-              append_occurrences(target_directory, [occ_record])
+              if buffered_occurrences
+                buffered_occurrences[target_directory] << occ_record
+              else
+                append_occurrences(target_directory, [occ_record])
+              end
               recorded_hashes.add(crash_hash)
             end
             unless archived_hashes.include?(crash_hash)
-              append_pending_inputs(target_directory, [[crash_hash, effective_raw_bytes]])
+              if buffered_inputs
+                buffered_inputs[target_directory] << [crash_hash, effective_raw_bytes]
+              else
+                append_pending_inputs(target_directory, [[crash_hash, effective_raw_bytes]])
+              end
               archived_hashes.add(crash_hash)
             end
           end
@@ -94,7 +168,9 @@ module FuzzTriage
         info = classify_crash_execution(crash_dir, crash_input, executable, triage_dir: testcases_dir)
         if info[:transient_timeout]
           puts "Skipping #{crash} (transient timeout)"
-          semaphore.synchronize { write_processed_sentinel(sentinel, "#skip") }
+          semaphore.synchronize do
+            queue_sentinel!(sentinel, "#skip", sentinel_states: sentinel_states, buffered_sentinels: buffered_sentinels)
+          end
           return
         end
 
@@ -107,7 +183,9 @@ module FuzzTriage
 
         if unreproducible && File.basename(crash).include?("sig:09")
           puts "Skipping #{crash} (external SIGKILL / OOM)"
-          semaphore.synchronize { write_processed_sentinel(sentinel, "#skip") }
+          semaphore.synchronize do
+            queue_sentinel!(sentinel, "#skip", sentinel_states: sentinel_states, buffered_sentinels: buffered_sentinels)
+          end
           return
         end
 
@@ -116,21 +194,51 @@ module FuzzTriage
         bucket_id = "#{bucket_dir_name}/#{signature}"
         target_directory = File.join(testcases_dir, bucket_dir_name, signature)
 
+        if loaded_buckets && bucket_load_mutex && published_buckets &&
+           semaphore.synchronize { published_buckets.include?(target_directory) }
+          ensure_bucket_hashes_loaded!(target_directory, loaded_buckets, bucket_load_mutex, semaphore, recorded_hashes, archived_hashes)
+        end
+
+        log_msg = nil
         skip_duplicate = semaphore.synchronize do
-          if File.directory?(target_directory) && !Dir.empty?(target_directory)
-            puts "#{crash} is a duplicate of #{target_directory}"
+          already_published = if published_buckets
+                                published_buckets.include?(target_directory)
+                              else
+                                File.directory?(target_directory) && !Dir.empty?(target_directory)
+                              end
+
+          if already_published
+            if dup_log_counts && !verbose_dups
+              c = (dup_log_counts[target_directory] += 1)
+              log_msg = "#{crash} is a duplicate of #{target_directory}" if c <= DUPLICATE_LOG_CAP_PER_BUCKET
+            else
+              log_msg = "#{crash} is a duplicate of #{target_directory}"
+            end
             unless recorded_hashes.include?(crash_hash)
-              append_occurrences(target_directory, [occ_record])
+              if buffered_occurrences
+                buffered_occurrences[target_directory] << occ_record
+              else
+                append_occurrences(target_directory, [occ_record])
+              end
               recorded_hashes.add(crash_hash)
             end
             unless archived_hashes.include?(crash_hash)
-              append_pending_inputs(target_directory, [[crash_hash, effective_raw_bytes]])
+              if buffered_inputs
+                buffered_inputs[target_directory] << [crash_hash, effective_raw_bytes]
+              else
+                append_pending_inputs(target_directory, [[crash_hash, effective_raw_bytes]])
+              end
               archived_hashes.add(crash_hash)
             end
-            write_processed_sentinel(sentinel, bucket_id)
+            queue_sentinel!(sentinel, bucket_id, sentinel_states: sentinel_states, buffered_sentinels: buffered_sentinels)
             true
           elsif pending_sentinels.key?(target_directory)
-            puts "#{crash} is a duplicate of in-progress #{target_directory}"
+            if dup_log_counts && !verbose_dups
+              c = (dup_log_counts[target_directory] += 1)
+              log_msg = "#{crash} is a duplicate of in-progress #{target_directory}" if c <= DUPLICATE_LOG_CAP_PER_BUCKET
+            else
+              log_msg = "#{crash} is a duplicate of in-progress #{target_directory}"
+            end
             coalesced_hashes = (pending_hashes[target_directory] ||= Set.new)
             unless coalesced_hashes.include?(crash_hash)
               coalesced_hashes.add(crash_hash)
@@ -149,7 +257,7 @@ module FuzzTriage
             end
             true
           else
-            puts "#{crash} is new"
+            log_msg = "#{crash} is new"
             pending_sentinels[target_directory] = [sentinel]
             pending_occurrences[target_directory] = []
             pending_inputs[target_directory] = []
@@ -158,6 +266,7 @@ module FuzzTriage
             false
           end
         end
+        puts log_msg if log_msg
         return if skip_duplicate
 
         parent_dir = File.dirname(target_directory)
@@ -170,10 +279,14 @@ module FuzzTriage
 
           if !should_minimize || unreproducible
             FileUtils.cp(crash_input, minimized_input)
+            if !unreproducible && reason != "hang" && !info[:symbolized]
+              sym_out, sym_crashed, = run_testcase(executable, minimized_input, symbolize: true)
+              testcase_output = sym_out if sym_crashed
+            end
           else
             minimize(crash_input, reason, minimized_input, executable, sig_lines)
             if reason != "hang"
-              min_output, min_crashed, = run_testcase(executable, minimized_input)
+              min_output, min_crashed, = run_testcase(executable, minimized_input, symbolize: true)
               if min_crashed
                 minimized_matches_sig = testcase_output_signature(min_output, sig_lines) == signature
                 testcase_output = min_output
@@ -225,22 +338,43 @@ module FuzzTriage
               File.rename(staging_dir, target_directory)
               published = true
             end
+            published_buckets&.add(target_directory)
+            loaded_buckets&.add(target_directory)
             extra_occurrences = pending_occurrences.delete(target_directory) || []
             extra_inputs = pending_inputs.delete(target_directory) || []
             if published
-              append_occurrences(target_directory, extra_occurrences)
-              append_pending_inputs(target_directory, extra_inputs)
+              if buffered_occurrences && !extra_occurrences.empty?
+                buffered_occurrences[target_directory].concat(extra_occurrences)
+              else
+                append_occurrences(target_directory, extra_occurrences)
+              end
+              if buffered_inputs && !extra_inputs.empty?
+                buffered_inputs[target_directory].concat(extra_inputs)
+              else
+                append_pending_inputs(target_directory, extra_inputs)
+              end
             else
-              append_occurrences(target_directory, [occ_record] + extra_occurrences) unless recorded_hashes.include?(crash_hash)
+              new_occs = recorded_hashes.include?(crash_hash) ? extra_occurrences : [occ_record] + extra_occurrences
               new_items = archived_hashes.include?(crash_hash) ? extra_inputs : [[crash_hash, effective_raw_bytes]] + extra_inputs
-              append_pending_inputs(target_directory, new_items)
+              if buffered_occurrences
+                buffered_occurrences[target_directory].concat(new_occs) unless new_occs.empty?
+              else
+                append_occurrences(target_directory, new_occs)
+              end
+              if buffered_inputs
+                buffered_inputs[target_directory].concat(new_items) unless new_items.empty?
+              else
+                append_pending_inputs(target_directory, new_items)
+              end
             end
             recorded_hashes.add(crash_hash)
             extra_occurrences.each { |r| recorded_hashes.add(r["sha256"]) if r["sha256"] }
             archived_hashes.add(crash_hash)
             extra_inputs.each { |sha, _| archived_hashes.add(sha) if sha }
             sentinels = pending_sentinels.delete(target_directory) || [sentinel]
-            sentinels.uniq.each { |s| write_processed_sentinel(s, bucket_id) }
+            sentinels.uniq.each do |s|
+              queue_sentinel!(s, bucket_id, sentinel_states: sentinel_states, buffered_sentinels: buffered_sentinels)
+            end
             coalesced_hashes = pending_hashes.delete(target_directory)
             coalesced_hashes&.each { |h| in_progress.delete(h) }
             pending_retries.delete(target_directory)
@@ -278,7 +412,15 @@ module FuzzTriage
               pending_hashes: pending_hashes,
               pending_retries: pending_retries,
               recount: recount,
-              minimize_enabled: minimize_enabled
+              minimize_enabled: minimize_enabled,
+              sentinel_states: sentinel_states,
+              published_buckets: published_buckets,
+              loaded_buckets: loaded_buckets,
+              bucket_load_mutex: bucket_load_mutex,
+              buffered_occurrences: buffered_occurrences,
+              buffered_inputs: buffered_inputs,
+              buffered_sentinels: buffered_sentinels,
+              dup_log_counts: dup_log_counts
             )
           rescue StandardError => retry_err
             warn "Error recovering coalesced crash #{item[:crash]}: #{retry_err.class}: #{retry_err.message}"
@@ -312,14 +454,23 @@ module FuzzTriage
         use_pool = defined?(Concurrent) && effective_threads > 1
         pool = use_pool ? Concurrent::FixedThreadPool.new(effective_threads) : nil
         semaphore = Mutex.new
+        bucket_load_mutex = Mutex.new
         in_progress = Set.new
         pending_sentinels = {}
         pending_occurrences = {}
         pending_inputs = {}
         pending_hashes = {}
         pending_retries = {}
-        recorded_hashes = load_all_recorded_occurrence_hashes(testcases_dir)
-        archived_hashes = load_all_archived_input_hashes(testcases_dir)
+        existing_bucket_dirs = discover_bucket_dirs(testcases_dir)
+        published_buckets = existing_bucket_dirs.to_set
+        loaded_buckets = Set.new
+        sentinel_states, sentinel_raw_map = preload_sentinel_states(testcases_dir, existing_bucket_dirs: existing_bucket_dirs)
+        recorded_hashes = Set.new
+        archived_hashes = Set.new
+        buffered_occurrences = Hash.new { |h, k| h[k] = [] }
+        buffered_inputs = Hash.new { |h, k| h[k] = [] }
+        buffered_sentinels = {}
+        dup_log_counts = Hash.new(0)
 
         dispatch = lambda do |crash_dir, crash, executable|
           work = lambda do
@@ -340,7 +491,15 @@ module FuzzTriage
               pending_hashes: pending_hashes,
               pending_retries: pending_retries,
               recount: recount,
-              minimize_enabled: minimize_enabled
+              minimize_enabled: minimize_enabled,
+              sentinel_states: sentinel_states,
+              published_buckets: published_buckets,
+              loaded_buckets: loaded_buckets,
+              bucket_load_mutex: bucket_load_mutex,
+              buffered_occurrences: buffered_occurrences,
+              buffered_inputs: buffered_inputs,
+              buffered_sentinels: buffered_sentinels,
+              dup_log_counts: dup_log_counts
             )
           rescue StandardError => e
             warn "Error processing #{crash}: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}"
@@ -363,6 +522,19 @@ module FuzzTriage
           if pool
             pool.shutdown
             pool.wait_for_termination
+          end
+          buffered_occurrences.each do |bdir, recs|
+            append_occurrences(bdir, recs) if !recs.empty? && File.directory?(bdir)
+          end
+          buffered_inputs.each do |bdir, items|
+            append_pending_inputs(bdir, items) if !items.empty? && File.directory?(bdir)
+          end
+          flush_processed_sentinels(testcases_dir, buffered_sentinels, sentinel_raw_map) unless buffered_sentinels.empty?
+
+          suppressed = dup_log_counts.values.sum { |c| c > DUPLICATE_LOG_CAP_PER_BUCKET ? (c - DUPLICATE_LOG_CAP_PER_BUCKET) : 0 }
+          if suppressed > 0
+            capped_buckets = dup_log_counts.count { |_, c| c > DUPLICATE_LOG_CAP_PER_BUCKET }
+            puts "Coalesced #{suppressed} additional duplicate crash log line(s) across #{capped_buckets} bucket(s)"
           end
         end
 

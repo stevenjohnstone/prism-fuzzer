@@ -288,6 +288,112 @@ module FuzzTriage
       end.sort
     end
 
+    SENTINEL_INDEX_FILE = ".index.tsv"
+
+    def parse_sentinel_raw_value(raw, existing_bucket_ids)
+      val = raw.to_s.strip
+      return { status: :skip } if val == "#skip"
+      return { status: :empty } if val.empty?
+
+      if val.match?(%r{\A[^/\n]+/[^/\n]+\z}) && existing_bucket_ids.include?(val)
+        return { status: :bucket, bucket_id: val }
+      end
+
+      { status: :empty }
+    end
+
+    def invalidate_sentinel_index(triage_dir)
+      idx = File.join(triage_dir, ".processed", SENTINEL_INDEX_FILE)
+      FileUtils.rm_f(idx) if File.exist?(idx)
+    end
+
+    def preload_sentinel_states(triage_dir, existing_bucket_dirs: nil)
+      processed_dir = File.join(triage_dir, ".processed")
+      return [{}, {}] unless File.directory?(processed_dir)
+
+      bdirs = existing_bucket_dirs || discover_bucket_dirs(triage_dir)
+      bucket_ids = bdirs.each_with_object(Set.new) do |d, s|
+        s.add("#{File.basename(File.dirname(d))}/#{File.basename(d)}")
+      end
+
+      children = Dir.children(processed_dir)
+      children.delete(SENTINEL_INDEX_FILE)
+      raw_map = {}
+      idx_path = File.join(processed_dir, SENTINEL_INDEX_FILE)
+
+      loaded_from_index = false
+      if children.size > 64 && File.file?(idx_path)
+        begin
+          if File.mtime(idx_path) >= File.mtime(processed_dir)
+            File.foreach(idx_path, encoding: "BINARY") do |line|
+              sha, val = line.chomp.split("\t", 2)
+              raw_map[sha] = val.to_s if sha && !sha.empty?
+            end
+            loaded_from_index = (raw_map.size == children.size)
+            raw_map.clear unless loaded_from_index
+          end
+        rescue SystemCallError, IOError
+          raw_map.clear
+          loaded_from_index = false
+        end
+      end
+
+      unless loaded_from_index
+        children.each do |name|
+          next if name.start_with?(".")
+
+          p = File.join(processed_dir, name)
+          begin
+            raw_map[name] = File.read(p, encoding: "BINARY").strip
+          rescue SystemCallError, IOError
+            next
+          end
+        end
+      end
+
+      states = {}
+      raw_map.each do |sha, val|
+        states[sha] = parse_sentinel_raw_value(val, bucket_ids)
+      end
+      [states, raw_map]
+    end
+
+    def flush_processed_sentinels(triage_dir, pending_writes, raw_map = nil)
+      processed_dir = File.join(triage_dir, ".processed")
+      FileUtils.mkdir_p(processed_dir)
+
+      pending_writes.each do |sentinel_path, content|
+        body = content.to_s.empty? ? "" : "#{content.to_s.chomp}\n"
+        File.write(sentinel_path, body)
+        raw_map[File.basename(sentinel_path)] = content.to_s.chomp if raw_map
+      end
+
+      return unless raw_map && raw_map.size > 64
+
+      idx_path = File.join(processed_dir, SENTINEL_INDEX_FILE)
+      tmp_path = File.join(processed_dir, ".index.tsv.tmp.#{Process.pid}.#{Thread.current.object_id}")
+      begin
+        File.open(tmp_path, "wb") do |f|
+          raw_map.each { |sha, val| f.write("#{sha}\t#{val}\n") }
+        end
+        File.rename(tmp_path, idx_path)
+      rescue SystemCallError, IOError
+        FileUtils.rm_f(tmp_path) if File.exist?(tmp_path)
+      end
+    end
+
+    def load_bucket_recorded_and_archived_hashes(bucket_dir)
+      rec_hashes = Set.new
+      arch_hashes = Set.new
+      read_occurrences(bucket_dir).each { |rec| rec_hashes.add(rec["sha256"]) if rec["sha256"] }
+      tar_path = File.join(bucket_dir, INPUTS_ARCHIVE_FILE)
+      if File.file?(tar_path)
+        read_tar_gz_entries(tar_path, include_bytes: false)[:entries].each_key { |sha| arch_hashes.add(sha) }
+      end
+      read_pending_inputs(bucket_dir).each_key { |sha| arch_hashes.add(sha) }
+      [rec_hashes, arch_hashes]
+    end
+
     def load_all_recorded_occurrence_hashes(triage_dir)
       hashes = Set.new
       discover_bucket_dirs(triage_dir).each do |bucket_dir|
@@ -314,6 +420,7 @@ module FuzzTriage
 
     def write_processed_sentinel(sentinel_path, content = "")
       File.write(sentinel_path, content.empty? ? "" : "#{content.chomp}\n")
+      invalidate_sentinel_index(File.dirname(File.dirname(sentinel_path)))
     end
 
     def append_pending_inputs(bucket_dir, items)

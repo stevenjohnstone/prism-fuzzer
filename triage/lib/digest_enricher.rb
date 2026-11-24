@@ -64,6 +64,167 @@ module FuzzTriage
       nil
     end
 
+    BATCH_DIFF_WORKER_SCRIPT = <<~'RUBY'.freeze
+      require "base64"
+      require "json"
+      require "timeout"
+
+      include_prism = ARGV[0] == "prism"
+      if include_prism
+        begin
+          require "prism"
+        rescue LoadError
+          include_prism = false
+        end
+      end
+
+      items = JSON.parse($stdin.read)
+      items.each do |key, b64|
+        code = Base64.strict_decode64(b64)
+        rec = { "key" => key }
+        begin
+          Timeout.timeout(2.5) do
+            if include_prism
+              pr = Prism.parse(code)
+              errs = pr.errors
+              rec["prism_errors_count"] = errs.size
+              if !errs.empty?
+                e0 = errs.first
+                rec["prism_first_error"] = { "type" => e0.type.to_s, "message" => e0.message.to_s }
+              end
+            end
+
+            begin
+              iseq = RubyVM::InstructionSequence.compile(code, "(compare)", "(compare)", 1)
+              rec["ok"] = true
+              rec["disasm"] = iseq.disasm
+            rescue SyntaxError => e
+              rec["ok"] = false
+              rec["error_class"] = e.class.name
+              rec["stderr"] = e.message.to_s
+            rescue ScriptError, StandardError
+              rec["fallback"] = true
+            end
+          end
+        rescue Timeout::Error, SystemStackError, NoMemoryError
+          rec["fallback"] = true
+        end
+        $stdout.puts(JSON.generate(rec))
+        $stdout.flush
+      end
+    RUBY
+
+    def parse_batch_worker_jsonl(stdout_text)
+      out = {}
+      stdout_text.to_s.each_line do |line|
+        line = line.strip
+        next if line.empty?
+
+        rec = JSON.parse(line)
+        out[rec["key"]] = rec if rec.is_a?(Hash) && rec["key"]
+      rescue JSON::ParserError
+        next
+      end
+      out
+    end
+
+    def run_diff_digest_batch(ruby_bin, target_pairs)
+      return {} if target_pairs.empty?
+
+      payload_items = target_pairs.filter_map do |dir, _meta|
+        min_path = File.join(dir, "input.min")
+        next nil unless File.file?(min_path)
+
+        raw = File.binread(min_path)
+        body = raw.bytesize >= 4 ? (raw.byteslice(4..) || "".b) : raw
+        [dir, Base64.strict_encode64(body)]
+      end
+      return {} if payload_items.empty?
+
+      stdin_json = JSON.generate(payload_items)
+      batch_timeout = [payload_items.size * 2.5 + 10.0, 15.0].max
+
+      y_thr = Thread.new do
+        FuzzExplain.run_with_timeout([ruby_bin, "--parser=parse.y", "-e", BATCH_DIFF_WORKER_SCRIPT, "parse.y"], timeout_sec: batch_timeout, stdin_data: stdin_json)
+      end
+      p_thr = Thread.new do
+        FuzzExplain.run_with_timeout([ruby_bin, "--parser=prism", "-e", BATCH_DIFF_WORKER_SCRIPT, "prism"], timeout_sec: batch_timeout, stdin_data: stdin_json)
+      end
+      y_res = y_thr.value
+      p_res = p_thr.value
+
+      y_map = parse_batch_worker_jsonl(y_res[:stdout])
+      p_map = parse_batch_worker_jsonl(p_res[:stdout])
+      results = {}
+
+      target_pairs.each do |dir, _meta|
+        yr = y_map[dir]
+        pr = p_map[dir]
+        if yr.nil? || pr.nil? || yr["fallback"] || pr["fallback"]
+          fallback_res = run_diff_digest_probe(ruby_bin, File.join(dir, "input.min"))
+          results[dir] = fallback_res if fallback_res
+          next
+        end
+
+        y_ok = yr["ok"] == true
+        p_ok = pr["ok"] == true
+        syntax_status = if y_ok && p_ok
+                          "both_ok"
+                        elsif !y_ok && !p_ok
+                          "both_error"
+                        elsif y_ok && !p_ok
+                          "parse_y_ok_prism_err"
+                        else
+                          "prism_ok_parse_y_err"
+                        end
+
+        iseq_status = if y_ok && p_ok
+                        dy = FuzzExplain.normalize_disasm(yr["disasm"], ignore_locations: true)
+                        dp = FuzzExplain.normalize_disasm(pr["disasm"], ignore_locations: true)
+                        dy == dp ? "match" : "disasm_diff"
+                      elsif !y_ok && !p_ok
+                        yr["error_class"] == pr["error_class"] ? "both_compile_error" : "compile_error_class_mismatch"
+                      elsif y_ok && !p_ok
+                        "parse_y_ok_prism_compile_err"
+                      else
+                        "prism_ok_parse_y_compile_err"
+                      end
+
+        entry_out = {
+          "syntax_status" => syntax_status,
+          "iseq_status" => iseq_status
+        }
+
+        if pr.key?("prism_errors_count")
+          entry_out["prism_errors_count"] = pr["prism_errors_count"]
+          if (fe = pr["prism_first_error"])
+            msg = "#{fe['type']}: #{fe['message']}".strip
+            entry_out["prism_error"] = msg.length > 120 ? "#{msg[0, 117]}..." : msg
+          end
+        end
+
+        unless y_ok
+          err = yr["stderr"].to_s.lines.first.to_s.strip
+          entry_out["parse_y_error"] = err.length > 120 ? "#{err[0, 117]}..." : err unless err.empty?
+        end
+
+        if iseq_status == "disasm_diff"
+          diff_txt = FuzzExplain.simple_line_diff(
+            FuzzExplain.normalize_disasm(yr["disasm"], ignore_locations: true),
+            FuzzExplain.normalize_disasm(pr["disasm"], ignore_locations: true)
+          )
+          preview = summarize_first_disasm_diff(diff_txt)
+          entry_out["disasm_diff_preview"] = preview if preview
+        end
+
+        results[dir] = entry_out
+      end
+      results
+    rescue SystemCallError, IOError, JSON::ParserError, EncodingError => e
+      warn "DigestEnricher: batched diff probe failed: #{e.class}: #{e.message}" unless ENV["FUZZ_QUIET"] == "1"
+      {}
+    end
+
     def run_diff_digest_probe(ruby_bin, min_path)
       raw = File.binread(min_path)
       body = raw.bytesize >= 4 ? (raw.byteslice(4..) || "".b) : raw
@@ -167,15 +328,31 @@ module FuzzTriage
               (force || !meta.dig("digest", "iseq_status"))
           end
 
-          run_digest_work_pool(diff_targets.to_a, workers: workers) do |dir, meta|
-            res = run_diff_digest_probe(diff_ruby, File.join(dir, "input.min"))
-            next unless res.is_a?(Hash) && !res.empty?
+          if diff_targets.size >= 2
+            batch_results = run_diff_digest_batch(diff_ruby, diff_targets.to_a)
+            batch_results.each do |dir, res|
+              next unless res.is_a?(Hash) && !res.empty?
 
-            mutex.synchronize do
+              meta = metas_by_dir[dir]
+              next unless meta
+
               merged = (meta["digest"].is_a?(Hash) ? meta["digest"].dup : {}).merge(res)
               if meta["digest"] != merged
                 meta["digest"] = merged
                 dirty_dirs.add(dir)
+              end
+            end
+          else
+            run_digest_work_pool(diff_targets.to_a, workers: workers) do |dir, meta|
+              res = run_diff_digest_probe(diff_ruby, File.join(dir, "input.min"))
+              next unless res.is_a?(Hash) && !res.empty?
+
+              mutex.synchronize do
+                merged = (meta["digest"].is_a?(Hash) ? meta["digest"].dup : {}).merge(res)
+                if meta["digest"] != merged
+                  meta["digest"] = merged
+                  dirty_dirs.add(dir)
+                end
               end
             end
           end

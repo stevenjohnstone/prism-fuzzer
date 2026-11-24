@@ -93,7 +93,7 @@ module FuzzTriage
       env_max_allocated_mb * 16
     end
 
-    def env_sanitizer_env(executable: nil, triage_dir: nil, detect_leaks: nil)
+    def env_sanitizer_env(executable: nil, triage_dir: nil, detect_leaks: nil, symbolize: true)
       max_mb = env_max_allocated_mb
       disable_leaks = if !detect_leaks.nil?
                         !detect_leaks
@@ -102,16 +102,19 @@ module FuzzTriage
                       else
                         false
                       end
-      return SANITIZER_ENV if max_mb == MAX_ALLOCATED_MB && !disable_leaks
+      return SANITIZER_ENV if max_mb == MAX_ALLOCATED_MB && !disable_leaks && symbolize
 
       hard_mb = max_mb * 16
       diff_opts = disable_leaks ? ":detect_leaks=0:detect_stack_use_after_return=0" : ""
-      {
-        "ASAN_OPTIONS" => "abort_on_error=1:handle_abort=1#{diff_opts}:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}",
-        "UBSAN_OPTIONS" => "abort_on_error=1:print_stacktrace=1",
-        "MSAN_OPTIONS" => "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}",
-        "LSAN_OPTIONS" => "handle_abort=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}"
+      sym_opt = symbolize ? "" : ":symbolize=0"
+      env = {
+        "ASAN_OPTIONS" => "abort_on_error=1:handle_abort=1#{diff_opts}:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}",
+        "UBSAN_OPTIONS" => "abort_on_error=1:print_stacktrace=1#{sym_opt}",
+        "MSAN_OPTIONS" => "abort_on_error=1:handle_abort=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}",
+        "LSAN_OPTIONS" => "handle_abort=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}#{sym_opt}"
       }
+      env["FUZZ_DIFF_BACKTRACE"] = "0" unless symbolize || ENV.key?("FUZZ_DIFF_BACKTRACE")
+      env
     end
 
     def env_halfempty_threads

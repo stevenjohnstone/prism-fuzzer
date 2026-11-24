@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "../lib/autorun"
+require_relative "../../triage/lib/signature"
 
 require "open3"
 require "shellwords"
@@ -333,6 +334,19 @@ class TriageSignatureTest < Minitest::Test
         env: { "SIGLINES" => "3" }
       )
       assert_equal expected_big_sig, pipefail_out.strip
+
+      # Verify pure-Ruby XXH64 + Signature.compute parity on >32B multi-stripe inputs, CRLF, and arbitrary binary bytes.
+      [
+        ["", 10],
+        ["abc", 10],
+        ["0123456789abcdef0123456789abcdef", 10],
+        ["0123456789abcdef0123456789abcdef_tail_bytes_12345\n", 10],
+        ["line1\r\nline2\r\n\x80\xff\xfe binary runtime error: value -99 bad\n", 5],
+        [File.binread(big_trace_path), 3],
+        [File.binread(big_inv_trace_path), 15]
+      ].each do |sample, sl|
+        assert_equal run_signature_sh_only(sample, siglines: sl), FuzzTriage::Signature.compute(sample, sl)
+      end
     end
   end
 
@@ -465,12 +479,19 @@ class TriageSignatureTest < Minitest::Test
     find_executable("clang") || find_executable("cc") || flunk("no C compiler (clang or cc) found in PATH")
   end
 
-  def run_signature(input, siglines: 10)
+  def run_signature_sh_only(input, siglines: 10)
     out, err, st = run_cmd(signature_sh, env: { "SIGLINES" => siglines.to_s }, input: input)
     assert st.success?, "signature.sh failed (status=#{st.exitstatus || st.termsig}): stderr=#{err}"
     sig = out.strip
     assert_match(/\A[0-9a-f]{16}\z/, sig, "expected 16-char hex signature, got #{out.inspect}")
     sig
+  end
+
+  def run_signature(input, siglines: 10)
+    sh_sig = run_signature_sh_only(input, siglines: siglines)
+    rb_sig = FuzzTriage::Signature.compute(input, siglines)
+    assert_equal sh_sig, rb_sig, "FuzzTriage::Signature.compute diverged from signature.sh (siglines=#{siglines}) on:\n#{input.dump}"
+    sh_sig
   end
 
   def run_signature_from_pipe(path, siglines:)

@@ -335,6 +335,7 @@ module FuzzRetriage
 
       processed_dir = File.join(triage_dir, ".processed")
       FileUtils.mkdir_p(processed_dir)
+      FuzzTriage.invalidate_sentinel_index(triage_dir) if FuzzTriage.respond_to?(:invalidate_sentinel_index)
       cured_hashes.each do |sha|
         File.write(File.join(processed_dir, sha), "#skip\n")
       end
@@ -381,6 +382,7 @@ module FuzzRetriage
             File.write(File.join(processed_dir, orig_sha), sentinel_body)
           end
         end
+        FuzzTriage.invalidate_sentinel_index(triage_dir) if FuzzTriage.respond_to?(:invalidate_sentinel_index)
       end
 
       clusters_path = File.join(triage_dir, "clusters.json")

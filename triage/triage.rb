@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "lib/config"
+require_relative "lib/signature"
 require_relative "lib/provenance_resolver"
 require_relative "lib/crash_parser"
 require_relative "lib/minimizer"

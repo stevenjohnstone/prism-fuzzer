@@ -204,7 +204,7 @@ $(TEST_STAMPS_DIR)/oss_fuzz.stamp: test/oss_fuzz_test.rb $(TEST_RUNNER_DEPS) $(T
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) OSS_FUZZ_SKIP_BUILD=1 OSS_FUZZ_OUT_DIR="$(CURDIR)/$(TEST_OSS_FUZZ_DIR)/out" OSS_FUZZ_CMPLOG_OUT_DIR="$(CURDIR)/$(TEST_OSS_FUZZ_DIR)/cmplog" ruby test/run.rb test/oss_fuzz_test.rb)
 
 # Modular triage suites
-$(TEST_STAMPS_DIR)/triage_signature.stamp: test/triage/signature_test.rb $(TEST_RUNNER_DEPS) triage/signature.sh triage/halfempty.sh triage/halfempty_compare.sh
+$(TEST_STAMPS_DIR)/triage_signature.stamp: test/triage/signature_test.rb $(TEST_RUNNER_DEPS) triage/signature.sh triage/lib/signature.rb triage/halfempty.sh triage/halfempty_compare.sh
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/signature_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_repro.stamp: test/triage/repro_test.rb $(TEST_RUNNER_DEPS) triage/triage.rb triage/verify_bucket.sh triage/signature.sh bin/topology.rb lib/prism_fuzzer.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/campaign_dsl.rb runtime/progress.rb campaigns/default.rb harnesses/prism/include/fuzz_invariants.h harnesses/prism/include/fuzz_options.h harnesses/prism/parse.c harnesses/prism/gen_node_locations.rb harnesses/prism/gen_serialize_walk.rb runtime/corpus.rb $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP)

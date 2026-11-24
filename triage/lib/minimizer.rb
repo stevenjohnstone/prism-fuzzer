@@ -32,9 +32,13 @@ module FuzzTriage
       hdr = orig_hdr.dup
       return if hdr == DEFAULT_HEADER_BYTES
 
-      orig_out, orig_crashed, = run_testcase(executable, minimized_input)
+      orig_out, orig_crashed, = run_testcase(executable, minimized_input, symbolize: false)
+      if orig_crashed && !invariant_line_present?(orig_out)
+        orig_out, orig_crashed, = run_testcase(executable, minimized_input, symbolize: true)
+      end
       return unless orig_crashed
 
+      fast_inv = invariant_line_present?(orig_out)
       orig_sig = testcase_output_signature(orig_out, sig_lines)
       body = raw.bytesize > 4 ? raw.byteslice(4..) : "".b
       tmp_file = "#{minimized_input}.hdrtmp"
@@ -45,7 +49,7 @@ module FuzzTriage
         return false unless tested.add?(cand.dup)
 
         File.binwrite(tmp_file, cand.pack("C4") + body)
-        out, crashed, = run_testcase(executable, tmp_file)
+        out, crashed, = run_testcase(executable, tmp_file, symbolize: !fast_inv)
         if crashed && testcase_output_signature(out, sig_lines) == orig_sig
           hdr = cand.dup
           true

@@ -210,8 +210,17 @@ module FuzzTriage
     end
 
     def testcase_output_signature(testcase_output, siglines = 10)
-      o, = Open3.capture2({ "SIGLINES" => siglines.to_s }, triage_script_path("signature.sh"), stdin_data: testcase_output.to_s.b)
-      o.strip
+      FuzzTriage::Signature.compute(testcase_output, siglines)
+    end
+
+    def invariant_line_present?(raw_output)
+      b = raw_output.to_s.b
+      b.include?("INVARIANT[".b) && b.match?(/^INVARIANT\[/n)
+    end
+
+    def differential_invariant_present?(raw_output)
+      b = raw_output.to_s.b
+      b.include?("INVARIANT[".b) && b.match?(/^INVARIANT\[(?:diff_parse_y|diff_prism|oracle_[A-Za-z0-9_]+)\]:/n)
     end
 
     def with_testcase_timeout(seconds)
@@ -222,32 +231,108 @@ module FuzzTriage
       Thread.current[:testcase_timeout_sec] = prev
     end
 
-    def run_testcase(executable, input_file)
+    def spawn_testcase_with_timeout(env, executable, input_file, timeout_sec)
+      r, w = IO.pipe
+      r.binmode
+      out = +"".b
+      timed_out = false
+      pid = Process.spawn(env, executable, input_file, in: File::NULL, out: w, err: w, pgroup: true)
+      w.close
+
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout_sec
+      loop do
+        remain = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if remain <= 0
+          timed_out = true
+          begin
+            Process.kill("TERM", -pid)
+          rescue Errno::ESRCH, Errno::EPERM
+            begin
+              Process.kill("TERM", pid)
+            rescue Errno::ESRCH
+              nil
+            end
+          end
+          kill_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 0.2
+          while Process.clock_gettime(Process::CLOCK_MONOTONIC) < kill_deadline
+            break if Process.waitpid(pid, Process::WNOHANG)
+
+            sleep 0.01
+          end
+          begin
+            Process.kill("KILL", -pid)
+          rescue Errno::ESRCH, Errno::EPERM
+            begin
+              Process.kill("KILL", pid)
+            rescue Errno::ESRCH
+              nil
+            end
+          end
+          break
+        end
+
+        ready = IO.select([r], nil, nil, [remain, 0.25].min)
+        next unless ready
+
+        begin
+          out << r.read_nonblock(65_536)
+        rescue IO::WaitReadable
+          nil
+        rescue EOFError
+          break
+        end
+      end
+
+      unless timed_out
+        begin
+          while (chunk = r.read_nonblock(65_536))
+            out << chunk
+          end
+        rescue IO::WaitReadable, EOFError
+          nil
+        end
+      end
+
+      r.close unless r.closed?
+      _, status = begin
+        Process.waitpid2(pid)
+      rescue Errno::ECHILD
+        [pid, nil]
+      end
+      [out, status, timed_out]
+    ensure
+      w.close if w && !w.closed?
+      r.close if r && !r.closed?
+    end
+
+    def run_testcase(executable, input_file, symbolize: true)
       Thread.current[:last_testcase_signal] = nil
       timeout_sec = Thread.current[:testcase_timeout_sec] || env_crash_timeout_seconds
-      o, s = Open3.capture2e(env_sanitizer_env(executable: executable), "timeout", "-k", "1", timeout_sec.to_s, executable, input_file)
-      timed_out = s.exitstatus == 124 || s.exitstatus == 137
-      crashed = !s.success? && !timed_out
-      sig = if crashed
+      env = env_sanitizer_env(executable: executable, symbolize: symbolize)
+      o, s, timed_out = spawn_testcase_with_timeout(env, executable, input_file, timeout_sec)
+      timed_out ||= (s && (s.exitstatus == 124 || s.exitstatus == 137))
+      crashed = !timed_out && (s.nil? || !s.success?)
+      sig = if crashed && s
               s.termsig || (s.exitstatus && s.exitstatus > 128 ? s.exitstatus - 128 : nil)
             end
       Thread.current[:last_testcase_signal] = sig && (1..64).include?(sig) ? Signal.signame(sig) : nil
       [o.b, crashed, timed_out]
     end
 
-    def run_crash_testcase(executable, input_file)
+    def run_crash_testcase(executable, input_file, symbolize: true)
       crash_timeout = env_crash_timeout_seconds
-      out, crashed, timed_out = with_testcase_timeout(crash_timeout) { run_testcase(executable, input_file) }
+      out, crashed, timed_out = with_testcase_timeout(crash_timeout) { run_testcase(executable, input_file, symbolize: symbolize) }
       return [out, crashed, timed_out] unless !crashed && timed_out
 
       # Retry once on transient wall-clock timeouts (e.g. parallel fuzz.diff DWARF backtrace contention)
       retry_timeout = [crash_timeout * 2, 30].max
-      with_testcase_timeout(retry_timeout) { run_testcase(executable, input_file) }
+      with_testcase_timeout(retry_timeout) { run_testcase(executable, input_file, symbolize: symbolize) }
     end
 
     def classify_crash_execution(crash_dir, crash_input, executable, triage_dir: TESTCASES_DIR)
       reason = File.basename(crash_dir) == "hangs" ? "hang" : "unknown"
       timed_out = false
+      symbolized = false
       Thread.current[:last_testcase_signal] = nil
       fspec = resolve_topology_fuzzer(executable: executable, triage_dir: triage_dir)
       repro_name = fspec && fspec["repro"] ? File.basename(fspec["repro"]) : nil
@@ -261,15 +346,45 @@ module FuzzTriage
                      executable
                    end
 
+      is_diff_or_oracle = executable.end_with?("diff", "prism_diff", "arm32", "arm32.repro", "ppc", "ppc.repro") ||
+                          (fspec && %w[prism_diff_ruby prism_diff_prism prism_cross_oracle].include?(fspec["shape"]))
+
       if reason == "hang"
         executable = replay_exe
-        testcase_output, crashed, timed_out = with_testcase_timeout(env_hang_timeout_seconds) { run_testcase(executable, crash_input) }
+        testcase_output, crashed, timed_out = with_testcase_timeout(env_hang_timeout_seconds) { run_testcase(executable, crash_input, symbolize: false) }
         return { transient_timeout: true } if !crashed && !timed_out
+      elsif is_diff_or_oracle
+        # Differential and cross-oracle queues overwhelmingly hit differential invariants
+        # (`INVARIANT[diff_parse_y]`, `INVARIANT[oracle_*]`), which `fast_exe` (`fuzz`) can
+        # never reproduce. Probe `replay_exe` unsymbolized first; only consult `fast_exe`
+        # when the crash is NOT a differential invariant so shared 64-bit Prism crashes
+        # still promote to `fuzz` and deduplicate with `main`.
+        executable = replay_exe
+        testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input, symbolize: false)
+        if (!crashed || !differential_invariant_present?(testcase_output)) &&
+           File.executable?(fast_exe) && File.basename(fast_exe) != File.basename(executable)
+          saved_out = testcase_output
+          saved_crashed = crashed
+          saved_timed_out = timed_out
+          saved_sig = Thread.current[:last_testcase_signal]
+          fast_out, fast_crashed, fast_timed_out = run_crash_testcase(fast_exe, crash_input, symbolize: false)
+          if fast_crashed
+            executable = fast_exe
+            testcase_output = fast_out
+            crashed = true
+            timed_out = fast_timed_out
+          else
+            testcase_output = saved_out
+            crashed = saved_crashed
+            timed_out = saved_timed_out
+            Thread.current[:last_testcase_signal] = saved_sig
+          end
+        end
       elsif (fspec ? (fspec["shape"] == "prism_parse" && Array(fspec["sanitizers"]).empty?) : executable.end_with?("ijon", "native"))
         # Sanitizer-less binaries (e.g. fuzz.ijon, fuzz.native) defer classification to fast ASAN/UBSAN
         # (when available) so bugs deduplicate with main, then LSAN, then the raw binary.
         if File.executable?(fast_exe) && File.basename(fast_exe) != File.basename(executable)
-          testcase_output, crashed, timed_out = run_crash_testcase(fast_exe, crash_input)
+          testcase_output, crashed, timed_out = run_crash_testcase(fast_exe, crash_input, symbolize: false)
           executable = fast_exe if crashed
         else
           crashed = false
@@ -277,19 +392,18 @@ module FuzzTriage
         unless crashed
           Thread.current[:last_testcase_signal] = nil
           if File.executable?(lsan_exe) && File.basename(lsan_exe) != File.basename(executable)
-            testcase_output, crashed, timed_out = run_crash_testcase(lsan_exe, crash_input)
+            testcase_output, crashed, timed_out = run_crash_testcase(lsan_exe, crash_input, symbolize: false)
             executable = lsan_exe if crashed
           end
           unless crashed
             Thread.current[:last_testcase_signal] = nil
-            testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input)
+            testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input, symbolize: false)
           end
         end
-      elsif executable.end_with?("msan", "slow", "diff", "arm32", "arm32.repro", "ppc", "ppc.repro") ||
-            (fspec && %w[prism_diff_ruby prism_cross_oracle].include?(fspec["shape"])) ||
+      elsif executable.end_with?("msan", "slow") ||
             (fspec && fspec["shape"] == "prism_parse" && (fspec["mode"].to_s == "slow" || Array(fspec["sanitizers"]).include?("msan")))
         if File.executable?(fast_exe) && File.basename(fast_exe) != File.basename(executable)
-          testcase_output, crashed, timed_out = run_crash_testcase(fast_exe, crash_input)
+          testcase_output, crashed, timed_out = run_crash_testcase(fast_exe, crash_input, symbolize: false)
           executable = fast_exe if crashed
         else
           crashed = false
@@ -297,10 +411,22 @@ module FuzzTriage
         unless crashed
           executable = replay_exe
           Thread.current[:last_testcase_signal] = nil
-          testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input)
+          testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input, symbolize: false)
         end
       else
-        testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input)
+        testcase_output, crashed, timed_out = run_crash_testcase(executable, crash_input, symbolize: false)
+      end
+
+      # Non-INVARIANT crashes rely on symbolized frame names for signature hashing;
+      # INVARIANT[...] signatures use only the INVARIANT line, deferring symbolization
+      # until the single winning leader input per new bucket is published.
+      if crashed && !invariant_line_present?(testcase_output)
+        sym_out, sym_crashed, sym_timed_out = run_crash_testcase(executable, crash_input, symbolize: true)
+        if sym_crashed
+          testcase_output = sym_out
+          timed_out = sym_timed_out
+          symbolized = true
+        end
       end
 
       sig_name = crashed ? Thread.current[:last_testcase_signal] : nil
@@ -318,7 +444,8 @@ module FuzzTriage
         crashed: crashed,
         timed_out: timed_out,
         unreproducible: unreproducible,
-        sig_lines: sig_lines
+        sig_lines: sig_lines,
+        symbolized: symbolized
       }
     end
   end
