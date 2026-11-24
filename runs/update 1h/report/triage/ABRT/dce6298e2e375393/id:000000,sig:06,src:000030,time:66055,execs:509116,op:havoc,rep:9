@@ -1,0 +1,10 @@
+ÿä# encoding: US-AS1I US-Ad
+
+def
+__END__
+def a.b
+end:b
+S1II
+str = "heI
+str =ÿ!hello \•FC"
+str =~ /hu{fb}\ello /

@@ -1,0 +1,6 @@
+end
+
+case v; in A; lhs.+ rhs in B then tail; + rhs in B in C; tail; end
+
+case v; in A; work unless lhs + rhs in B in C; tail; en foo(return bar baz do end.last)
+end

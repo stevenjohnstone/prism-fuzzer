@@ -1,0 +1,4 @@
+@def (xstream_fn(x)
+  x + bar(.
+__END__
+trgiling
