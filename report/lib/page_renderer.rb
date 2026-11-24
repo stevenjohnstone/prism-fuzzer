@@ -349,12 +349,13 @@ module PrismFuzzerReport
       gen_wpairs = CoverageView.resolve_worker_pairs(name, cov_info[:cov_worker_pairs], cov_info[:cov_pairs_by_id])
       gen_cov_btn = CoverageView.render_worker_cov_banner_buttons(gen_wpairs)
 
+      gen_lin = (fleet_lineage[:by_generator] && fleet_lineage[:by_generator][name]) || fleet_lineage
       sync_kpi = if ps
                    <<~SYNC_KPI
                      <div class="kpi-card">
                        <div class="kpi-label">Imported by #{CGI.escapeHTML(intake_name)}</div>
                        <div class="kpi-value">+#{Helpers.format_int(ps[:imported_by_main])} <span class="muted">(#{format("%.1f%%", ps[:yield_pct])})</span></div>
-                       <div class="kpi-sub">#{Helpers.format_int(fleet_lineage[:total_grammar_queue_items])} fleet queue items &bull; #{Helpers.format_int(fleet_lineage[:total_grammar_crashes])} crashes (#{fleet_lineage[:unique_grammar_crash_seeds]} seeds)</div>
+                       <div class="kpi-sub">#{Helpers.format_int(gen_lin[:total_grammar_queue_items])} fleet queue items &bull; #{Helpers.format_int(gen_lin[:total_grammar_crashes])} crashes (#{gen_lin[:unique_grammar_crash_seeds]} seeds)</div>
                      </div>
                    SYNC_KPI
                  else
@@ -399,7 +400,7 @@ module PrismFuzzerReport
             #{gen_charts}
           </div>
 
-          #{Lineage.render_grammar_lineage_section(fleet_lineage, fleet[:color_by_name], topo_ctx: topo_ctx)}
+          #{Lineage.render_grammar_lineage_section(fleet_lineage, fleet[:color_by_name], generator_name: name, topo_ctx: topo_ctx)}
         </section>
       HTML
     end

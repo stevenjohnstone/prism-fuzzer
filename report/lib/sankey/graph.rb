@@ -129,7 +129,14 @@ module FuzzSankey
     display_info = lambda do |col_sym, raw_id|
       case col_sym
       when :origin
-        lbl = raw_id == "grammar" ? "grammar (lrama)" : (raw_id == "corpus" ? "initial corpus" : raw_id.to_s)
+        gram_ws = eff_topo ? grammar_lookup_for_topo(eff_topo)[:grammar_workers] : Set.new(["grammar"])
+        lbl = if gram_ws.include?(raw_id.to_s)
+                "#{raw_id} (lrama)"
+              elsif raw_id == "corpus"
+                "initial corpus"
+              else
+                raw_id.to_s
+              end
         { label: lbl, sub: "seed origin", color: color_for(raw_id, layer_kind: :origin, topo: eff_topo) }
       when :worker
         { label: raw_id.to_s, sub: "AFL++ worker", color: color_for(raw_id, layer_kind: :worker, topo: eff_topo) }

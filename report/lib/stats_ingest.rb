@@ -35,7 +35,11 @@ module PrismFuzzerReport
       {}
     end
 
-    def normalize_sync_source(src, topo_ctx: nil)
+    def normalize_sync_source(src, consumer_worker: nil, topo_ctx: nil)
+      if (gram_w = Helpers.resolve_grammar_sync_worker(consumer_worker, src, topo_ctx: topo_ctx))
+        return gram_w
+      end
+
       aliases = (topo_ctx && topo_ctx[:aliases]) || { "seeds" => "grammar" }
       return aliases[src] if aliases.key?(src)
       return "grammar" if src =~ /\A(?:grammar|seeds)(?:_\d+)?\z/
@@ -152,10 +156,11 @@ module PrismFuzzerReport
     # the source fuzzer for synced entries. Because AFL++ assigns sequential 0-based
     # IDs as items enter the queue, corpus_count at any plot_data sample t corresponds
     # to queue IDs 0...(corpus_count - 1).
-    def parse_queue_origins(queue_dir, topo_ctx: nil)
+    def parse_queue_origins(queue_dir, fuzzer_name: nil, topo_ctx: nil)
       empty_res = { prefix_sync: [0], prefix_local: [0], prefix_seed: [0], by_source: {}, max_src_by_source: {} }
       return empty_res unless Dir.exist?(queue_dir)
 
+      eff_worker = fuzzer_name || File.basename(File.dirname(queue_dir))
       max_id = -1
       item_kind = {}
       item_source = {}
@@ -168,7 +173,7 @@ module PrismFuzzerReport
 
         max_id = id if id > max_id
         if fname =~ /\Aid:\d+,sync:([^,]+)/
-          src_name = normalize_sync_source(Regexp.last_match(1), topo_ctx: topo_ctx)
+          src_name = normalize_sync_source(Regexp.last_match(1), consumer_worker: eff_worker, topo_ctx: topo_ctx)
           item_kind[id] = :sync
           item_source[id] = src_name
           if fname =~ /\Aid:\d+,sync:[^,]+,src:(?:id:)?(\d+)(?:[,+]|$)/
@@ -219,6 +224,7 @@ module PrismFuzzerReport
       synced_dir = File.join(fuzzer_dir, ".synced")
       return {} unless Dir.exist?(synced_dir)
 
+      owner_worker = File.basename(fuzzer_dir)
       cursors = {}
       Dir.children(synced_dir).each do |raw_fname|
         fname = PrismFuzzer::Common.utf8_safe(raw_fname)
@@ -235,7 +241,7 @@ module PrismFuzzerReport
               end
         val = raw.bytesize >= 4 ? raw.unpack1("V") : 0
         cursors[fname] = val
-        norm = normalize_sync_source(fname, topo_ctx: topo_ctx)
+        norm = normalize_sync_source(fname, consumer_worker: owner_worker, topo_ctx: topo_ctx)
         cursors[norm] = [cursors[norm].to_i, val].max
       end
       cursors
@@ -554,7 +560,7 @@ module PrismFuzzerReport
                    else
                      parse_plot_data(File.join(dir, "plot_data"))
                    end
-        origins = parse_queue_origins(File.join(dir, "queue"), topo_ctx: topo_ctx)
+        origins = parse_queue_origins(File.join(dir, "queue"), fuzzer_name: name, topo_ctx: topo_ctx)
         synced_cursors = parse_synced_cursors(dir, topo_ctx: topo_ctx)
 
         run_time = stats["run_time"]&.to_i || raw_plot.last&.dig(:relative_time) || 0

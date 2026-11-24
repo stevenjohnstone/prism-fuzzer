@@ -1370,4 +1370,106 @@ class WorkspaceAndCoverageTest < Minitest::Test
       end
     end
   end
+
+  def test_multi_grammar_funnel_report_attributes_imports_and_lineage_per_generator
+    require_relative "../../report/report"
+
+    with_tmpdir("report-multi-grammar-") do |workdir|
+      ws_dir = File.join(workdir, "funnel_ws")
+      afl_small_dir = File.join(ws_dir, "afl-small")
+      afl_8k_dir = File.join(ws_dir, "afl-8k")
+      seeds_256 = File.join(workdir, "seeds_256/seeds")
+      seeds_8k = File.join(workdir, "seeds_8k/seeds")
+      camp = File.join(workdir, "funnel.rb")
+
+      FileUtils.mkdir_p([seeds_256, seeds_8k])
+      File.binwrite(File.join(seeds_256, "aaa11111111111111111"), "\x00\x00\x03\x01small_1 = 1\n".b)
+      File.binwrite(File.join(seeds_256, "bbb22222222222222222"), "\x00\x00\x03\x01small_2 = 2\n".b)
+      File.binwrite(File.join(seeds_8k, "ccc33333333333333333"), "\x00\x00\x03\x01big_1 = 999999\n".b)
+
+      File.write(camp, <<~RB)
+        PrismFuzzer.campaign "multi-grammar-funnel-test" do
+          workspace #{ws_dir.dump}
+          prism :prism_a, repo: "https://example.invalid/prism.git", dir: #{workdir.dump}, patches: "none", templates: "never"
+          grammar_generator :grammar_small, source: :prism_a, fuzzer: "fuzz", sync_group: "afl-small", seeds_dir: #{seeds_256.dump}
+          grammar_generator :grammar_8k,    source: :prism_a, fuzzer: "fuzz", sync_group: "afl-8k",    seeds_dir: #{seeds_8k.dump}
+          fuzzer "fuzz", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
+          sync_group "afl-8k",    dir: "afl-8k",    primary: true
+          sync_group "afl-small", dir: "afl-small"
+
+          worker :"grammar-256", kind: :generator, generator: :grammar_small, color: "#34d399"
+          worker :"grammar-8k",  kind: :generator, generator: :grammar_8k,    color: "#10b981"
+
+          worker :"small-scout", fuzzer: "fuzz", sync_group: "afl-small", afl_role: :main, schedule: "explore" do
+            foreign_sync :grammar_small
+          end
+          worker :"8k-main", fuzzer: "fuzz", sync_group: "afl-8k", afl_role: :main, schedule: "explore" do
+            foreign_sync :grammar_8k
+            peer_import group: "afl-small", worker: :"small-scout", alias: "small_scout_feed"
+          end
+          worker :"8k-slow", fuzzer: "fuzz", sync_group: "afl-8k", afl_role: :secondary, schedule: "exploit"
+        end
+      RB
+
+      ir, = PrismFuzzer::Topology.load_ir(camp, fuzz_root: root_dir)
+      topo = PrismFuzzer::Topology.compile_plan(ir, fuzz_root: root_dir)
+
+      FileUtils.mkdir_p([
+        File.join(afl_small_dir, "grammar-256"),
+        File.join(afl_small_dir, "small-scout/queue"),
+        File.join(afl_8k_dir, "grammar-8k"),
+        File.join(afl_8k_dir, "8k-main/queue"),
+        File.join(afl_8k_dir, "8k-slow/queue"),
+        File.join(afl_8k_dir, "8k-slow/crashes")
+      ])
+
+      File.write(File.join(afl_small_dir, "grammar-256/fuzzer_stats"), "fuzzer_role : generator\nfiles_created : 100\npending_files : 10\nrun_time : 30\n")
+      File.write(File.join(afl_8k_dir, "grammar-8k/fuzzer_stats"), "fuzzer_role : generator\nfiles_created : 80\npending_files : 5\nrun_time : 30\n")
+      File.write(File.join(afl_small_dir, "small-scout/fuzzer_stats"), "start_time : 1700000000\nrun_time : 30\nexecs_done : 5000\ncorpus_count : 3\ncommand_line : afl-fuzz -M small-scout -- fuzz\n")
+      File.write(File.join(afl_8k_dir, "8k-main/fuzzer_stats"), "start_time : 1700000000\nrun_time : 30\nexecs_done : 4000\ncorpus_count : 3\ncommand_line : afl-fuzz -M 8k-main -- fuzz\n")
+      File.write(File.join(afl_8k_dir, "8k-slow/fuzzer_stats"), "start_time : 1700000000\nrun_time : 30\nexecs_done : 3000\ncorpus_count : 2\nsaved_crashes : 1\ncommand_line : afl-fuzz -S 8k-slow -- fuzz\n")
+
+      # Both small-scout and 8k-main use AFL++'s basename-derived `sync:seeds_0` tag!
+      File.binwrite(File.join(afl_small_dir, "small-scout/queue/id:000000,orig:seed"), "\x00\x00\x03\x01x\n".b)
+      File.binwrite(File.join(afl_small_dir, "small-scout/queue/id:000001,sync:seeds_0,src:aaa11111111111111111,+cov"), "\x00\x00\x03\x01small_1 = 1\n".b)
+      File.binwrite(File.join(afl_small_dir, "small-scout/queue/id:000002,sync:seeds_0,src:bbb22222222222222222,+cov"), "\x00\x00\x03\x01small_2 = 2\n".b)
+
+      File.binwrite(File.join(afl_8k_dir, "8k-main/queue/id:000000,orig:seed"), "\x00\x00\x03\x01y\n".b)
+      File.binwrite(File.join(afl_8k_dir, "8k-main/queue/id:000001,sync:seeds_0,src:ccc33333333333333333,+cov"), "\x00\x00\x03\x01big_1 = 999999\n".b)
+      File.binwrite(File.join(afl_8k_dir, "8k-main/queue/id:000002,sync:small_scout_feed,src:000001,+cov"), "\x00\x00\x03\x01small_1 = 1\n".b)
+
+      File.binwrite(File.join(afl_8k_dir, "8k-slow/queue/id:000000,sync:8k-main,src:000002"), "\x00\x00\x03\x01small_1 = 1\n".b)
+      File.binwrite(File.join(afl_8k_dir, "8k-slow/queue/id:000001,sync:8k-main,src:000001"), "\x00\x00\x03\x01big_1 = 999999\n".b)
+      File.binwrite(File.join(afl_8k_dir, "8k-slow/crashes/id:000000,sig:06,src:000000,op:havoc"), "\x00\x00\x03\x01small_1 = boom\n".b)
+
+      out_html = File.join(ws_dir, "report/index.html")
+      PrismFuzzerReport.generate(afl_dir: afl_8k_dir, out_path: out_html, triage_dir: File.join(ws_dir, "report/triage"), topo: topo)
+      html = File.read(out_html)
+
+      topo_ctx = PrismFuzzerReport::Helpers.topology_context(topo)
+      fleet = PrismFuzzerReport::StatsIngest.ingest_fuzzers(afl_8k_dir, topo_ctx: topo_ctx)
+      assert_equal 2, fleet[:peer_sync_by_name]["grammar-256"][:imported_by_main]
+      assert_equal "small-scout", fleet[:peer_sync_by_name]["grammar-256"][:consumer_name]
+      assert_equal 1, fleet[:peer_sync_by_name]["grammar-8k"][:imported_by_main]
+      assert_equal "8k-main", fleet[:peer_sync_by_name]["grammar-8k"][:consumer_name]
+
+      tab_256 = html[%r{<section id="tab-grammar-256" class="tab-panel">.*?</section>}m]
+      tab_8k = html[%r{<section id="tab-grammar-8k" class="tab-panel">.*?</section>}m]
+      refute_nil tab_256
+      refute_nil tab_8k
+
+      # grammar-256 tab shows +2 imported into small-scout, 4 fleet queue items (2 in small-scout + 1 in 8k-main + 1 in 8k-slow), and 1 crash!
+      assert_includes tab_256, "Imported by small-scout"
+      assert_includes tab_256, "+2 <span"
+      assert_includes tab_256, "4 fleet queue items &bull; 1 crashes (1 seeds)"
+      assert_includes tab_256, "aaa11111111111111111"
+      refute_includes tab_256, "ccc33333333333333333"
+
+      # grammar-8k tab shows +1 imported into 8k-main, 2 fleet queue items (1 in 8k-main + 1 in 8k-slow), and 0 crashes!
+      assert_includes tab_8k, "Imported by 8k-main"
+      assert_includes tab_8k, "+1 <span"
+      assert_includes tab_8k, "2 fleet queue items &bull; 0 crashes (0 seeds)"
+      refute_includes tab_8k, "aaa11111111111111111"
+    end
+  end
 end

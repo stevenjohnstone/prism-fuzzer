@@ -7,9 +7,103 @@ require_relative "../../../runtime/common"
 module FuzzSankey
   module_function
 
+  def grammar_lookup_for_topo(topo)
+    gens_by_id = {}
+    if topo.is_a?(Hash) && topo["generators"].is_a?(Hash)
+      topo["generators"].each do |gid, gspec|
+        next unless gspec.is_a?(Hash) && gspec["kind"].to_s == "grammar"
+
+        gens_by_id[gid.to_s] = {
+          gid: gid.to_s,
+          seeds_dir: gspec["seeds_dir"] || "/tmp/afl-tmpdir/#{gid}/seeds"
+        }
+      end
+    end
+
+    generators = {}
+    if topo.is_a?(Hash) && topo["workers"].is_a?(Array)
+      topo["workers"].each do |w|
+        next unless w.is_a?(Hash) && w["kind"].to_s == "generator"
+
+        gcfg = gens_by_id[w["generator"].to_s]
+        next unless gcfg
+
+        wid = w["id"].to_s
+        generators[wid] = gcfg.merge(worker_id: wid)
+      end
+    end
+    gens_by_id.each do |gid, gcfg|
+      next if generators.values.any? { |e| e[:gid] == gid }
+
+      generators[gid] = gcfg.merge(worker_id: gid)
+    end
+
+    consumer_map = {}
+    if topo.is_a?(Hash) && topo["workers"].is_a?(Array)
+      w_by_gid = generators.values.each_with_object({}) { |cfg, h| h[cfg[:gid]] = cfg[:worker_id] }
+      topo["workers"].each do |w|
+        next unless w.is_a?(Hash) && w["kind"].to_s != "generator"
+
+        f_gens = Array(w["foreign_sync"]).map(&:to_s).filter_map { |gid| w_by_gid[gid] }.uniq
+        consumer_map[w["id"].to_s] = f_gens unless f_gens.empty?
+      end
+    end
+
+    counts = Hash.new(0)
+    cands = {}
+    generators.each_value do |cfg|
+      base = File.basename(cfg[:seeds_dir].to_s)
+      next if base.empty? || base == "seeds" || base == "grammar"
+
+      counts[base] += 1
+      cands[base] = cfg[:worker_id]
+    end
+
+    {
+      generators: generators,
+      grammar_workers: Set.new(["grammar", *generators.keys]),
+      consumer_map: consumer_map,
+      basename_map: cands.select { |base, _| counts[base] == 1 }
+    }
+  end
+
+  def resolve_grammar_sync_source(worker, sync_tag, gram_lookup)
+    tag = sync_tag.to_s
+    return nil if tag.empty? || gram_lookup.nil?
+
+    bmap = gram_lookup[:basename_map]
+    gens = gram_lookup[:generators]
+    cmap = gram_lookup[:consumer_map]
+    return bmap[tag] if bmap.key?(tag)
+
+    stripped = tag.sub(/_\d+\z/, "")
+    return bmap[stripped] if bmap.key?(stripped)
+    return tag if gens.key?(tag)
+
+    if (m = gens.values.find { |cfg| cfg[:gid] == tag || cfg[:gid] == stripped })
+      return m[:worker_id]
+    end
+
+    if tag =~ /\A(?:grammar|seeds)(?:_(\d+))?\z/
+      idx = Regexp.last_match(1)&.to_i || 0
+      f_gens = worker ? cmap[worker.to_s] : nil
+      return (f_gens[idx] || f_gens.first) if f_gens && !f_gens.empty?
+      return gens.keys.first if gens.size == 1
+
+      return "grammar"
+    end
+
+    nil
+  end
+
   # Maps a raw AFL++ sync:<source> token to a canonical worker or generator name
   # using the provided topology's sync_aliases and legacy naming fallbacks.
-  def normalize_sync_source(src, topo: nil)
+  def normalize_sync_source(src, topo: nil, worker: nil, gram_lookup: nil)
+    gram = gram_lookup || (topo ? grammar_lookup_for_topo(topo) : nil)
+    if (gw = resolve_grammar_sync_source(worker, src, gram))
+      return gw
+    end
+
     aliases = defined?(PrismFuzzer::Topology) && topo ? PrismFuzzer::Topology.sync_aliases(topo) : {}
     return aliases[src] if aliases.key?(src)
     return "grammar" if src =~ /\A(?:grammar|seeds)(?:_\d+)?\z/
@@ -63,6 +157,9 @@ module FuzzSankey
 
     return nil if q_index.empty?
 
+    gram_lookup = grammar_lookup_for_topo(topo)
+    gram_workers = gram_lookup[:grammar_workers]
+
     memo = {}
     trace_root = lambda do |path, seen = {}|
       return memo[path] if memo.key?(path)
@@ -73,11 +170,18 @@ module FuzzSankey
       worker = File.basename(File.dirname(File.dirname(path)))
       kind = File.basename(File.dirname(path))
 
-      root = if base =~ /\Aid:\d+(?:,sig:\d+)?,sync:(?:seeds|grammar)(?:_\d+)?,src:/ ||
-                base =~ /\Aid:\d+(?:,time:\d+,execs:\d+)?,orig:seed_/
-               "grammar"
+      gram_orig = nil
+      if base =~ /\Aid:\d+(?:,sig:\d+)?,sync:([^,]+),src:([^,+]+)/
+        cand_tag = Regexp.last_match(1)
+        gram_orig = resolve_grammar_sync_source(worker, cand_tag, gram_lookup)
+      elsif base =~ /\Aid:\d+(?:,time:\d+,execs:\d+)?,orig:seed_/
+        gram_orig = resolve_grammar_sync_source(worker, "seeds", gram_lookup) || "grammar"
+      end
+
+      root = if gram_orig
+               gram_orig
              elsif base =~ /\Aid:\d+(?:,sig:\d+)?,sync:([^,]+),src:(?:id:)?(\d+)/
-               peer = normalize_sync_source(Regexp.last_match(1), topo: topo)
+               peer = normalize_sync_source(Regexp.last_match(1), topo: topo, worker: worker, gram_lookup: gram_lookup)
                parent = q_index[[peer, Regexp.last_match(2).to_i]]
                parent ? trace_root.call(parent, seen) : "sync:#{peer}"
              elsif base =~ /\Aid:\d+(?:,sig:\d+)?,src:(\d+)(?:\+(\d+))?/
@@ -85,8 +189,10 @@ module FuzzSankey
                p2 = Regexp.last_match(2) ? q_index[[worker, Regexp.last_match(2).to_i]] : nil
                r1 = p1 ? trace_root.call(p1, seen) : nil
                r2 = p2 ? trace_root.call(p2, seen) : nil
-               if r1 == "grammar" || r2 == "grammar"
-                 "grammar"
+               if gram_workers.include?(r1)
+                 r1
+               elsif gram_workers.include?(r2)
+                 r2
                else
                  r1 || r2 || "local"
                end
@@ -281,11 +387,16 @@ module FuzzSankey
       if topo
         skip_names.merge(Array(topo.dig("generators")&.keys))
         skip_names.merge(topo.fetch("sync_aliases", {}).keys)
+        Array(topo["workers"]).each do |w|
+          skip_names.add(w["id"].to_s) if w.is_a?(Hash) && w["kind"].to_s == "generator"
+        end
       end
       sync_roots_for_afl(resolved_afl, topo: topo).each do |root|
         Dir.children(root).sort.each do |w|
           next if w.start_with?(".") || skip_names.include?(w) || File.symlink?(File.join(root, w, "queue"))
-          next unless File.file?(File.join(root, w, "fuzzer_stats"))
+          stats_p = File.join(root, w, "fuzzer_stats")
+          next unless File.file?(stats_p)
+          next if File.read(stats_p, 2048).to_s.match?(/^\s*fuzzer_role\s*:\s*generator\s*$/)
 
           zero_crash_workers << w
         end
