@@ -121,7 +121,8 @@ module PrismFuzzer
           w = Array(topo["workers"]).find { |x| x.is_a?(Hash) && x["id"].to_s == wid }
           return Integer(w["max_input_size"]) if w && w["max_input_size"]
 
-          g = topo.dig("generators", wid)
+          gen_key = (w && w["generator"]) ? w["generator"].to_s : wid
+          g = topo.dig("generators", gen_key) || topo.dig("generators", wid)
           return Integer(g["max_input_size"]) if g.is_a?(Hash) && g["max_input_size"]
         end
         def_max = topo.dig("defaults", "max_input_size")
@@ -326,18 +327,26 @@ module PrismFuzzer
       "0x1" + ("89abcdef" * 52),
       "0x1" + ("0" * 256) + ("fedcba98" * 32) + ("0" * 256),
       ("987654321" * 18) + ("999999999" * 19),
-      ("999999999" * 34) + ("000000000" * 18) + ("123456789" * 18)
+      ("999999999" * 34) + ("000000000" * 18) + ("123456789" * 18),
+      # Multi-kilobyte bignums (active when max_payload_bytes >= 2048, e.g. 8K islands):
+      # crosses upstream PM_INTEGER_DIVIDE_THRESHOLD=224 (2,016 digits) and deep Karatsuba levels
+      ("987654321" * 120) + ("000000000" * 64) + ("999999999" * 72),
+      "0x1_" + ("fedcba98_76543210_" * 140) + "00000001",
+      "0b1_" + ("01101001_10010110_" * 160) + "1",
+      ("999999999" * 240) + ("000000000" * 128) + ("123456789" * 128)
     ].freeze
 
     LONG_FLOAT_LITERAL = ("0." + ("123456789" * 87) + "e10").freeze
+    XLONG_SUBNORMAL_FLOAT_LITERAL = ("0." + ("0" * 320) + ("987654321" * 95) + "e-5").freeze
 
     def sample_integer_literal(rng, allow_invalid: false, max_payload_bytes: current_max_payload_bytes)
       return NUMERIC_ERROR_FRAGMENTS.sample(random: rng) if allow_invalid && rng.rand < 0.12
 
+      big_threshold = max_payload_bytes >= 2048 ? 0.88 : 0.96
       r = rng.rand
       if r < 0.30
         rng.rand(0..999).to_s
-      elsif r < 0.96
+      elsif r < big_threshold
         COMPACT_INTEGERS.sample(random: rng)
       else
         fitting = LARGE_BIGNUM_LITERALS.select { |lit| lit.bytesize + 12 <= max_payload_bytes }
@@ -347,8 +356,11 @@ module PrismFuzzer
 
     def sample_float_literal(rng, allow_invalid: false, max_payload_bytes: current_max_payload_bytes)
       return NUMERIC_ERROR_FRAGMENTS.sample(random: rng) if allow_invalid && rng.rand < 0.10
-      if rng.rand < 0.04 && LONG_FLOAT_LITERAL.bytesize + 12 <= max_payload_bytes
-        return LONG_FLOAT_LITERAL
+
+      long_prob = max_payload_bytes >= 2048 ? 0.10 : 0.04
+      if rng.rand < long_prob
+        long_cands = [LONG_FLOAT_LITERAL, XLONG_SUBNORMAL_FLOAT_LITERAL].select { |lit| lit.bytesize + 12 <= max_payload_bytes }
+        return long_cands.sample(random: rng) unless long_cands.empty?
       end
 
       FLOAT_LITERALS.sample(random: rng)

@@ -74,14 +74,12 @@ module PrismFuzzer
 
       sync_groups = plan.fetch("sync_groups")
       grammar_gen = plan.fetch("generators", {}).values.find { |g| g["kind"] == "grammar" }
-      primary_group_id = grammar_gen&.dig("sync_group") || sync_groups.find { |_, g| g["primary"] }&.first || sync_groups.keys.first
+      primary_group_id = sync_groups.find { |_, g| g["primary"] }&.first || grammar_gen&.dig("sync_group") || sync_groups.keys.first
       primary_afl_dir = primary_group_id ? File.join(fuzz_dir, sync_groups.fetch(primary_group_id).fetch("dir")) : nil
       sync_dirs = sync_groups.values.map { |sg| File.join(fuzz_dir, sg.fetch("dir")) }
 
       corpus_gens = plan.fetch("generators", {}).select { |_, g| g["kind"] == "corpus" }
-      corpus_population = nil
-      unless corpus_gens.empty?
-        corpus_gen = corpus_gens.values.first
+      corpus_populations = corpus_gens.map do |cg_id, corpus_gen|
         c_src = plan.fetch("sources").fetch(corpus_gen.fetch("source"))
         fixtures_dir = c_src["path"] ? File.join(c_src["path"], "test", "prism", "fixtures") : nil
         c_bin_rel = nil
@@ -92,7 +90,11 @@ module PrismFuzzer
           c_bin_candidates << File.join(bin_dir, File.basename(c_bin_rel))
           c_bin_candidates << File.expand_path(c_bin_rel, fuzz_root)
         end
-        corpus_population = {
+        out_cdir = corpus_gen["dir"] ? File.expand_path(corpus_gen["dir"], fuzz_root) : corpus_dir
+        {
+          "id" => cg_id.to_s,
+          "output_dir" => out_cdir,
+          "default_dir" => corpus_gen["dir"].nil?,
           "corpus_rb" => File.join(fuzz_root, "runtime", "corpus.rb"),
           "fixtures_dir" => fixtures_dir,
           "fuzzer_binary_rel" => c_bin_rel,
@@ -100,6 +102,7 @@ module PrismFuzzer
           "max_input_size" => Integer(corpus_gen["max_input_size"] || max_input_size)
         }.compact
       end
+      corpus_population = corpus_populations.first
 
       existing_corpus_files = Dir.exist?(corpus_dir) ? Dir.glob(File.join(corpus_dir, "*")).select { |p| File.file?(p) }.sort : []
       generator_seeds_dirs = grammar_seeds_dirs(plan)
@@ -212,6 +215,7 @@ module PrismFuzzer
             "source_path" => src_spec["path"],
             "fuzzer_bin" => env_map["FUZZ_GRAMMAR_BIN"],
             "intake_stats_path" => intake_stats_path,
+            "max_input_size" => gen_max_input,
             "ulimit_v_kb" => ulimit,
             "extra_env" => w["env"].is_a?(Hash) ? w["env"].transform_keys(&:to_s).transform_values(&:to_s) : {},
             "env_tokens" => env_vars
@@ -261,15 +265,15 @@ module PrismFuzzer
           if !base_seed_files.empty?
             input_dir = seed_dir
             selected_preview = select_shard_files(base_seed_files, shard_index, shard_total)
-          elsif corpus_population
+          elsif corpus_populations.any?
             input_dir = seed_dir
             selected_preview = nil
           else
-            input_dir = corpus_dir
+            input_dir = seed_from_dir || corpus_dir
             selected_preview = []
           end
         else
-          input_dir = corpus_dir
+          input_dir = seed_from_dir || corpus_dir
           selected_preview = base_seed_files
         end
 
@@ -309,7 +313,7 @@ module PrismFuzzer
           env_prefix << "ASAN_OPTIONS=#{asan_opts}" if sans.include?("asan")
           env_prefix << "UBSAN_OPTIONS=#{ubsan_opts}" if sans.include?("ubsan")
 
-          max_env = afl_max_raw < 1028 ? 262_144 : afl_max_raw * 256
+          max_env = [afl_max_raw < 1028 ? 262_144 : afl_max_raw * 256, 1_048_576].min
           mem_limit = (w["mem_limit"] || "none").to_s
           afl_args_pre = ["-t", "250+", "-m", mem_limit, "-x", dict_file, "-G", max_env.to_s]
           afl_args_post = ["-o", out_dir, w["afl_role"] == "main" ? "-M" : "-S", wid]
@@ -425,6 +429,7 @@ module PrismFuzzer
         "generator_seeds_dirs" => generator_seeds_dirs.values,
         "generator_seeds_map" => generator_seeds_dirs,
         "corpus_population" => corpus_population,
+        "corpus_populations" => corpus_populations.empty? ? nil : corpus_populations,
         "staging" => {
           "seeds_backup_dir" => seeds_backup_dir,
           "group_worker_ids" => group_worker_ids,

@@ -36,24 +36,37 @@ module PrismFuzzer
       primary_afl_dir = staged["primary_afl_dir"]
       FileUtils.mkdir_p(primary_afl_dir) if primary_afl_dir
 
-      if (cpop = staged["corpus_population"]).is_a?(Hash)
-        if !Dir.exist?(effective_corpus_dir) || Dir.children(effective_corpus_dir).reject { |f| f.start_with?(".") }.empty?
-          c_env = {}
-          fixtures_dir = cpop["fixtures_dir"]
-          c_env["CORPUS_FIXTURES_DIR"] = fixtures_dir if fixtures_dir && Dir.exist?(fixtures_dir)
-          cands = []
-          if (frel = cpop["fuzzer_binary_rel"])
-            cands << File.join(effective_bin_dir, File.basename(frel))
-            cands.concat(Array(cpop["fuzzer_bin_candidates"]))
-            cands << File.expand_path(frel, fuzz_root)
-          end
-          c_bin = cands.compact.uniq.find { |p| File.executable?(p) }
-          c_env["CORPUS_FUZZ_BIN"] = c_bin if c_bin
-          if cpop["max_input_size"] && ENV["FUZZ_MAX_INPUT_SIZE"].to_s.strip.empty?
-            c_env["FUZZ_MAX_INPUT_SIZE"] = cpop["max_input_size"].to_s
-          end
-          run_cmd(RbConfig.ruby, cpop.fetch("corpus_rb"), effective_corpus_dir, env: c_env)
+      corpus_overridden = !corpus_dir.nil?
+      cpops = if staged["corpus_populations"].is_a?(Array)
+                staged["corpus_populations"]
+              elsif staged["corpus_population"].is_a?(Hash)
+                [staged["corpus_population"]]
+              else
+                []
+              end
+      cpops.each do |cpop|
+        target_cdir = if corpus_overridden && (cpop["default_dir"] || cpops.size == 1)
+                        effective_corpus_dir
+                      else
+                        cpop["output_dir"] || effective_corpus_dir
+                      end
+        next unless !Dir.exist?(target_cdir) || Dir.children(target_cdir).reject { |f| f.start_with?(".") }.empty?
+
+        c_env = {}
+        fixtures_dir = cpop["fixtures_dir"]
+        c_env["CORPUS_FIXTURES_DIR"] = fixtures_dir if fixtures_dir && Dir.exist?(fixtures_dir)
+        cands = []
+        if (frel = cpop["fuzzer_binary_rel"])
+          cands << File.join(effective_bin_dir, File.basename(frel))
+          cands.concat(Array(cpop["fuzzer_bin_candidates"]))
+          cands << File.expand_path(frel, fuzz_root)
         end
+        c_bin = cands.compact.uniq.find { |p| File.executable?(p) }
+        c_env["CORPUS_FUZZ_BIN"] = c_bin if c_bin
+        if cpop["max_input_size"] && ENV["FUZZ_MAX_INPUT_SIZE"].to_s.strip.empty?
+          c_env["FUZZ_MAX_INPUT_SIZE"] = cpop["max_input_size"].to_s
+        end
+        run_cmd(RbConfig.ruby, cpop.fetch("corpus_rb"), target_cdir, env: c_env)
       end
 
       corpus_files = Dir.exist?(effective_corpus_dir) ? Dir.glob(File.join(effective_corpus_dir, "*")).select { |p| File.file?(p) }.sort : []
@@ -155,6 +168,7 @@ module PrismFuzzer
               "FUZZ_GRAMMAR_WORKER_ID" => wid,
               "FUZZ_INTAKE_STATS_PATH" => gl["intake_stats_path"].to_s
             }
+            env_map["FUZZ_MAX_INPUT_SIZE"] = gl["max_input_size"].to_s if gl["max_input_size"]
             env_tokens = env_map.map { |k, v| "#{k}=#{Shellwords.escape(v)}" }
             if gl["fuzzer_bin"]
               env_map["FUZZ_GRAMMAR_BIN"] = gl["fuzzer_bin"]
@@ -180,8 +194,9 @@ module PrismFuzzer
         bin_path = bin_overridden ? File.join(effective_bin_dir, bin_name) : (seeds_meta["bin_path"] || File.join(effective_bin_dir, bin_name))
 
         base_seed_files = corpus_files
-        if (from_dir = seeds_meta["from_dir"]) && Dir.exist?(from_dir) && !Dir.children(from_dir).reject { |f| f.start_with?(".") }.empty?
-          base_seed_files = Dir.glob(File.join(from_dir, "*")).select { |p| File.file?(p) }.sort
+        explicit_from_dir = (!corpus_overridden && seeds_meta["from_dir"]) ? seeds_meta["from_dir"] : nil
+        if explicit_from_dir && Dir.exist?(explicit_from_dir) && !Dir.children(explicit_from_dir).reject { |f| f.start_with?(".") }.empty?
+          base_seed_files = Dir.glob(File.join(explicit_from_dir, "*")).select { |p| File.file?(p) }.sort
         end
 
         selected_files = base_seed_files
@@ -228,7 +243,7 @@ module PrismFuzzer
           need_seed_copy = true
         end
 
-        input_dir = effective_corpus_dir
+        input_dir = explicit_from_dir || effective_corpus_dir
         if need_seed_copy
           seed_dir = seeds_meta["seed_dir"] || "/tmp/afl-tmpdir/#{wid}/seeds"
           FileUtils.rm_rf(seed_dir)

@@ -876,6 +876,42 @@ class LaunchAndStatusTest < Minitest::Test
     gram_sm = lp_sm["workers"].find { |w| w["id"] == "grammar" }
     assert_includes Shellwords.split(scout_sm["cmd"]).last, "-G 260 "
     assert_equal "256", gram_sm.dig("env", "FUZZ_MAX_INPUT_SIZE")
+
+    funnel_camp = repo_path("campaigns/ijon-funnel.rb")
+    ir_fn, = PrismFuzzer::Topology.load_ir(funnel_camp, fuzz_root: root_dir)
+    plan_fn = PrismFuzzer::Topology.compile_plan(ir_fn, fuzz_root: root_dir)
+    lp_fn = PrismFuzzer::Topology.plan_launch(plan_fn, fuzz_root: root_dir)
+    assert_equal "ijon-funnel-prism-fleet", plan_fn["name"]
+    assert_equal 22, plan_fn["workers"].size
+    assert_equal 8192, PrismFuzzer::Topology.effective_compiled_max_input_size(plan_fn)
+    assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/afl-8k"), lp_fn["primary_afl_dir"]
+    assert_equal [256, 8192], Array(lp_fn["corpus_populations"]).map { |c| c["max_input_size"] }
+
+    gram_256 = lp_fn["workers"].find { |w| w["id"] == "grammar-256" }
+    gram_8k = lp_fn["workers"].find { |w| w["id"] == "grammar-8k" }
+    assert_equal "256", gram_256.dig("env", "FUZZ_MAX_INPUT_SIZE")
+    assert_equal "8192", gram_8k.dig("env", "FUZZ_MAX_INPUT_SIZE")
+
+    small_scout = lp_fn["workers"].find { |w| w["id"] == "small-scout" }
+    main_8k = lp_fn["workers"].find { |w| w["id"] == "8k-main" }
+    arm_8k = lp_fn["workers"].find { |w| w["id"] == "8k-arm32" }
+    ppc_8k = lp_fn["workers"].find { |w| w["id"] == "8k-ppc" }
+    assert_includes Shellwords.split(small_scout["cmd"]).last, "-G 260 "
+    assert_includes Shellwords.split(main_8k["cmd"]).last, "-G 8196 "
+    # 8K cross-oracle envelope -G must stay clamped <= AFL++ MAX_FILE (1,048,576)
+    assert_includes Shellwords.split(arm_8k["cmd"]).last, "-G 1048576 "
+    assert_includes Shellwords.split(ppc_8k["cmd"]).last, "-G 1048576 "
+
+    peer_links = Array(lp_fn.dig("staging", "peer_import_links"))
+    assert_equal 3, peer_links.size
+    assert peer_links.all? { |l| l["src_group_dir"].end_with?("/afl-small") && l["dst_group_dir"].end_with?("/afl-8k") },
+           "expected strictly one-way afl-small -> afl-8k peer_import links, got #{peer_links.inspect}"
+
+    with_env("PRISM_B_REF" => "a1d1d96c368d49b752d06e361823a098b54f9a9d") do
+      ir_fn_b, = PrismFuzzer::Topology.load_ir(funnel_camp, fuzz_root: root_dir)
+      plan_fn_b = PrismFuzzer::Topology.compile_plan(ir_fn_b, fuzz_root: root_dir)
+      assert_equal 24, plan_fn_b["workers"].size
+    end
   end
 
   private

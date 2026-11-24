@@ -83,7 +83,7 @@ module PrismFuzzer
       sgs = topo.is_a?(Hash) && topo["sync_groups"].is_a?(Hash) ? topo["sync_groups"] : {}
       gram_gen = topo.is_a?(Hash) && topo["generators"].is_a?(Hash) ? topo["generators"].values.find { |g| g.is_a?(Hash) && g["kind"] == "grammar" } : nil
       corp_gen = topo.is_a?(Hash) && topo["generators"].is_a?(Hash) ? topo["generators"].values.find { |g| g.is_a?(Hash) && g["kind"] == "corpus" } : nil
-      primary_sg_id = gram_gen&.dig("sync_group") || sgs.find { |_, g| g.is_a?(Hash) && g["primary"] }&.first || sgs.keys.first
+      primary_sg_id = sgs.find { |_, g| g.is_a?(Hash) && g["primary"] }&.first || gram_gen&.dig("sync_group") || sgs.keys.first
       primary_afl_sub = (primary_sg_id && sgs.dig(primary_sg_id, "dir")) || "afl"
 
       res_corpus = expand_workspace_path(corpus_dir || env_override("TRIAGE_CORPUS_DIR") || ws["corpus_dir"] || corp_gen&.dig("dir") || File.join(res_dir, "corpus"), fuzz_root: fuzz_root)
