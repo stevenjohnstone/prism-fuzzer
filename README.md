@@ -271,6 +271,7 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 │   └── topology.rb                 topology IR validator, target sync/build driver, and launch planner
 ├── test
 │   ├── run.rb                      dependency-tracked parallel Minitest runner
+│   ├── sanitizers_test.rb          fault-injection regressions for ASan, UBSan, MSan, LSan & PM_XALLOCATOR
 │   ├── targets                     Minitest suite for DSL, sync, build, cross-arch, and launch planning
 │   ├── triage                      Minitest suite for triage, clustering, verify, bisect, and explain
 │   ├── test_accel.sh               C/AFL++ verification script for SIMD vs. SWAR accel fuzzing

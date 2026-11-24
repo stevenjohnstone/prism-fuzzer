@@ -14,14 +14,14 @@ module PrismFuzzerTest
     module_function
 
     def top_level_test_files
-      %w[sankey grammar prism_diff oss_fuzz]
+      %w[sankey grammar prism_diff oss_fuzz sanitizers]
         .map { |name| File.join(TEST_ROOT, "#{name}_test.rb") }
         .select { |path| File.file?(path) }
     end
 
     def suite_files(name)
       case name
-      when "sankey", "grammar", "prism_diff", "oss_fuzz"
+      when "sankey", "grammar", "prism_diff", "oss_fuzz", "sanitizers"
         path = File.join(TEST_ROOT, "#{name}_test.rb")
         File.file?(path) ? [path] : []
       when "targets"
@@ -79,7 +79,7 @@ module PrismFuzzerTest
 
       OptionParser.new do |op|
         op.banner = "Usage: ruby test/run.rb [options] [test_files_or_stages...] [-- minitest_args...]"
-        op.on("--suite NAME", "Suite to run: all, sankey, grammar, prism_diff, oss_fuzz, targets, triage") { |v| suites << v }
+        op.on("--suite NAME", "Suite to run: all, sankey, grammar, prism_diff, oss_fuzz, sanitizers, targets, triage") { |v| suites << v }
         op.on("--stage NAME", "Individual stage or sub-suite name") { |v| stages << v }
         op.on("--docker-only", "Enable TEST_OSS_FUZZ_DOCKER=1 host Docker test mode") { docker_only = true }
         op.on("--list", "List matched test files and exit") { list_only = true }

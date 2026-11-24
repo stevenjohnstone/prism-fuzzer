@@ -141,8 +141,16 @@ run_parallel_compile() {
     local src=$1
     local obj=$2
     shift 2
+    local unit_extra=()
+    case "$src" in
+      "$PRISM_ROOT"/src/*)
+        if [ "$(basename "$src")" != "arena.c" ] && [ -f "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h" ]; then
+          unit_extra=(-include "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h")
+        fi
+        ;;
+    esac
     (
-      "${COMPILE_RUNNER[@]}" "${ACTIVE_CFLAGS[@]}" -c "$src" -o "$obj"
+      "${COMPILE_RUNNER[@]}" "${ACTIVE_CFLAGS[@]}" ${unit_extra[@]+"${unit_extra[@]}"} -c "$src" -o "$obj"
     ) &
     pids+=("$!")
     if [ "${#pids[@]}" -ge "$SUB_JOBS" ]; then

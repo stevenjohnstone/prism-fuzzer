@@ -325,17 +325,17 @@ test:
 	$(Q) $(MAKE) docker-build targets-sync
 	$(Q) if [ "$(TEST_FORCE)" = "1" ]; then rm -f build/test/stamps/*.stamp; fi
 	$(ECHO) "running dependency-tracked prism-fuzzer test suite inside container"
-	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" _test-all"
+	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" _test-all"
 
-test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-triage:
+test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-triage:
 	$(Q) $(MAKE) docker-build targets-sync
 	$(Q) if [ "$(TEST_FORCE)" = "1" ]; then rm -f build/test/stamps/*.stamp; fi
-	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" $@"
+	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" $@"
 
 test-targets-% test-triage-%:
 	$(Q) $(MAKE) docker-build targets-sync
 	$(Q) if [ "$(TEST_FORCE)" = "1" ]; then rm -f build/test/stamps/*.stamp; fi
-	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" $@"
+	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" $@"
 else
 include test/tests.mk
 
@@ -360,4 +360,4 @@ clean:
 	$(Q) ruby -r./runtime/campaign -e 'PrismFuzzer::Campaign.clean_preserving_paths(ARGV[0], ARGV[1..])' "$(FUZZ_DIR)" "$(FUZZ_BUILD_DIR)" "$(FUZZ_TRIAGE_DIR)"
 	$(ECHO) "done"
 
-.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean
+.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean

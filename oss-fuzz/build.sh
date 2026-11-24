@@ -140,7 +140,15 @@ build_target() {
   for src in "${SRCS[@]}"; do
     local rel="${src#./}"
     local obj="$obj_dir/${rel//\//_}.o"
-    "$CC" -std=c99 -Iinclude $CFLAGS "${COMMON_DEFINES[@]}" "$@" -c "$src" -o "$obj" &
+    local unit_extra=()
+    case "$rel" in
+      src/*)
+        if [ "$(basename "$rel")" != "arena.c" ] && [ -f "$HARNESS_DIR/include/fuzz_arena_unslab.h" ]; then
+          unit_extra=(-include "$HARNESS_DIR/include/fuzz_arena_unslab.h")
+        fi
+        ;;
+    esac
+    "$CC" -std=c99 -Iinclude $CFLAGS "${COMMON_DEFINES[@]}" ${unit_extra[@]+"${unit_extra[@]}"} "$@" -c "$src" -o "$obj" &
     pids+=("$!")
     objs+=("$obj")
     if [ "${#pids[@]}" -ge "$nproc_count" ]; then

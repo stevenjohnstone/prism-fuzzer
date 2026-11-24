@@ -42,9 +42,12 @@ module PrismFuzzCompat
   def probe(include_dir, subloc_inc: nil, check_subloc: true)
     hdrs = Dir.glob(File.join(include_dir, "**", "*.h")).sort.map { |p| File.read(p, encoding: "BINARY") }.join("\n")
     code = strip_c_comments(hdrs)
+    arena_c = File.join(File.dirname(File.expand_path(include_dir)), "src", "arena.c")
+    arena_code = File.file?(arena_c) ? strip_c_comments(File.read(arena_c, encoding: "BINARY")) : ""
 
     macros = []
-    has_arena_initial_ifndef = code.match?(/#\s*ifndef\s+PM_ARENA_INITIAL_SIZE\b/)
+    has_arena_initial_ifndef = code.match?(/#\s*ifndef\s+PM_ARENA_INITIAL_SIZE\b/) ||
+                               arena_code.match?(/#\s*ifndef\s+PM_ARENA_INITIAL_SIZE\b/)
 
     unless File.file?(File.join(include_dir, "prism", "internal", "buffer.h"))
       macros << "PRISM_FUZZ_NO_INTERNAL_BUFFER"

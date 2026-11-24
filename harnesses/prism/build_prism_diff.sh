@@ -171,8 +171,12 @@ build_isolated_side() {
     local rel="${src#"$prism_root/src/"}"
     local obj="$side_dir/objs/${rel%.c}.o"
     mkdir -p "$(dirname "$obj")"
+    local unit_extra=()
+    if [ "$(basename "$src")" != "arena.c" ] && [ -f "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h" ]; then
+      unit_extra=(-include "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h")
+    fi
     (
-      "${COMPILE_RUNNER[@]}" "${common_flags[@]}" -c "$src" -o "$obj"
+      "${COMPILE_RUNNER[@]}" "${common_flags[@]}" ${unit_extra[@]+"${unit_extra[@]}"} -c "$src" -o "$obj"
     ) &
     pids+=("$!")
     objs+=("$obj")

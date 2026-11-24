@@ -397,6 +397,7 @@ module PrismFuzzer
         File.join(fuzz_root, "harnesses", "prism", "fuzz.c")
       ]
       harness_hdrs = [
+        File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_arena_unslab.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_invariants.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "prism_ijon.h"),
@@ -421,7 +422,7 @@ module PrismFuzzer
       base_flags.concat(split_extra_flags("DEBUG_FLAGS"))
       base_flags.concat(split_extra_flags("CPPFLAGS"))
       base_flags.concat(split_extra_flags("CFLAGS"))
-      if (!sans.empty? || fspec["xallocator"]) && !override_macros.include?("PM_ARENA_INITIAL_SIZE")
+      if !sans.empty? && !override_macros.include?("PM_ARENA_INITIAL_SIZE")
         base_flags << "-DPM_ARENA_INITIAL_SIZE=0"
       end
       if mode == "slow"
@@ -474,8 +475,15 @@ module PrismFuzzer
       log_progress "building #{id} (#{mode}, sanitizers=#{sans.empty? ? 'none' : sans.join('+')}, afl=#{afl_mode}#{ijon_enabled ? '+ijon' : ''})"
       FileUtils.rm_f(env["AFL_LLVM_DOCUMENT_IDS"]) if env["AFL_LLVM_DOCUMENT_IDS"]
       tmp_out = "#{out_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+      unslab_hdr = File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_arena_unslab.h")
+      unslab_tu_flags = if File.file?(unslab_hdr) && base_flags.include?("-DPM_ARENA_INITIAL_SIZE=0")
+                          tu_flags + ["-include", unslab_hdr]
+                        else
+                          tu_flags
+                        end
       with_tmp_obj_dir("parse-#{id}", build_dir: build_dir) do |obj_dir|
-        items = c_files.map { |f| [f, tu_flags] } + harness_srcs.map { |f| [f, harness_tu_flags] }
+        items = c_files.map { |f| [f, File.basename(f) == "arena.c" ? tu_flags : unslab_tu_flags] } +
+                harness_srcs.map { |f| [f, harness_tu_flags] }
         objs = compile_objects_parallel!(
           pool, items,
           cc_bin: cc_bin, base_env: compile_env, fuzz_root: fuzz_root,
@@ -864,6 +872,7 @@ module PrismFuzzer
         File.join(fuzz_root, "harnesses", "prism", "fuzz.c")
       ]
       deps = c_files + h_files + harness_srcs + [
+        File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_arena_unslab.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_options.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_serialize_scan.h"),
         File.join(fuzz_root, "harnesses", "prism", "include", "prism_ijon.h"),
@@ -901,8 +910,15 @@ module PrismFuzzer
       FileUtils.mkdir_p(File.dirname(out_path))
       clang_env = ijon_enabled ? { "AFL_LLVM_IJON" => "1" } : nil
       tmp_out = "#{out_path}.tmp.#{Process.pid}.#{Thread.current.object_id}"
+      unslab_hdr = File.join(fuzz_root, "harnesses", "prism", "include", "fuzz_arena_unslab.h")
+      unslab_cflags = if File.file?(unslab_hdr) && arena_flags.include?("-DPM_ARENA_INITIAL_SIZE=0")
+                        base_cflags + ["-include", unslab_hdr]
+                      else
+                        base_cflags
+                      end
       with_tmp_obj_dir("cross-#{id}", build_dir: build_dir) do |obj_dir|
-        items = c_files.map { |f| [f, base_cflags] } + harness_srcs.map { |f| [f, harness_cflags] }
+        items = c_files.map { |f| [f, File.basename(f) == "arena.c" ? base_cflags : unslab_cflags] } +
+                harness_srcs.map { |f| [f, harness_cflags] }
         objs = compile_objects_parallel!(
           eff_pool, items,
           cc_bin: "clang", base_env: clang_env, fuzz_root: fuzz_root,

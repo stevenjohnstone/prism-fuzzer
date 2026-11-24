@@ -19,7 +19,7 @@ class PrismDiffTest < Minitest::Test
   DIVERGE_B_RETURN = "    return node;\n}"
   DIVERGE_B_INJECT =
     "    if (parser->end - parser->start >= 9 && memcmp(parser->start, \"DIVERGE_B\", 9) == 0) {\n" \
-    "        pm_parser_err(parser, 0, 9, PM_ERR_EXPECT_EXPRESSION_AFTER_OPERATOR);\n" \
+    "        pm_parser_err(parser, 0, 9, PM_ERR_ALIAS_ARGUMENT);\n" \
     "    }\n" \
     "    if (node != NULL && parser->end - parser->start >= 9 && memcmp(parser->start, \"SER_DIV_B\", 9) == 0) {\n" \
     "        node->flags ^= 1;\n" \
@@ -106,7 +106,7 @@ class PrismDiffTest < Minitest::Test
       inp = File.join(bdir, "input.min")
       File.binwrite(inp, seed_bytes("DIVERGE_B + 1\n"))
 
-      cout = "INVARIANT[diff_prism]: kind=error_mismatch sub=count a=0 b=1 a_err=none b_err=expect_expression_after_operator\n"
+      cout = "INVARIANT[diff_prism]: kind=error_mismatch sub=count a=0 b=1 a_err=none b_err=alias_argument\n"
       exe = "./build/fuzz.prism_diff"
 
       assert FuzzTriage.prism_diff_bucket?(executable: exe, crash_output: cout, triage_dir: triage_dir)
@@ -341,7 +341,7 @@ class PrismDiffTest < Minitest::Test
       assert_match(/^-counts:\s+errors=0\b/, exp_txt)
       assert_match(/^\+counts:\s+errors=1\b/, exp_txt)
       assert_match(/^\+errors:/, exp_txt)
-      assert_includes exp_txt, "expect_expression_after_operator"
+      assert_includes exp_txt, "alias_argument"
 
       report_dir = File.join(workdir, "report")
       cov_dir = File.join(workdir, "cov")

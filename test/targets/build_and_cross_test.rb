@@ -80,10 +80,11 @@ class BuildAndCrossTest < Minitest::Test
         PrismFuzzer.campaign "arena-flag-test" do
           workspace #{ws.inspect}
           prism :prism_a, repo: #{up[:repo].inspect}, ref: #{up[:v1].inspect}, patches: "none", templates: "never"
-          fuzzer "f_xalloc",   shape: :prism_parse, source: :prism_a, sanitizers: [],            xallocator: true
-          fuzzer "f_plain",    shape: :prism_parse, source: :prism_a, sanitizers: [],            xallocator: false
-          fuzzer "f_san",      shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], xallocator: false
-          fuzzer "f_override", shape: :prism_parse, source: :prism_a, sanitizers: [],            xallocator: true, defines: { PM_ARENA_INITIAL_SIZE: 64 }
+          fuzzer "f_xalloc",       shape: :prism_parse, source: :prism_a, sanitizers: [],            xallocator: true
+          fuzzer "f_plain",        shape: :prism_parse, source: :prism_a, sanitizers: [],            xallocator: false
+          fuzzer "f_san",          shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], xallocator: false
+          fuzzer "f_override",     shape: :prism_parse, source: :prism_a, sanitizers: [],            xallocator: true, defines: { PM_ARENA_INITIAL_SIZE: 64 }
+          fuzzer "f_san_override", shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan], xallocator: false, defines: { PM_ARENA_INITIAL_SIZE: 64 }
           sync_group :afl, dir: "afl", primary: true
           worker :w1, fuzzer: "f_xalloc", sync_group: :afl, afl_role: :main
         end
@@ -109,10 +110,10 @@ class BuildAndCrossTest < Minitest::Test
         end
       end
 
-      assert_equal %w[f_override f_plain f_san f_xalloc], by_out.keys.sort,
-                   "expected 4 dry-run build lines, got #{lines.inspect}"
+      assert_equal %w[f_override f_plain f_san f_san_override f_xalloc], by_out.keys.sort,
+                   "expected 5 dry-run build lines, got #{lines.inspect}"
 
-      assert_includes by_out["f_xalloc"], "-DPM_ARENA_INITIAL_SIZE=0"
+      refute_includes by_out["f_xalloc"], "-DPM_ARENA_INITIAL_SIZE=0"
       assert_includes by_out["f_xalloc"], "-DPRISM_XALLOCATOR"
       assert_includes by_out["f_xalloc"], "-DPRISM_FUZZ_INLINE_ASSERTS"
       refute_includes by_out["f_plain"], "-DPM_ARENA_INITIAL_SIZE=0"
@@ -121,6 +122,8 @@ class BuildAndCrossTest < Minitest::Test
       assert_includes by_out["f_san"], "-DPRISM_FUZZ_INLINE_ASSERTS"
       assert_includes by_out["f_override"], "-DPM_ARENA_INITIAL_SIZE=64"
       refute_includes by_out["f_override"], "-DPM_ARENA_INITIAL_SIZE=0"
+      assert_includes by_out["f_san_override"], "-DPM_ARENA_INITIAL_SIZE=64"
+      refute_includes by_out["f_san_override"], "-DPM_ARENA_INITIAL_SIZE=0"
     end
   end
 

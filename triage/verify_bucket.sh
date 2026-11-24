@@ -481,13 +481,22 @@ build_verify_runner() {
     else
       compat_args+=(--subloc-inc "$cache_dir/.missing_node_locations.inc")
     fi
-    mapfile -t probe_arr < <(ruby "$FUZZ_ROOT/harnesses/prism/gen_api_compat.rb" "${compat_args[@]}")
-    wait "$!" || exit $?
+    local probe_out
+    if ! probe_out="$(ruby "$FUZZ_ROOT/harnesses/prism/gen_api_compat.rb" "${compat_args[@]}")"; then
+      exit 125
+    fi
     local pf
-    for pf in "${probe_arr[@]+"${probe_arr[@]}"}"; do
+    while IFS= read -r pf; do
       [ -n "$pf" ] || continue
+      if [ "$pf" = "-DPM_ARENA_INITIAL_SIZE=0" ]; then
+        if [ "$profile" != "xallocator" ]; then
+          flags+=("$pf")
+        fi
+        continue
+      fi
+      probe_arr+=("$pf")
       flags+=("$pf")
-    done
+    done <<< "$probe_out"
 
     case "$profile" in
       asan_ubsan)
@@ -570,7 +579,7 @@ build_verify_runner() {
     if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ]; then
       local diff_extra_args=()
       if [ "$profile" = "diff_parse_y_asan" ]; then
-        diff_extra_args=(--cflag -fsanitize=address)
+        diff_extra_args=(--cflag -DPM_ARENA_INITIAL_SIZE=0 --cflag -fsanitize=address)
       fi
       if ! "$FUZZ_ROOT/harnesses/prism/build_diff.sh" \
           --mode verify \
@@ -645,9 +654,17 @@ build_verify_runner() {
       for src in "${cross_srcs[@]}"; do
         obj="$obj_dir/${idx}_$(basename "$src" .c).o"
         idx=$((idx + 1))
+        local cross_unit_flags=()
+        case "$src" in
+          "$REPO_ROOT"/src/*)
+            if [ "$(basename "$src")" != "arena.c" ] && [ -f "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h" ]; then
+              cross_unit_flags=(-include "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h")
+            fi
+            ;;
+        esac
         (
           "${cc_wrap[@]}" --target="$cross_triplet" -isystem "/usr/$cross_triplet/include" \
-            "${flags[@]}" -c "$src" -o "$obj"
+            "${flags[@]}" ${cross_unit_flags[@]+"${cross_unit_flags[@]}"} -c "$src" -o "$obj"
         ) &
         pids+=("$!")
         objs+=("$obj")
@@ -693,7 +710,7 @@ build_verify_runner() {
         "-DPRISM_VERIFY_QEMU_BIN=\"$qemu_bin\""
         "-DPRISM_VERIFY_SYSROOT=\"/usr/$cross_triplet\""
         "-DPRISM_VERIFY_TARGET_SUFFIX=\"$cross_suffix\""
-        "${probe_arr[@]}"
+        ${probe_arr[@]+"${probe_arr[@]}"}
       )
       local proxy_dir
       proxy_dir="$(mktemp -d "${TMPDIR:-/tmp}/pf-verify-proxy.XXXXXX")"
@@ -754,8 +771,16 @@ build_verify_runner() {
       for src in "${srcs[@]}"; do
         obj="$obj_dir/${idx}_$(basename "$src" .c).o"
         idx=$((idx + 1))
+        local unit_flags=()
+        case "$src" in
+          "$REPO_ROOT"/src/*)
+            if [ "$(basename "$src")" != "arena.c" ] && [ -f "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h" ]; then
+              unit_flags=(-include "$FUZZ_ROOT/harnesses/prism/include/fuzz_arena_unslab.h")
+            fi
+            ;;
+        esac
         (
-          "${cc_wrap[@]}" "${flags[@]}" -c "$src" -o "$obj"
+          "${cc_wrap[@]}" "${flags[@]}" ${unit_flags[@]+"${unit_flags[@]}"} -c "$src" -o "$obj"
         ) &
         pids+=("$!")
         objs+=("$obj")
@@ -854,7 +879,7 @@ fi
 
 shopt -s nullglob
 raw_files=("$BUCKET_DIR"/id*)
-for f in "${raw_files[@]}"; do
+for f in ${raw_files[@]+"${raw_files[@]}"}; do
   if [ -f "$f" ]; then
     args+=("$f")
   fi
