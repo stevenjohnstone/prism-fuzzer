@@ -121,17 +121,21 @@ $(FUZZ_DOCKER_STAMP): docker/Dockerfile $(if $(strip $(RUBY_GIT_REF)),docker-for
 		$(MAKEDIRS) $(@D) && touch $@
 
 docker-update:
-	$(ECHO) "resolving mainline CRuby HEAD from ruby/ruby"
-	$(Q) rev="$$(git ls-remote https://github.com/ruby/ruby.git refs/heads/master | awk 'NR==1 { print $$1 }')"; \
-		test -n "$$rev" || { echo "Failed to resolve ruby/ruby master SHA" >&2; exit 1; }; \
-		ruby -e 'df, rev, *tfs = ARGV; \
+	$(ECHO) "resolving mainline Prism and CRuby HEAD from ruby/prism and ruby/ruby"
+	$(Q) prism_rev="$$(git ls-remote https://github.com/ruby/prism.git refs/heads/main | awk 'NR==1 { print $$1 }')"; \
+		ruby_rev="$$(git ls-remote https://github.com/ruby/ruby.git refs/heads/master | awk 'NR==1 { print $$1 }')"; \
+		test -n "$$prism_rev" || { echo "Failed to resolve ruby/prism main SHA" >&2; exit 1; }; \
+		test -n "$$ruby_rev" || { echo "Failed to resolve ruby/ruby master SHA" >&2; exit 1; }; \
+		ruby -e 'df, prism_rev, ruby_rev, *tfs = ARGV; \
 			s = File.read(df); cur = s[/^ARG RUBY_GIT_REF=(.*)/, 1] or abort("ARG RUBY_GIT_REF not found in #{df}"); \
-			if cur.strip != rev then s.sub!(/^ARG RUBY_GIT_REF=.*/, "ARG RUBY_GIT_REF=#{rev}"); File.write(df, s); puts("Updated #{df} RUBY_GIT_REF: #{cur} -> #{rev}") else puts("#{df} already pinned to #{rev}") end; \
+			if cur.strip != ruby_rev then s.sub!(/^ARG RUBY_GIT_REF=.*/, "ARG RUBY_GIT_REF=#{ruby_rev}"); File.write(df, s); puts("Updated #{df} RUBY_GIT_REF: #{cur} -> #{ruby_rev}") else puts("#{df} already pinned to #{ruby_rev}") end; \
 			tfs.each do |tf| \
+				ts = File.read(tf); tcur = ts[/^DEFAULT_PRISM_REF = "([^"]+)"/, 1] or next; \
+				if tcur != prism_rev then ts.sub!(/^DEFAULT_PRISM_REF = "[^"]+"/, "DEFAULT_PRISM_REF = \"#{prism_rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_PRISM_REF -> #{prism_rev}") else puts("#{tf} already pinned to #{prism_rev}") end; \
 				ts = File.read(tf); tcur = ts[/^DEFAULT_RUBY_REF = "([^"]+)"/, 1] or next; \
-				if tcur != rev then ts.sub!(/^DEFAULT_RUBY_REF = "[^"]+"/, "DEFAULT_RUBY_REF = \"#{rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_RUBY_REF -> #{rev}") else puts("#{tf} already pinned to #{rev}") end; \
-			end' docker/Dockerfile "$$rev" campaigns/*.rb && \
-		$(MAKE) docker-build RUBY_GIT_REF="$$rev"
+				if tcur != ruby_rev then ts.sub!(/^DEFAULT_RUBY_REF = "[^"]+"/, "DEFAULT_RUBY_REF = \"#{ruby_rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_RUBY_REF -> #{ruby_rev}") else puts("#{tf} already pinned to #{ruby_rev}") end; \
+			end' docker/Dockerfile "$$prism_rev" "$$ruby_rev" campaigns/*.rb && \
+		$(MAKE) docker-build RUBY_GIT_REF="$$ruby_rev"
 
 targets-sync topology-sync:
 	$(Q) $(TARGETS_ENV) ruby ./bin/topology.rb sync --topology "$(TOPOLOGY)" $(TARGETS_ARGS)

@@ -56,7 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Pin an explicit ruby/ruby commit SHA (or override with RUBY_GIT_REF=...).
 # Targets at other refs can also be built incrementally into build/targets/ruby/.
-ARG RUBY_GIT_REF=dec1bb786f718840e7ea828fafdcc3cd29c64448
+ARG RUBY_GIT_REF=b50e6d6938b881ec9e83c6dc9e15b12864527f19
 ENV RUBY_ORACLE_DIR=/opt/ruby
 RUN apt-get update && apt-get install -y --no-install-recommends ruby \
     && git init /opt/ruby \
