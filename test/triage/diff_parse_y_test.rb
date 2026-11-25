@@ -194,20 +194,22 @@ class TriageDiffParseYTest < Minitest::Test
       assert_equal 1, zero_er_rep["failed"], "expected failed=1 for MOCK_DIFF_ZERO_ER: #{zero_er_rep.inspect}"
       assert_includes zero_er_rep.dig("failures", 0, "output").to_s, "ast_zero_error_recovery"
 
-      # Unfiltered ast_block_owner_mismatch fails verify_runner under diff_parse_y.
-      File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("BEGIN{E{}\nBEGIN{N{}}}\n"))
+      # Unfiltered synthetic AST mismatch fails verify_runner under diff_parse_y
+      # (independent of upstream Prism fixes).
+      File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("MOCK_DIFF_AST_MISMATCH\n"))
       fail_out, fail_err, fail_st = run_cmd(
         verify_bucket_sh,
-        "--repo-root", prism_dir,
+        "--repo-root", mock_diff_prism,
         "--fuzz-root", root_dir,
         "--bucket-dir", diff_bucket,
         "--json",
-        env: { "VERIFY_BUILD_DIR" => diff_verify_build }
+        env: { "VERIFY_BUILD_DIR" => mock_prism_verify_build }
       )
       assert_equal 1, fail_st.exitstatus,
                    "expected verify_bucket.sh diff_parse_y FAIL exit 1, got #{fail_st.exitstatus}\nstdout=#{fail_out}\nstderr=#{fail_err}"
       fail_rep = JSON.parse(fail_out)
       assert_equal 1, fail_rep["failed"], "expected failed=1 for unfiltered divergence: #{fail_rep.inspect}"
+      assert_includes fail_rep.dig("failures", 0, "output").to_s, "ast_tree_mismatch"
 
       # Fatal CRuby parse.y signals must report WIFSIGNALED cleanly with CRASH[diff_parse_y]
       # instead of silently swallowing signals, respect FUZZ_DIFF_BACKTRACE=0, and stay
@@ -1039,6 +1041,12 @@ class TriageDiffParseYTest < Minitest::Test
               if (prog->statements != NULL && prog->statements->body.size > 0) {
                   static pm_error_recovery_node_t mock_er = { .base = { .type = PM_ERROR_RECOVERY_NODE, .location = { .start = 0, .length = 1 } }, .unexpected = NULL };
                   prog->statements->body.nodes[0] = &mock_er.base;
+              }
+          }
+          if (node != NULL && parser->end - parser->start >= 22 && memcmp(parser->start, "MOCK_DIFF_AST_MISMATCH", 22) == 0 && PM_NODE_TYPE_P(node, PM_PROGRAM_NODE)) {
+              pm_program_node_t *prog = (pm_program_node_t *) node;
+              if (prog->statements != NULL && prog->statements->body.size > 0) {
+                  prog->statements->body.size = 0;
               }
           }
     C

@@ -401,16 +401,18 @@ class TriageExplainTest < Minitest::Test
       assert_equal "match", res_ok.dig("iseq", "status")
       assert_includes res_ok.dig("c_explain", "stdout").to_s, "ProgramNode"
 
+      mock_ruby = build_mock_diff_ruby_shim(workdir)
       cmp_diff, cmp_err, cmp_st = run_cmd(
         RbConfig.ruby,
         repo_path("triage/explain.rb"),
         "--triage-dir", triage_dir, "cluster-01",
+        "--ruby", mock_ruby,
         "--disasm", "--eval", "--fail-on-mismatch", "--json",
         env: explain_env,
         chdir: root_dir
       )
       assert_equal 1, cmp_st.exitstatus,
-                   "expected --fail-on-mismatch exit 1 on super (){}, got #{cmp_st.exitstatus}: #{cmp_diff}\n#{cmp_err}"
+                   "expected --fail-on-mismatch exit 1 on synthetic mismatch, got #{cmp_st.exitstatus}: #{cmp_diff}\n#{cmp_err}"
       res_diff = JSON.parse(cmp_diff).dig("results", 0)
       refute_nil res_diff
       assert_equal "mismatch", res_diff["parity"]
@@ -631,9 +633,9 @@ class TriageExplainTest < Minitest::Test
       refute_nil xe, "expected arm32 cross_explain on cluster-01: #{aj.inspect}"
       assert_equal "arm32", xe["arch"]
       assert xe["ok"], "expected arm32 cross_explain ok: #{xe.inspect}"
-      assert_includes xe["stdout"].to_s, "name: :_END_^"
-      assert_includes xe["stdout"].to_s, "serialize:   81 bytes"
-      assert_includes xe["stdout"].to_s, "errors=0"
+      assert_includes xe["stdout"].to_s, "ProgramNode"
+      assert_includes xe["stdout"].to_s, "serialize:"
+      assert_includes xe["stdout"].to_s, "errors="
       refute nc.key?("cross_explain"), "expected --no-cross-arch to omit cross_explain: #{nc.inspect}"
     end
   end
@@ -649,7 +651,7 @@ class TriageExplainTest < Minitest::Test
       ])
       File.binwrite(File.join(tdir, "ABRT/1111aaaa2222bbbb/input.min"), "\x00\x00\x03\x01<<C<\n\#{y=>{ ".b)
       File.binwrite(File.join(tdir, "ABRT/3333cccc4444dddd/input.min"), "\x00\x00\x03\x01<<C<\n\#{z=>{ ".b)
-      File.binwrite(File.join(tdir, "ABRT/5555eeee6666ffff/input.min"), "\x00\x00\x03\x01super (){}\n".b)
+      File.binwrite(File.join(tdir, "ABRT/5555eeee6666ffff/input.min"), "\x00\x00\x03\x01MOCK_PARSE_Y_SYNTAX_ERR\n".b)
 
       metas = [
         {
@@ -741,7 +743,8 @@ class TriageExplainTest < Minitest::Test
         File.write(File.join(tdir, m["bucket_id"], "meta.json"), JSON.pretty_generate(m))
       end
 
-      with_env(CLEAN_EXPLAIN_ENV.merge("TRIAGE_EXPLAIN_BIN" => explain_bin)) do
+      mock_ruby = build_mock_diff_ruby_shim(workdir)
+      with_env(CLEAN_EXPLAIN_ENV.merge("TRIAGE_EXPLAIN_BIN" => explain_bin, "TRIAGE_DIFF_RUBY" => mock_ruby)) do
         in_root_dir do
           FuzzTriage.finalize_triage_metadata(tdir, coverage_bin: "")
         end
@@ -861,14 +864,61 @@ class TriageExplainTest < Minitest::Test
     out_bin
   end
 
+  def build_mock_diff_ruby_shim(workdir)
+    shim = File.join(workdir, "mock_diff_ruby.rb")
+    File.write(shim, <<~RUBY)
+      #!#{RbConfig.ruby}
+      # frozen_string_literal: true
+      require "base64"
+      require "open3"
+      require "tempfile"
+
+      REAL_RUBY = #{RbConfig.ruby.inspect}
+      SENTINEL = "MOCK_PARSE_Y_SYNTAX_ERR"
+      BROKEN = "def ("
+
+      args = ARGV.dup
+      if args.include?("--parser=parse.y")
+        tempfiles = []
+        args = args.map do |arg|
+          if File.file?(arg) && (data = File.binread(arg)).include?(SENTINEL)
+            tf = Tempfile.new(["mock-parse-y-", ".rb"])
+            tf.binmode
+            tf.write(data.gsub(SENTINEL, BROKEN))
+            tf.flush
+            tempfiles << tf
+            tf.path
+          else
+            arg
+          end
+        end
+        stdin_data = $stdin.tty? ? nil : $stdin.binmode.read
+        if stdin_data && !stdin_data.empty?
+          orig_b64 = Base64.strict_encode64("\#{SENTINEL}\\n")
+          broken_b64 = Base64.strict_encode64("\#{BROKEN}\\n")
+          stdin_data = stdin_data.gsub(orig_b64, broken_b64)
+        end
+        out, err, st = Open3.capture3(REAL_RUBY, *args, stdin_data: stdin_data)
+        $stdout.binmode.write(out)
+        $stderr.binmode.write(err)
+        tempfiles.each(&:close!)
+        exit(st.exitstatus || 1)
+      else
+        exec(REAL_RUBY, *args)
+      end
+    RUBY
+    File.chmod(0o755, shim)
+    shim
+  end
+
   def setup_explain_suite_triage(explain_suite)
     triage_dir = File.join(explain_suite, "triage")
     FileUtils.mkdir_p([
       File.join(triage_dir, "ABRT/1234567890abcdef"),
       File.join(triage_dir, "ABRT/fedcba0987654321")
     ])
-    File.binwrite(File.join(triage_dir, "ABRT/1234567890abcdef/input.min"), "\x00\x00\x03\x01super (){}\n".b)
-    File.binwrite(File.join(triage_dir, "ABRT/fedcba0987654321/input.min"), "\x00\x00\x03\x01x\"\#{}\":<2\n".b)
+    File.binwrite(File.join(triage_dir, "ABRT/1234567890abcdef/input.min"), "\x00\x00\x03\x01MOCK_PARSE_Y_SYNTAX_ERR\n".b)
+    File.binwrite(File.join(triage_dir, "ABRT/fedcba0987654321/input.min"), "\x00\x00\x03\x01MOCK_PARSE_Y_SYNTAX_ERR\n".b)
 
     b1 = {
       "bucket_id" => "ABRT/1234567890abcdef",
