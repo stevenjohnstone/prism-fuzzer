@@ -519,8 +519,10 @@ if [ ! -f "$KEYED_ORACLE_ARCHIVE" ] || [ ! -f "$ORACLE_ARCHIVE" ] || [ ! -f "$OR
 fi
 
 LINK_EXPORT_FLAGS=()
+WRAP_BUGREPORT_CFLAGS=()
 if [ "$(uname -s)" = "Linux" ]; then
-  LINK_EXPORT_FLAGS=("-Wl,--export-dynamic")
+  LINK_EXPORT_FLAGS=("-Wl,--export-dynamic" "-Wl,--wrap=rb_vm_bugreport")
+  WRAP_BUGREPORT_CFLAGS=(-DFUZZ_WRAP_RB_VM_BUGREPORT)
 fi
 
 mapfile -t PROVENANCE_CFLAGS < <(ruby -r"${FUZZ_ROOT}/runtime/provenance" -e '
@@ -557,6 +559,7 @@ if [ "$MODE" = "fuzz" ]; then
     ${ASAN_UAR_FLAGS[@]+"${ASAN_UAR_FLAGS[@]}"}
     ${HARDEN_CFLAGS[@]+"${HARDEN_CFLAGS[@]}"}
     ${HARNESS_SAN_FLAGS[@]+"${HARNESS_SAN_FLAGS[@]}"}
+    ${WRAP_BUGREPORT_CFLAGS[@]+"${WRAP_BUGREPORT_CFLAGS[@]}"}
     ${PROVENANCE_CFLAGS[@]+"${PROVENANCE_CFLAGS[@]}"}
     "-I$FUZZ_ROOT/harnesses/prism"
     "-I$FUZZ_ROOT/harnesses/prism/include"
@@ -605,6 +608,7 @@ elif [ "$MODE" = "verify" ]; then
     ${ASAN_UAR_FLAGS[@]+"${ASAN_UAR_FLAGS[@]}"}
     ${HARDEN_CFLAGS[@]+"${HARDEN_CFLAGS[@]}"}
     ${HARNESS_SAN_FLAGS[@]+"${HARNESS_SAN_FLAGS[@]}"}
+    ${WRAP_BUGREPORT_CFLAGS[@]+"${WRAP_BUGREPORT_CFLAGS[@]}"}
     ${PROVENANCE_CFLAGS[@]+"${PROVENANCE_CFLAGS[@]}"}
     "-I$FUZZ_ROOT/harnesses/prism"
     "-I$FUZZ_ROOT/harnesses/prism/include"

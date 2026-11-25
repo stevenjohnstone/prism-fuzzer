@@ -89,13 +89,15 @@ module FuzzTriage
       env = {
         "AFL_NO_IJON" => "1",
         "AFL_TMIN_EXACT" => "1",
+        "FUZZ_DIFF_BACKTRACE" => "0",
         "ASAN_OPTIONS" => "#{asan_opts}:symbolize=0",
         "UBSAN_OPTIONS" => "abort_on_error=1:symbolize=0",
         "MSAN_OPTIONS" => "exit_code=86:abort_on_error=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}:symbolize=0"
       }
+      tmin_ms = Integer(ENV.fetch("AFL_TMIN_HANG_MS", "500")).to_s
       run_bounded_pgroup(
         env,
-        "afl-tmin", "-H", "-t", "500", "-i", crash, "-o", minimized_input, "--", executable,
+        "afl-tmin", "-H", "-t", tmin_ms, "-i", crash, "-o", minimized_input, "--", executable, "@@",
         max_time_sec: max_time_sec
       )
     end

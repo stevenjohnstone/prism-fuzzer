@@ -785,4 +785,137 @@ class TriagePipelineTest < Minitest::Test
       end
     end
   end
+
+  def test_hang_minimization_drift_preserves_original_hang_and_triages_crash
+    afl_cc = find_executable("afl-clang-fast")
+    afl_tmin = find_executable("afl-tmin")
+    afl_so = repo_path("build/afl/SanitizerCoveragePCGUARD.so")
+    skip "missing afl-clang-fast / afl-tmin / PCGUARD pass (run inside Docker)" unless afl_cc && afl_tmin && File.file?(afl_so)
+
+    with_tmpdir("triage-hang-drift-") do |workdir|
+      src = File.join(workdir, "hang_drift_target.c")
+      bin = File.join(workdir, "fuzz.hang_drift")
+      File.write(src, <<~'C')
+        #define _GNU_SOURCE
+        #include <stdint.h>
+        #include <stdio.h>
+        #include <stdlib.h>
+        #include <string.h>
+        #include <time.h>
+        #include <unistd.h>
+
+        static void sleep_ms(long ms) {
+            struct timespec ts = { ms / 1000, (ms % 1000) * 1000000L };
+            nanosleep(&ts, NULL);
+        }
+
+        int main(int argc, char **argv) {
+            FILE *f = (argc >= 2) ? fopen(argv[1], "rb") : stdin;
+            if (!f) return 0;
+            uint8_t buf[512];
+            size_t n = fread(buf, 1, sizeof(buf), f);
+            if (f != stdin) fclose(f);
+            if (n < 4) return 0;
+
+            const uint8_t *body = buf + 4;
+            size_t len = n - 4;
+            if (len >= 9 && memmem(body, len, "PURE_HANG", 9) != NULL) {
+                for (;;) { sleep_ms(50); }
+            }
+            if (len >= 80 && memmem(body, len, "INFINITE_LOOP", 13) != NULL &&
+                memmem(body, len, "SLOW_BOOM", 9) != NULL) {
+                for (;;) { sleep_ms(50); }
+            }
+            if (len >= 9 && memmem(body, len, "SLOW_BOOM", 9) != NULL) {
+                sleep_ms(140);
+                fprintf(stderr, "fuzz: src/prism.c:77: slow_boom: Assertion `0' failed.\n");
+                fflush(stderr);
+                abort();
+            }
+            return 0;
+        }
+      C
+      assert_cmd(
+        afl_cc, "-O1", "-std=c99", src, "-o", bin,
+        env: { "AFL_PATH" => repo_path("build/afl"), "AFL_LLVM_INSTRUMENT" => "PCGUARD" }
+      )
+
+      env = CLEAN_TRIAGE_ENV.merge(
+        "TRIAGE_HANG_TIMEOUT" => "1",
+        "AFL_TMIN_HANG_MS" => "50",
+        "TRIAGE_HANG_MINIMIZE_MAX_TIME" => "10"
+      )
+
+      # 1. Pure hang minimizes cleanly via afl-tmin (`@@`) and keeps minimized_matches_signature = true.
+      pure_afl = File.join(workdir, "afl_pure")
+      pure_hangs = File.join(pure_afl, "w1", "hangs")
+      pure_triage = File.join(workdir, "triage_pure")
+      FileUtils.mkdir_p([pure_hangs, pure_triage])
+      File.write(File.join(pure_afl, "w1", "cmdline"), "#{bin}\n")
+      pure_orig = "\x00\x00\x03\x01" + ("pad_line = 1\n" * 6) + "PURE_HANG\n"
+      File.binwrite(File.join(pure_hangs, "id:000000,src:000001"), pure_orig)
+
+      capture_io do
+        with_env(env) do
+          FuzzTriage.run_triage_pipeline(
+            output_dirs: [pure_afl],
+            testcases_dir: pure_triage,
+            coverage_bin: "",
+            diff_coverage_bin: "",
+            threads: 1
+          )
+        end
+      end
+
+      pure_bdir = Dir.glob(File.join(pure_triage, "hang", "*")).first
+      refute_nil pure_bdir
+      pure_min = File.binread(File.join(pure_bdir, "input.min"))
+      pure_meta = JSON.parse(File.read(File.join(pure_bdir, "meta.json")))
+      assert_includes pure_min, "PURE_HANG"
+      assert_operator pure_min.bytesize, :<, pure_orig.bytesize
+      assert_equal true, pure_meta.dig("input", "minimized_matches_signature")
+
+      # 2. Compound input: genuinely hangs (>1s) when len >= 80 via INFINITE_LOOP + SLOW_BOOM,
+      #    but once afl-tmin -H -t 50 trims below 80B it hits SLOW_BOOM (140ms > 50ms), drifting to an ABRT!
+      afl_dir = File.join(workdir, "afl")
+      hangs_dir = File.join(afl_dir, "w1", "hangs")
+      triage_dir = File.join(workdir, "triage")
+      FileUtils.mkdir_p([hangs_dir, triage_dir])
+      File.write(File.join(afl_dir, "w1", "cmdline"), "#{bin}\n")
+
+      orig_hang_bytes = "\x00\x00\x03\x01INFINITE_LOOP\n" + ("pad_line = 1\n" * 6) + "SLOW_BOOM\n"
+      File.binwrite(File.join(hangs_dir, "id:000000,src:000001"), orig_hang_bytes)
+
+      log_out, = capture_io do
+        with_env(env) do
+          FuzzTriage.run_triage_pipeline(
+            output_dirs: [afl_dir],
+            testcases_dir: triage_dir,
+            coverage_bin: "",
+            diff_coverage_bin: "",
+            threads: 1
+          )
+        end
+      end
+
+      hang_dirs = Dir.glob(File.join(triage_dir, "hang", "*")).select { |d| File.directory?(d) }
+      assert_equal 1, hang_dirs.size, "expected 1 hang bucket under #{triage_dir}, log:\n#{log_out}"
+      hang_bdir = hang_dirs.first
+      hang_min = File.binread(File.join(hang_bdir, "input.min"))
+      hang_meta = JSON.parse(File.read(File.join(hang_bdir, "meta.json")))
+
+      assert_equal orig_hang_bytes, hang_min,
+                   "expected original hang bytes preserved when afl-tmin drifted to an abort"
+      assert_includes hang_min, "INFINITE_LOOP"
+      assert_equal false, hang_meta.dig("input", "minimized_matches_signature")
+      assert_includes log_out, "hang minimization drifted to crash; preserving original hang"
+
+      # And the uncovered SLOW_BOOM abort must ALSO be triaged into its own ABRT bucket!
+      abrt_dirs = Dir.glob(File.join(triage_dir, "ABRT", "*")).select { |d| File.directory?(d) }
+      assert_equal 1, abrt_dirs.size, "expected drifted abort to be triaged into ABRT/, log:\n#{log_out}"
+      abrt_min = File.binread(File.join(abrt_dirs.first, "input.min"))
+      assert_includes abrt_min, "SLOW_BOOM"
+      refute_includes abrt_min, "INFINITE_LOOP"
+    end
+  end
 end

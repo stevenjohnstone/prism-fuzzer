@@ -822,6 +822,21 @@ class TriageDiffParseYTest < Minitest::Test
         "--output", mock_pipeline
       )
 
+      # Verify FUZZ_DIFF_BACKTRACE=0 skips CRuby's ~400ms rb_vm_bugreport DWARF walk while default keeps it.
+      rb_bug_path = File.join(workdir, "rb_bug.bin")
+      File.binwrite(rb_bug_path, seed_bytes("MOCK_PIPE_RB_BUG\n"))
+      _fo, fast_err, fast_st = run_cmd(mock_pipeline, rb_bug_path, env: { "FUZZ_DIFF_BACKTRACE" => "0" })
+      refute fast_st.success?
+      assert_includes fast_err, "[BUG] mock rb_bug fast abort check"
+      refute_includes fast_err, "C level backtrace information",
+                      "expected FUZZ_DIFF_BACKTRACE=0 to skip rb_vm_bugreport DWARF backtrace"
+
+      _so, sym_err, sym_st = run_cmd(mock_pipeline, rb_bug_path, env: { "FUZZ_DIFF_BACKTRACE" => "1" })
+      refute sym_st.success?
+      assert_includes sym_err, "[BUG] mock rb_bug fast abort check"
+      assert_includes sym_err, "C level backtrace information",
+                      "expected FUZZ_DIFF_BACKTRACE=1 to preserve full CRuby C backtrace"
+
       afl_crashes = File.join(workdir, "afl", "pipeline-main", "crashes")
       triage_dir = File.join(workdir, "triage")
       corpus_dir = File.join(workdir, "corpus")
@@ -1074,6 +1089,9 @@ class TriageDiffParseYTest < Minitest::Test
     src = src.sub(
       iseq_cb,
       iseq_cb +
+      "    if (RSTRING_LEN(arg->src_str) >= 16 && memcmp(RSTRING_PTR(arg->src_str), \"MOCK_PIPE_RB_BUG\", 16) == 0) {\n" \
+      "        rb_bug(\"mock rb_bug fast abort check\");\n" \
+      "    }\n" \
       "    if (RSTRING_LEN(arg->src_str) >= 18 && memcmp(RSTRING_PTR(arg->src_str), \"MOCK_PIPE_INTERNAL\", 18) == 0) {\n" \
       "        rb_raise(rb_eSyntaxError, \"<compiled>:1: iseq_set_sequence: adjust bug 0 < 1\");\n" \
       "    }\n" \

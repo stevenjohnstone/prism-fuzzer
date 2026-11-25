@@ -437,6 +437,18 @@ void diff_fail_syntax_mismatch(
 int diff_oracle_initialized = 0;
 static volatile sig_atomic_t diff_print_backtrace_enabled = 1;
 
+#ifdef FUZZ_WRAP_RB_VM_BUGREPORT
+extern bool __real_rb_vm_bugreport(const void *ctx, FILE *errout);
+
+__attribute__((visibility("default")))
+bool __wrap_rb_vm_bugreport(const void *ctx, FILE *errout) {
+    if (!diff_print_backtrace_enabled) {
+        return true;
+    }
+    return __real_rb_vm_bugreport(ctx, errout);
+}
+#endif
+
 #if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
 #define DIFF_ASAN_ACTIVE 1
 #else

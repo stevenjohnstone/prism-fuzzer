@@ -276,6 +276,7 @@ module FuzzTriage
         semaphore.synchronize { FileUtils.mkdir_p(parent_dir) }
         staging_dir = Dir.mktmpdir(".tmp-", parent_dir)
         published = false
+        drifted_hang_crash_bytes = nil
         begin
           minimized_input = File.join(staging_dir, "input.min")
           minimized_matches_sig = nil
@@ -293,7 +294,24 @@ module FuzzTriage
             ensure
               semaphore.synchronize { active_minimizations.delete(crash) } if active_minimizations
             end
-            if reason != "hang"
+            if reason == "hang"
+              if File.binread(minimized_input) == File.binread(crash_input)
+                minimized_matches_sig = true
+              else
+                _min_out, min_crashed, min_timed_out = with_testcase_timeout(env_hang_timeout_seconds) do
+                  run_testcase(executable, minimized_input, symbolize: false)
+                end
+                if min_timed_out
+                  minimized_matches_sig = true
+                else
+                  drifted_hang_crash_bytes = File.binread(minimized_input) if min_crashed
+                  FileUtils.cp(crash_input, minimized_input)
+                  minimized_matches_sig = false
+                  drift_kind = min_crashed ? "crash" : "non-hang"
+                  puts "#{crash}: hang minimization drifted to #{drift_kind}; preserving original hang in #{bucket_id}"
+                end
+              end
+            else
               min_output, min_crashed, = run_testcase(executable, minimized_input, symbolize: true)
               if min_crashed
                 minimized_matches_sig = testcase_output_signature(min_output, sig_lines) == signature
@@ -436,6 +454,55 @@ module FuzzTriage
           end
         end
         puts "#{crash} complete => #{target_directory}"
+
+        if drifted_hang_crash_bytes
+          Dir.mktmpdir("hang-drift-") do |drift_tmp|
+            worker_sub = File.basename(File.dirname(crash_dir))
+            drift_crashes_dir = File.join(drift_tmp, worker_sub, "crashes")
+            FileUtils.mkdir_p(drift_crashes_dir)
+            drift_path = File.join(drift_crashes_dir, File.basename(crash))
+            File.binwrite(drift_path, drifted_hang_crash_bytes)
+            drift_sha = Digest::SHA2.hexdigest(drifted_hang_crash_bytes)
+            drift_occ = occ_record.merge(
+              "sha256" => drift_sha,
+              "size_bytes" => drifted_hang_crash_bytes.bytesize
+            )
+            merged_occ_overrides = (occurrence_overrides || {}).merge(drift_sha => drift_occ)
+            merged_ver_overrides = if fuzz_versions_overrides&.key?(crash_hash)
+                                     fuzz_versions_overrides.merge(drift_sha => fuzz_versions_overrides[crash_hash])
+                                   else
+                                     fuzz_versions_overrides
+                                   end
+            process_crash(
+              drift_crashes_dir,
+              drift_path,
+              worker_executable,
+              semaphore,
+              in_progress,
+              pending_sentinels,
+              pending_occurrences,
+              pending_inputs,
+              recorded_hashes,
+              archived_hashes,
+              testcases_dir: testcases_dir,
+              occurrence_overrides: merged_occ_overrides,
+              fuzz_versions_overrides: merged_ver_overrides,
+              pending_hashes: pending_hashes,
+              pending_retries: pending_retries,
+              recount: recount,
+              minimize_enabled: minimize_enabled,
+              sentinel_states: sentinel_states,
+              published_buckets: published_buckets,
+              loaded_buckets: loaded_buckets,
+              bucket_load_mutex: bucket_load_mutex,
+              buffered_occurrences: buffered_occurrences,
+              buffered_inputs: buffered_inputs,
+              buffered_sentinels: buffered_sentinels,
+              dup_log_counts: dup_log_counts,
+              active_minimizations: active_minimizations
+            )
+          end
+        end
       ensure
         normalized_crash_file&.close!
         semaphore.synchronize { in_progress.delete(crash_hash) unless handed_off_to_leader || released_in_progress }

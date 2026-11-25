@@ -119,6 +119,21 @@ static inline void compile_ijon_record(uint32_t salt, uint32_t val) {
 static int g_compile_initialized = 0;
 static volatile sig_atomic_t g_print_backtrace_enabled = 1;
 
+#ifdef FUZZ_WRAP_RB_VM_BUGREPORT
+extern bool __real_rb_vm_bugreport(const void *ctx, FILE *errout);
+
+/* Skip CRuby's ~400ms DWARF addr2line walk inside rb_vm_bugreport when running
+ * under afl-fuzz (FUZZ_DIFF_BACKTRACE=0) so rb_bug / RUBY_ASSERT aborts in <1ms
+ * instead of tripping AFL++'s hang timeout; triage/CLI runs keep full traces. */
+__attribute__((visibility("default")))
+bool __wrap_rb_vm_bugreport(const void *ctx, FILE *errout) {
+    if (!g_print_backtrace_enabled) {
+        return true;
+    }
+    return __real_rb_vm_bugreport(ctx, errout);
+}
+#endif
+
 static VALUE g_rb_mAST = Qnil;
 static VALUE g_rb_cISeq = Qnil;
 #ifdef FUZZ_CRUBY_PIPELINE_DIFF
