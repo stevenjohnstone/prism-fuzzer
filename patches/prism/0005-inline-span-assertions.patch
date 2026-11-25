@@ -7,9 +7,9 @@ Subject: [PATCH] Add optional inline AST and diagnostic span invariant
 ---
  include/prism/internal/fuzz_assert.h | 131 +++++++++++++++++++++++++++
  include/prism/internal/node.h        |  10 ++
- src/prism.c                          | 129 +++++++++++++++++++++++++-
+ src/prism.c                          | 144 +++++++++++++++++++++++++-
  templates/src/node.c.erb             |  28 ++++++
- 4 files changed, 295 insertions(+), 3 deletions(-)
+ 4 files changed, 310 insertions(+), 3 deletions(-)
  create mode 100644 include/prism/internal/fuzz_assert.h
 
 diff --git a/include/prism/internal/fuzz_assert.h b/include/prism/internal/fuzz_assert.h
@@ -184,7 +184,7 @@ diff --git a/src/prism.c b/src/prism.c
 index c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae..9cec0d9879f82244589290d36936caf7484b39fe 100644
 --- a/src/prism.c
 +++ b/src/prism.c
-@@ -94,14 +94,108 @@ pm_version(void) {
+@@ -94,14 +94,123 @@ pm_version(void) {
  #define FL PM_NODE_FLAGS
  #define UP PM_NODE_UPCAST
  
@@ -217,7 +217,22 @@ index c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae..9cec0d9879f82244589290d36936caf7
 +
 +static PRISM_INLINE uint32_t
 +pm_fuzz_token_end(const pm_parser_t *parser, const pm_token_t *token, const char *site) {
-+    pm_fuzz_validate_token(parser, token, "token_end", site);
++    /*
++     * During lexer whitespace/heredoc chomping, parser->current.end is used as
++     * the live cursor before parser->current.start is updated for the next
++     * token (e.g. rewinding to heredoc_end). Validate only token->end bounds
++     * here; full token->end >= token->start checks still run in
++     * PM_TOKEN_START, PM_TOKEN_LENGTH, PM_TOKENS_LENGTH, and node span setters.
++     */
++    if (PRISM_UNLIKELY(token == NULL || token->end == NULL)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=token_end kind=null_token\n", site);
++    }
++    if (PRISM_UNLIKELY(token->end < parser->start)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=token_end kind=start_underflow\n", site);
++    }
++    if (PRISM_UNLIKELY(token->end > parser->end)) {
++        pm_fuzz_span_fail("INVARIANT[node_location]: site=%s op=token_end kind=end_oob\n", site);
++    }
 +    return U32(token->end - parser->start);
 +}
 +
@@ -296,7 +311,7 @@ index c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae..9cec0d9879f82244589290d36936caf7
  #define PM_NODES_LENGTH(left_, right_) (PM_NODE_END(right_) - PM_NODE_START(left_))
  
  #define PM_TOKEN_NODE_LENGTH(parser_, token_, node_) (PM_NODE_END(node_) - PM_TOKEN_START(parser_, token_))
-@@ -128,6 +222,7 @@ pm_location_init(uint32_t start, uint32_t length) {
+@@ -128,6 +237,7 @@ pm_location_init(uint32_t start, uint32_t length) {
  
  #define PM_LOCATION_INIT(start_, length_) pm_location_init((start_), (length_))
  #define PM_LOCATION_INIT_BOUNDS(start_, end_) PM_LOCATION_INIT((start_), U32((end_) - (start_)))
@@ -304,7 +319,7 @@ index c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae..9cec0d9879f82244589290d36936caf7
  #define PM_LOCATION_INIT_UNSET PM_LOCATION_INIT(0, 0)
  #define PM_LOCATION_INIT_TOKEN(parser_, token_) PM_LOCATION_INIT(PM_TOKEN_START(parser_, token_), PM_TOKEN_LENGTH(token_))
  #define PM_LOCATION_INIT_NODE(node_) UP(node_)->location
-@@ -467,8 +562,33 @@ lex_state_set(pm_parser_t *parser, pm_lex_state_t state) {
+@@ -467,8 +577,33 @@ lex_state_set(pm_parser_t *parser, pm_lex_state_t state) {
  /**
   * Append an error to the list of errors on the parser.
   */
@@ -338,7 +353,7 @@ index c16ce48377202eb3dfecc5b4efb7cfb63ec6d5ae..9cec0d9879f82244589290d36936caf7
      pm_diagnostic_list_append(&parser->metadata_arena, &parser->error_list, start, length, diag_id);
  }
  
-@@ -576,6 +696,9 @@ pm_parser_err_node_content(pm_parser_t *parser, const pm_node_t *node, pm_diagno
+@@ -576,6 +711,9 @@ pm_parser_err_node_content(pm_parser_t *parser, const pm_node_t *node, pm_diagno
   */
  static PRISM_INLINE void
  pm_parser_warn(pm_parser_t *parser, uint32_t start, uint32_t length, pm_diagnostic_id_t diag_id) {

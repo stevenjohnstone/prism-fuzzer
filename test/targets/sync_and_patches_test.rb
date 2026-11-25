@@ -485,6 +485,68 @@ class TargetsSyncAndPatchesTest < Minitest::Test
     end
   end
 
+  def test_inline_span_assertions_allow_rewound_lexer_cursor_in_token_end
+    pa = prism_a_dir
+    skip "requires synced prism_a checkout" unless pa && File.exist?(File.join(pa, ".git"))
+    cc = find_executable("cc") || find_executable("clang") || find_executable("gcc")
+    skip "requires C compiler" unless cc
+
+    with_tmpdir("inline-assert-token-end-") do |workdir|
+      src_copy = File.join(workdir, "prism")
+      FileUtils.mkdir_p(src_copy)
+
+      archive_tar = File.join(workdir, "prism.tar")
+      assert_cmd("git", "-C", pa, "archive", "--output", archive_tar, "HEAD")
+      assert_cmd("tar", "-xf", archive_tar, "-C", src_copy)
+      assert_cmd("git", "-C", src_copy, "apply", repo_path("patches/prism/0005-inline-span-assertions.patch"))
+
+      # Copy generated C sources (e.g. node.c, token_type.c, diagnostic.c) not tracked in git.
+      Dir.glob(File.join(pa, "src", "*.c")).each do |gen_c|
+        dest = File.join(src_copy, "src", File.basename(gen_c))
+        FileUtils.cp(gen_c, dest) unless File.exist?(dest)
+      end
+
+      driver = File.join(workdir, "driver.c")
+      bin = File.join(workdir, "driver")
+      File.write(driver, <<~'C')
+        #include "prism.h"
+        #include <stdio.h>
+        #include <string.h>
+
+        int main(void) {
+            /* Unterminated heredoc followed by '\r': parser_lex rewinds
+             * parser->current.end before parser->current.start during
+             * whitespace chomping before emitting PM_WARN_UNEXPECTED_CARRIAGE_RETURN. */
+            const char *src = "<<S\r";
+            pm_arena_t *arena = pm_arena_new();
+            pm_parser_t *parser = pm_parser_new(arena, (const uint8_t *) src, strlen(src), NULL);
+            pm_node_t *node = pm_parse(parser);
+            (void) node;
+            pm_parser_free(parser);
+            pm_arena_free(arena);
+            puts("OK");
+            return 0;
+        }
+      C
+
+      c_sources = Dir.glob(File.join(src_copy, "src", "*.c")).sort
+      assert_cmd(
+        cc, "-O1", "-std=c99",
+        "-DPRISM_FUZZ_INLINE_ASSERTS",
+        "-DPRISM_EXCLUDE_JSON",
+        "-DPRISM_EXCLUDE_PRETTYPRINT",
+        "-I", File.join(src_copy, "include"),
+        "-I", File.join(src_copy, "src"),
+        "-I", File.join(pa, "include"),
+        driver, *c_sources,
+        "-o", bin
+      )
+
+      out, = assert_cmd(bin, msg: "expected <<S\\r not to trigger false-positive PM_TOKEN_END underflow")
+      assert_equal "OK", out.strip
+    end
+  end
+
   private
 
   def topo_cli
