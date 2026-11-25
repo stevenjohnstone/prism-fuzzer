@@ -1,0 +1,2 @@
+@��item, y, baz =*[/(?:あいう|λ)+[あ-ん]/, /(?x-i)foo # ext comment
+  (?i-x)bar/imx], 0.0000000000000003r, :bar

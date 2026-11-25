@@ -1,0 +1,986 @@
+{
+  "schema_version": 1,
+  "bucket_id": "stack-overflow/37c5fc0b4a58eb79",
+  "reason": "stack-overflow",
+  "signature": "37c5fc0b4a58eb79",
+  "reproducible": true,
+  "timed_out": false,
+  "reproduced_by": "fuzz.ijon.asan",
+  "verify_profile": "asan_ubsan",
+  "occurrences": {
+    "count": 8,
+    "by_fuzzer": {
+      "afl-8k": 8
+    },
+    "by_worker": {
+      "8k-main": 8
+    },
+    "by_queue": {
+      "crashes": 8
+    },
+    "first_seen": "2026-11-25T00:38:01Z",
+    "first_elapsed_ms": 6850877,
+    "last_seen": "2026-11-25T10:21:17Z",
+    "sample_crashes": [
+      {
+        "sha256": "27d48e04f6b0736231cf0b72c6a4c460ce352b347b070454cc65dbb7ee0467cd",
+        "fuzzer": "afl-8k",
+        "worker": "8k-main",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-main/crashes/id:000313,sig:06,src:003498,time:6850877,execs:16392477,op:havoc,rep:12",
+        "mtime": "2026-11-25T00:38:01Z"
+      },
+      {
+        "sha256": "06a027fab7da70761ce0dde8a5c5a13a28a4ec3d184bc5651f6837089a3e4227",
+        "fuzzer": "afl-8k",
+        "worker": "8k-main",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-main/crashes/id:000349,sig:06,src:001238,time:8705104,execs:21087346,op:havoc,rep:2",
+        "mtime": "2026-11-25T01:08:55Z"
+      },
+      {
+        "sha256": "ff576623ed7032de2d02233946306344af0dface454d005e67dd10b05444e128",
+        "fuzzer": "afl-8k",
+        "worker": "8k-main",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-main/crashes/id:000449,sig:06,src:001822,time:13877455,execs:33530013,op:havoc,rep:13",
+        "mtime": "2026-11-25T02:35:08Z"
+      },
+      {
+        "sha256": "0bf07858f87fd4bbb82f9cb1209c039fea04f092f2f3de9a0e219ad161d154d3",
+        "fuzzer": "afl-8k",
+        "worker": "8k-main",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-main/crashes/id:000475,sig:06,src:000167,time:16502172,execs:38883130,op:havoc,rep:1",
+        "mtime": "2026-11-25T03:18:53Z"
+      },
+      {
+        "sha256": "c25fbe85ca32facc6546eb79439e3cb9482018227958891f949e78bc976a8db7",
+        "fuzzer": "afl-8k",
+        "worker": "8k-main",
+        "path": "/prism-fuzzer/tmp/fuzz-ijon-funnel/afl-8k/8k-main/crashes/id:000490,sig:06,src:012415,time:16986126,execs:40330745,op:havoc,rep:4",
+        "mtime": "2026-11-25T03:26:56Z"
+      }
+    ]
+  },
+  "archive": {
+    "file": "inputs.tar.gz",
+    "count": 8,
+    "total_bytes": 65568,
+    "archive_bytes": 809
+  },
+  "input": {
+    "raw_size_bytes": 8196,
+    "raw_sha256": "27d48e04f6b0736231cf0b72c6a4c460ce352b347b070454cc65dbb7ee0467cd",
+    "min_size_bytes": 8196,
+    "min_sha256": "27d48e04f6b0736231cf0b72c6a4c460ce352b347b070454cc65dbb7ee0467cd",
+    "payload_size_bytes": 8192,
+    "payload_sha256": "d4903f49d9f8849dff55b4211859b3c41cced6ba88b35066b347a5e6be2f70d8",
+    "source_preview": "proc {... |||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||...",
+    "header_bytes": [
+      0,
+      0,
+      3,
+      1
+    ],
+    "header_hex": "00000301",
+    "valid_header": true,
+    "has_shebang_prefix": false,
+    "minimized_matches_signature": true,
+    "loupe_url": "https://stevenjohnstone.github.io/prism-loupe/?code=cHJvYyB7Li4uIHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHx8fHw%3D&san=1&ruby_ver=4.1"
+  },
+  "options": {
+    "ruby_version": "4.1",
+    "start_line": 1,
+    "start_line_expr": null,
+    "encoding": null,
+    "encoding_locked": false,
+    "freeze": false,
+    "partial_script": false,
+    "attach_comments": false,
+    "main_script": false,
+    "stream_mode": false,
+    "frozen_string_literal": null,
+    "command_line_flags": [],
+    "filepath": null,
+    "shebang_callback": false,
+    "stack_budget": "SIZE_MAX",
+    "scopes_count": 0,
+    "forwarding_scope": null,
+    "forwarding_flags": []
+  },
+  "symptom": {
+    "headline": "ERROR: AddressSanitizer: stack-overflow in pm_visit_node (templates/src/node.c.erb:531)",
+    "summary": "AddressSanitizer: stack-overflow (/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.asan+0x1c4cd4) (BuildId: 3cbe5a51b456dccf70a7e68836976e2d93b06664) in __asan_memset",
+    "preamble_lines": [
+      "AddressSanitizer:DEADLYSIGNAL",
+      "=================================================================",
+      "==31182==ERROR: AddressSanitizer: stack-overflow on address 0xffffc9420e50 (pc 0xaaaaab4b4cd4 bp 0xffffc9421660 sp 0xffffc9420e50 T0)"
+    ],
+    "invariant": null,
+    "ubsan": null,
+    "sanitizer": {
+      "tool": "AddressSanitizer",
+      "kind": "stack-overflow"
+    },
+    "assertion": null
+  },
+  "frames": [
+    {
+      "depth": 0,
+      "func": "__asan_memset",
+      "module": "/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.asan+0x1c4cd4",
+      "scope": "external"
+    },
+    {
+      "depth": 1,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 766,
+      "col": 35,
+      "scope": "harness"
+    },
+    {
+      "depth": 2,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 3,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 4,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 5,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 6,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 7,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 8,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 9,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 10,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 11,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 12,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 13,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 14,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 15,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 16,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 17,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 18,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 19,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 20,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 21,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 22,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 23,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 24,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 25,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 26,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 27,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 28,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 29,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 30,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 31,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 32,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 33,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 34,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 35,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 36,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 37,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 38,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 39,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 40,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 41,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 42,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 43,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 44,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 45,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 46,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 47,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 48,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 49,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 50,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 51,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 52,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 53,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 54,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 55,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 56,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 57,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 58,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 59,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 60,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    },
+    {
+      "depth": 61,
+      "func": "check_node_location",
+      "file": "harnesses/prism/parse.c",
+      "line": 773,
+      "col": 5,
+      "scope": "harness"
+    },
+    {
+      "depth": 62,
+      "func": "pm_visit_node",
+      "file": "templates/src/node.c.erb",
+      "line": 531,
+      "col": 32,
+      "scope": "prism"
+    },
+    {
+      "depth": 63,
+      "func": "pm_visit_child_nodes",
+      "file": "templates/src/node.c.erb",
+      "line": 732,
+      "col": 44,
+      "scope": "prism"
+    }
+  ],
+  "coverage": {
+    "available": true,
+    "binary": "tmp/fuzz-ijon-funnel/bin/fuzz",
+    "build_id": "5499afb9e9702b5aa09a629532f6dd5b956ef681bd9b66585eb923af00b058b7",
+    "edge_count": 262,
+    "edges": {
+      "5": 8,
+      "9": 8,
+      "10": 8,
+      "14": 8,
+      "16": 1,
+      "20": 4,
+      "21": 1,
+      "406": 2,
+      "424": 1,
+      "425": 6,
+      "445": 1,
+      "447": 6,
+      "465": 6,
+      "469": 6,
+      "471": 2,
+      "473": 1,
+      "474": 6,
+      "483": 6,
+      "488": 6,
+      "490": 1,
+      "494": 6,
+      "495": 6,
+      "497": 1,
+      "498": 1,
+      "507": 6,
+      "514": 1,
+      "1730": 1,
+      "1751": 1,
+      "1752": 6,
+      "1755": 1,
+      "1756": 7,
+      "1757": 1,
+      "1762": 1,
+      "1765": 1,
+      "1815": 6,
+      "1819": 1,
+      "1821": 1,
+      "1824": 1,
+      "1827": 2,
+      "1830": 2,
+      "1834": 2,
+      "1910": 1,
+      "1934": 1,
+      "1937": 1,
+      "2426": 6,
+      "2428": 6,
+      "2430": 6,
+      "2481": 6,
+      "2558": 6,
+      "2560": 6,
+      "2562": 6,
+      "2743": 2,
+      "2745": 2,
+      "2747": 2,
+      "2824": 1,
+      "2842": 1,
+      "2843": 3,
+      "2844": 4,
+      "2845": 3,
+      "2846": 4,
+      "2851": 6,
+      "2853": 4,
+      "2854": 1,
+      "2855": 1,
+      "2857": 1,
+      "2862": 1,
+      "2875": 1,
+      "2877": 1,
+      "2880": 1,
+      "2887": 1,
+      "2889": 1,
+      "2904": 1,
+      "2923": 1,
+      "2927": 2,
+      "2931": 1,
+      "2933": 1,
+      "3009": 1,
+      "3011": 1,
+      "3015": 1,
+      "3018": 1,
+      "3044": 1,
+      "3045": 1,
+      "3048": 1,
+      "3056": 1,
+      "3061": 6,
+      "3062": 1,
+      "3074": 6,
+      "3075": 1,
+      "3076": 1,
+      "3093": 1,
+      "3120": 1,
+      "3130": 1,
+      "3166": 1,
+      "3178": 6,
+      "3179": 6,
+      "3181": 1,
+      "3182": 2,
+      "3183": 6,
+      "3185": 2,
+      "3187": 1,
+      "3538": 1,
+      "3541": 1,
+      "3549": 1,
+      "3554": 1,
+      "3556": 1,
+      "3563": 1,
+      "3566": 1,
+      "3568": 1,
+      "3578": 1,
+      "3588": 1,
+      "3605": 1,
+      "3610": 1,
+      "3612": 1,
+      "3643": 6,
+      "3669": 1,
+      "3671": 1,
+      "3735": 1,
+      "3738": 1,
+      "3740": 1,
+      "3742": 1,
+      "3949": 1,
+      "3951": 1,
+      "3952": 6,
+      "3955": 6,
+      "3959": 1,
+      "3963": 1,
+      "4029": 1,
+      "4032": 1,
+      "4038": 1,
+      "4271": 1,
+      "4274": 1,
+      "4278": 1,
+      "4285": 1,
+      "4290": 1,
+      "4587": 2,
+      "4591": 2,
+      "4595": 1,
+      "4596": 1,
+      "4628": 1,
+      "4660": 1,
+      "4697": 2,
+      "4700": 2,
+      "4701": 2,
+      "4713": 2,
+      "4793": 1,
+      "4824": 6,
+      "4831": 7,
+      "4833": 2,
+      "4837": 1,
+      "4838": 1,
+      "4842": 2,
+      "4852": 2,
+      "4864": 2,
+      "4865": 2,
+      "4947": 6,
+      "4948": 2,
+      "5149": 1,
+      "5209": 1,
+      "5210": 7,
+      "5211": 6,
+      "5212": 6,
+      "5281": 1,
+      "5282": 1,
+      "5355": 1,
+      "5365": 1,
+      "5376": 1,
+      "5382": 1,
+      "5384": 1,
+      "5393": 1,
+      "5398": 1,
+      "5618": 1,
+      "5620": 6,
+      "5624": 1,
+      "5632": 1,
+      "5633": 6,
+      "5636": 1,
+      "5850": 6,
+      "5854": 6,
+      "5855": 1,
+      "5926": 3,
+      "5937": 1,
+      "5942": 1,
+      "5952": 1,
+      "5955": 1,
+      "5965": 1,
+      "5998": 1,
+      "6000": 1,
+      "6007": 1,
+      "6041": 2,
+      "6043": 2,
+      "6579": 1,
+      "6581": 1,
+      "6584": 1,
+      "6590": 1,
+      "6594": 1,
+      "6609": 1,
+      "6610": 1,
+      "6621": 1,
+      "8174": 6,
+      "8182": 1,
+      "8183": 6,
+      "8205": 2,
+      "8206": 6,
+      "8209": 6,
+      "8218": 2,
+      "8220": 2,
+      "8222": 2,
+      "8320": 2,
+      "8322": 2,
+      "8341": 6,
+      "9033": 6,
+      "9052": 6,
+      "9055": 1,
+      "9064": 1,
+      "9069": 2,
+      "9303": 1,
+      "9310": 7,
+      "9759": 6,
+      "9760": 6,
+      "9763": 6,
+      "9767": 6,
+      "9768": 6,
+      "9770": 6,
+      "9777": 6,
+      "9857": 1,
+      "9860": 1,
+      "9862": 1,
+      "9863": 1,
+      "9865": 1,
+      "9867": 1,
+      "9874": 1,
+      "9875": 1,
+      "9878": 1,
+      "9884": 1,
+      "10050": 1,
+      "10527": 1,
+      "10531": 1,
+      "10536": 1,
+      "10538": 1,
+      "10887": 6,
+      "10894": 6,
+      "10896": 6,
+      "10904": 6,
+      "10985": 6,
+      "10988": 6,
+      "11480": 1,
+      "12456": 1,
+      "14607": 6,
+      "14701": 1,
+      "14715": 1,
+      "14718": 1,
+      "14783": 1,
+      "14796": 1,
+      "14798": 1,
+      "14801": 1,
+      "14803": 1,
+      "14928": 8,
+      "14933": 4,
+      "14941": 8,
+      "14943": 8,
+      "15316": 1,
+      "15317": 1
+    }
+  },
+  "target": {
+    "id": "fuzz.ijon.asan",
+    "shape": "prism_parse",
+    "binary": "tmp/fuzz-ijon-funnel/build/fuzz.ijon.asan",
+    "sources": {
+      "source": "prism_a"
+    }
+  },
+  "versions": {
+    "prism": {
+      "version": "2.1.0",
+      "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+      "git_short": "d4b9e07ed",
+      "git_dirty": true,
+      "source": "embedded",
+      "target_ruby_version": "4.1"
+    },
+    "container": {
+      "image_id": "sha256:73d0e4fa1d6a556eaf70223ecc075b93ad1592bf097a3dc89a6393779ffe41f8",
+      "os": "Ubuntu 24.04.4 LTS",
+      "arch": "aarch64",
+      "clang": "Ubuntu clang version 20.1.2 (0ubuntu1~24.04.3)",
+      "llvm_version": "20",
+      "aflplusplus": "afl-fuzz++5.03c",
+      "afl_patch_sha256": "875f1c14288354a333fb5551db68358fda086287bd6e904f6b84ed49ad9631b5",
+      "qemu_arm": "qemu-arm version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+      "qemu_ppc": "qemu-ppc version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18)",
+      "ruby": "ruby 4.1.0dev (2026-11-24T20:24:03Z HEAD 89f7ea9a17) +PRISM [aarch64-linux]",
+      "lrama_fuzz": "0.1.0"
+    },
+    "fuzz": {
+      "binary": "/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.asan",
+      "build_id": "25d64432bea2af88995e5491e5800e276e7209b3d7e94c58e6503502b4d2fd3f",
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": true,
+        "source": "embedded",
+        "target_ruby_version": "4.1"
+      }
+    },
+    "triage": {
+      "binary": "/prism-fuzzer/tmp/fuzz-ijon-funnel/bin/fuzz.ijon.asan",
+      "build_id": "25d64432bea2af88995e5491e5800e276e7209b3d7e94c58e6503502b4d2fd3f",
+      "prism": {
+        "version": "2.1.0",
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": true,
+        "source": "embedded"
+      },
+      "workspace_git": {
+        "git_commit": "d4b9e07ed33af7383708158179adafa4f6dbc9de",
+        "git_short": "d4b9e07ed",
+        "git_dirty": false
+      }
+    }
+  },
+  "digest": {
+    "parsed_size": 8192,
+    "encoding": "UTF-8",
+    "stream_mode": false,
+    "continuable": true,
+    "errors": 8185,
+    "warnings": 0,
+    "top_errors": [
+      "expect_expression_after_operator",
+      "unexpected_token_close_context",
+      "block_term_brace"
+    ],
+    "anomaly_count": 1,
+    "anomalies": [
+      {
+        "category": "recursion_depth",
+        "kind": "visit_depth_cap",
+        "node": "PM_CALL_NODE"
+      }
+    ]
+  }
+}
