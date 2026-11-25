@@ -13,7 +13,7 @@ This directory holds the [OSS-Fuzz](https://github.com/google/oss-fuzz) project 
 ## Fuzz Targets
 
 1. **`prism_parse_fuzzer`** (`-DPRISM_EXCLUDE_SERIALIZATION -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT`): Exercises parsing (both `pm_parse` and `pm_parse_stream`), options decoding via the 4-byte input header, AST visitation, comments, diagnostics, and encoding handling up to `max_len = 8192`.
-2. **`prism_full_fuzzer`** (`-DSLOW`): Adds `pm_serialize_parse`, `pm_serialize_parse_stream`, `pm_errors_format`, `pm_prettyprint`, and `pm_dump_json` checks up to `max_len = 1024`.
+2. **`prism_full_fuzzer`** (`-DSLOW`): Adds `pm_serialize`, `pm_serialize_parse_stream`, buffer-vs-stream AST parity (`stream_diff`), and `pm_errors_format` checks up to `max_len = 1024`.
 
 Both targets reuse [`test/fuzz/harness/parse.c`](../harness/parse.c), [`test/fuzz/harness/fuzz.c`](../harness/fuzz.c), [`test/fuzz/dict`](../dict), and [`test/fuzz/runtime/corpus.rb`](../runtime/corpus.rb). Building with `-DPRISM_OSS_FUZZ` omits `__asan_default_options()` and `__ubsan_default_options()` in `fuzz.c` so ClusterFuzz controls sanitizer flags cleanly via environment variables. Compile-time fuzzing tunings (`-DPM_ARENA_INITIAL_SIZE=0`, `-DPM_INTEGER_DIVIDE_THRESHOLD=8`, `-DPRISM_DEPTH_MAXIMUM=128`) match `test/fuzz/Makefile`.
 

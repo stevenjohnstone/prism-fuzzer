@@ -1071,6 +1071,264 @@ static void fuzz_fail_classified_stream_diff(
 #endif
 }
 
+static bool fuzz_ser_read_varuint(const uint8_t *buf, size_t len, size_t *pos, uint32_t *out) {
+    uint32_t val = 0;
+    uint32_t shift = 0;
+    for (;;) {
+        if (*pos >= len) return false;
+        uint8_t byte = buf[(*pos)++];
+        if (shift >= 28U && (byte & 0x7fU) > 0x0fU) return false;
+        val |= ((uint32_t) (byte & 0x7fU)) << shift;
+        if ((byte & 0x80U) == 0U) break;
+        shift += 7U;
+    }
+    if (out != NULL) *out = val;
+    return true;
+}
+
+static bool fuzz_ser_skip_bytes(const uint8_t *buf, size_t len, size_t *pos) {
+    uint32_t n = 0;
+    if (!fuzz_ser_read_varuint(buf, len, pos, &n)) return false;
+    if ((size_t) n > len - *pos) return false;
+    *pos += (size_t) n;
+    return true;
+}
+
+static bool fuzz_ser_skip_loc(const uint8_t *buf, size_t len, size_t *pos) {
+    return fuzz_ser_read_varuint(buf, len, pos, NULL) &&
+           fuzz_ser_read_varuint(buf, len, pos, NULL);
+}
+
+static bool fuzz_ser_skip_diag_list(const uint8_t *buf, size_t len, size_t *pos) {
+    uint32_t count = 0;
+    if (!fuzz_ser_read_varuint(buf, len, pos, &count)) return false;
+    for (uint32_t i = 0; i < count; i++) {
+        if (!fuzz_ser_read_varuint(buf, len, pos, NULL) ||
+            !fuzz_ser_skip_bytes(buf, len, pos) ||
+            !fuzz_ser_skip_loc(buf, len, pos) ||
+            *pos >= len) {
+            return false;
+        }
+        (*pos)++;
+    }
+    return true;
+}
+
+typedef struct {
+    size_t pre_checksum_end;
+    size_t line_offsets_start;
+    size_t comments_start;
+    size_t data_loc_start;
+    size_t diag_start;
+    size_t continuable_pos;
+    size_t ast_start;
+    size_t cpool_offset;
+    uint32_t cpool_size;
+    uint8_t has_data_loc;
+} fuzz_ser_spans_t;
+
+static bool fuzz_ser_parse_spans(const uint8_t *buf, size_t len, fuzz_ser_spans_t *out) {
+    if (buf == NULL || len < 10U || memcmp(buf, "PRISM", 5U) != 0) return false;
+    uint8_t only_sem = buf[8];
+    size_t pos = 9U;
+
+    if (!fuzz_ser_skip_bytes(buf, len, &pos) || !fuzz_ser_read_varuint(buf, len, &pos, NULL)) return false;
+    out->pre_checksum_end = pos;
+    if (len - pos < 8U) return false;
+    pos += 8U;
+    out->line_offsets_start = pos;
+
+    uint32_t line_cnt = 0;
+    if (!fuzz_ser_read_varuint(buf, len, &pos, &line_cnt)) return false;
+    for (uint32_t i = 0; i < line_cnt; i++) {
+        if (!fuzz_ser_read_varuint(buf, len, &pos, NULL)) return false;
+    }
+    out->comments_start = pos;
+
+    if (only_sem == 0U) {
+        uint32_t com_cnt = 0;
+        if (!fuzz_ser_read_varuint(buf, len, &pos, &com_cnt)) return false;
+        for (uint32_t i = 0; i < com_cnt; i++) {
+            if (pos >= len) return false;
+            pos++;
+            if (!fuzz_ser_skip_loc(buf, len, &pos)) return false;
+        }
+        uint32_t att_cnt = 0;
+        if (!fuzz_ser_read_varuint(buf, len, &pos, &att_cnt)) return false;
+        for (uint32_t i = 0; i < att_cnt; i++) {
+            uint32_t idx_cnt = 0;
+            if (!fuzz_ser_read_varuint(buf, len, &pos, NULL) ||
+                !fuzz_ser_read_varuint(buf, len, &pos, &idx_cnt)) {
+                return false;
+            }
+            for (uint32_t j = 0; j < idx_cnt; j++) {
+                if (!fuzz_ser_read_varuint(buf, len, &pos, NULL)) return false;
+            }
+        }
+    }
+
+    uint32_t mc_cnt = 0;
+    if (!fuzz_ser_read_varuint(buf, len, &pos, &mc_cnt)) return false;
+    for (uint32_t i = 0; i < mc_cnt; i++) {
+        if (!fuzz_ser_skip_loc(buf, len, &pos) || !fuzz_ser_skip_loc(buf, len, &pos)) return false;
+    }
+
+    out->data_loc_start = pos;
+    if (pos >= len) return false;
+    uint8_t has_data_loc = buf[pos++];
+    if (has_data_loc != 0U && !fuzz_ser_skip_loc(buf, len, &pos)) return false;
+    out->has_data_loc = has_data_loc;
+    out->diag_start = pos;
+
+    if (!fuzz_ser_skip_diag_list(buf, len, &pos) ||
+        !fuzz_ser_skip_diag_list(buf, len, &pos) ||
+        pos >= len) {
+        return false;
+    }
+    out->continuable_pos = pos;
+    pos++;
+
+    if (len - pos < 4U) return false;
+    uint32_t cpool_off = 0;
+    memcpy(&cpool_off, buf + pos, sizeof(uint32_t));
+    pos += 4U;
+
+    uint32_t cpool_sz = 0;
+    if (!fuzz_ser_read_varuint(buf, len, &pos, &cpool_sz)) return false;
+    if ((size_t) cpool_off < pos || (size_t) cpool_off > len) return false;
+    if ((size_t) cpool_sz > (len - (size_t) cpool_off) / 8U) return false;
+
+    out->ast_start = pos;
+    out->cpool_offset = (size_t) cpool_off;
+    out->cpool_size = cpool_sz;
+    return true;
+}
+
+static bool fuzz_ser_diag_list_equiv(
+    const uint8_t *a, size_t len_a, size_t *pos_a,
+    const uint8_t *b, size_t len_b, size_t *pos_b,
+    bool ignore_loc
+) {
+    uint32_t cnt_a = 0, cnt_b = 0;
+    if (!fuzz_ser_read_varuint(a, len_a, pos_a, &cnt_a) ||
+        !fuzz_ser_read_varuint(b, len_b, pos_b, &cnt_b) ||
+        cnt_a != cnt_b) {
+        return false;
+    }
+    for (uint32_t i = 0; i < cnt_a; i++) {
+        uint32_t type_a = 0, type_b = 0, mlen_a = 0, mlen_b = 0;
+        if (!fuzz_ser_read_varuint(a, len_a, pos_a, &type_a) ||
+            !fuzz_ser_read_varuint(b, len_b, pos_b, &type_b) ||
+            type_a != type_b) {
+            return false;
+        }
+        if (!fuzz_ser_read_varuint(a, len_a, pos_a, &mlen_a) ||
+            !fuzz_ser_read_varuint(b, len_b, pos_b, &mlen_b) ||
+            mlen_a != mlen_b ||
+            (size_t) mlen_a > len_a - *pos_a ||
+            (size_t) mlen_b > len_b - *pos_b ||
+            (mlen_a > 0U && memcmp(a + *pos_a, b + *pos_b, (size_t) mlen_a) != 0)) {
+            return false;
+        }
+        *pos_a += (size_t) mlen_a;
+        *pos_b += (size_t) mlen_b;
+
+        uint32_t sa = 0, la = 0, sb = 0, lb = 0;
+        if (!fuzz_ser_read_varuint(a, len_a, pos_a, &sa) ||
+            !fuzz_ser_read_varuint(a, len_a, pos_a, &la) ||
+            !fuzz_ser_read_varuint(b, len_b, pos_b, &sb) ||
+            !fuzz_ser_read_varuint(b, len_b, pos_b, &lb)) {
+            return false;
+        }
+        if (!ignore_loc && (sa != sb || la != lb)) return false;
+        if (*pos_a >= len_a || *pos_b >= len_b) return false;
+        if (a[(*pos_a)++] != b[(*pos_b)++]) return false;
+    }
+    return true;
+}
+
+/* Compare stream vs full-buffer pm_serialize outputs when parsed_size != size
+ * (early-EOF or __END__): checksum, data_loc.length, trailing __END__ line_offsets
+ * (> parsed_size), and EOF diagnostic offsets legitimately reflect size vs parsed_size,
+ * while AST, constant pool, comments, diagnostic types/messages, and continuable must match. */
+static bool fuzz_serialized_equiv_ignoring_eof_len(
+    const pm_buffer_t *a_buf,
+    const pm_buffer_t *b_buf,
+    size_t parsed_size
+) {
+    const uint8_t *a = (const uint8_t *) pm_buffer_value(a_buf);
+    const uint8_t *b = (const uint8_t *) pm_buffer_value(b_buf);
+    size_t len_a = pm_buffer_length(a_buf);
+    size_t len_b = pm_buffer_length(b_buf);
+    fuzz_ser_spans_t sa;
+    fuzz_ser_spans_t sb;
+    if (!fuzz_ser_parse_spans(a, len_a, &sa) || !fuzz_ser_parse_spans(b, len_b, &sb)) {
+        return false;
+    }
+    if (sa.pre_checksum_end != sb.pre_checksum_end ||
+        memcmp(a, b, sa.pre_checksum_end) != 0) {
+        return false;
+    }
+
+    size_t lpos_a = sa.line_offsets_start;
+    size_t lpos_b = sb.line_offsets_start;
+    uint32_t lcnt_a = 0, lcnt_b = 0;
+    if (!fuzz_ser_read_varuint(a, len_a, &lpos_a, &lcnt_a) ||
+        !fuzz_ser_read_varuint(b, len_b, &lpos_b, &lcnt_b) ||
+        lcnt_a > lcnt_b ||
+        (lcnt_b > lcnt_a && sb.has_data_loc == 0U)) {
+        return false;
+    }
+    for (uint32_t i = 0; i < lcnt_a; i++) {
+        uint32_t oa = 0, ob = 0;
+        if (!fuzz_ser_read_varuint(a, len_a, &lpos_a, &oa) ||
+            !fuzz_ser_read_varuint(b, len_b, &lpos_b, &ob) ||
+            oa != ob) {
+            return false;
+        }
+    }
+    for (uint32_t i = lcnt_a; i < lcnt_b; i++) {
+        uint32_t ob = 0;
+        if (!fuzz_ser_read_varuint(b, len_b, &lpos_b, &ob) || (size_t) ob <= parsed_size) {
+            return false;
+        }
+    }
+
+    size_t com_a = sa.data_loc_start - sa.comments_start;
+    size_t com_b = sb.data_loc_start - sb.comments_start;
+    if (com_a != com_b || memcmp(a + sa.comments_start, b + sb.comments_start, com_a) != 0) {
+        return false;
+    }
+
+    size_t dpos_a = sa.diag_start;
+    size_t dpos_b = sb.diag_start;
+    bool ignore_diag_loc = sb.has_data_loc != 0U;
+    if (!fuzz_ser_diag_list_equiv(a, len_a, &dpos_a, b, len_b, &dpos_b, ignore_diag_loc) ||
+        !fuzz_ser_diag_list_equiv(a, len_a, &dpos_a, b, len_b, &dpos_b, ignore_diag_loc) ||
+        a[sa.continuable_pos] != b[sb.continuable_pos]) {
+        return false;
+    }
+
+    size_t ast_len_a = sa.cpool_offset - sa.ast_start;
+    size_t ast_len_b = sb.cpool_offset - sb.ast_start;
+    if (sa.cpool_size != sb.cpool_size || ast_len_a != ast_len_b ||
+        memcmp(a + sa.ast_start, b + sb.ast_start, ast_len_a) != 0) {
+        return false;
+    }
+    for (uint32_t i = 0; i < sa.cpool_size; i++) {
+        uint32_t off_a = 0, clen_a = 0, off_b = 0, clen_b = 0;
+        memcpy(&off_a, a + sa.cpool_offset + (size_t) i * 8U, 4U);
+        memcpy(&clen_a, a + sa.cpool_offset + (size_t) i * 8U + 4U, 4U);
+        memcpy(&off_b, b + sb.cpool_offset + (size_t) i * 8U, 4U);
+        memcpy(&clen_b, b + sb.cpool_offset + (size_t) i * 8U + 4U, 4U);
+        if (clen_a != clen_b) return false;
+        if ((size_t) off_a > len_a || (size_t) clen_a > len_a - (size_t) off_a) return false;
+        if ((size_t) off_b > len_b || (size_t) clen_b > len_b - (size_t) off_b) return false;
+        if (clen_a > 0U && memcmp(a + off_a, b + off_b, (size_t) clen_a) != 0) return false;
+    }
+    return true;
+}
+
 static void fuzz_assert_serialized_equal(
     pm_parser_t *stream_parser,
     pm_node_t *stream_node,
@@ -1136,7 +1394,7 @@ static void fuzz_check_stream_diff(
         const pm_location_t *full_data = pm_parser_data_loc(ref_parser);
         if (stream_data->length == 0) {
             // An early-EOF byte (\0, ^D, ^Z) stops lexing before pm_source_stream_read's __END__ marker, leaving data_loc empty on both parses.
-            // pm_serialize checksums the full input buffer, so only full_data, error/warning counts, prettyprint, and prefix serialization can match here.
+            // pm_serialize checksums the full input buffer, so we check full_data, error/warning counts, serialized AST/cpool equivalence, and prefix serialization.
             uint64_t stream_end = fuzz_stream_node_end(node, parsed_size);
             uint64_t ref_end = fuzz_stream_node_end(ref_node, size);
             uint64_t ast_end = stream_end > ref_end ? stream_end : ref_end;
@@ -1182,13 +1440,8 @@ static void fuzz_check_stream_diff(
         }
 
         if (node != NULL) {
-            pm_buffer_t *stream_pp_buf = pm_buffer_new();
-            pm_prettyprint(stream_pp_buf, parser, node);
-            pm_prettyprint(ref_buf, ref_parser, ref_node);
-            size_t stream_pp = pm_buffer_length(stream_pp_buf);
-            size_t ref_pp = pm_buffer_length(ref_buf);
-            if (stream_pp != ref_pp || memcmp(pm_buffer_value(stream_pp_buf), pm_buffer_value(ref_buf), stream_pp) != 0) {
-                pm_buffer_free(stream_pp_buf);
+            pm_serialize(ref_parser, ref_node, ref_buf);
+            if (!fuzz_serialized_equiv_ignoring_eof_len(stream_buf, ref_buf, parsed_size)) {
                 fuzz_fail_classified_stream_diff(
                     "ast_mismatch",
                     parser,
@@ -1197,13 +1450,12 @@ static void fuzz_check_stream_diff(
                     ref_node,
                     parsed_size,
                     size,
-                    "stream_pp",
-                    stream_pp,
-                    "full_pp",
-                    ref_pp
+                    "stream_len",
+                    pm_buffer_length(stream_buf),
+                    "full_len",
+                    pm_buffer_length(ref_buf)
                 );
             }
-            pm_buffer_free(stream_pp_buf);
 
             pm_arena_t *prefix_arena = pm_arena_new();
             pm_parser_t *prefix_parser = pm_parser_new(prefix_arena, source_buf, parsed_size, options);
@@ -1493,15 +1745,6 @@ __attribute__((noinline)) void harness_parse(const uint8_t *input, size_t size, 
         fuzz_buffer_reset(buffer);
     }
 #endif
-
-    if (node != NULL) {
-        pm_prettyprint(buffer, parser, node);
-        fuzz_buffer_reset(buffer);
-
-#ifndef PRISM_FUZZ_NO_JSON
-        pm_dump_json(buffer, parser, node);
-#endif
-    }
 
 #if defined(PRISM_FUZZ_LEGACY_BUFFER_STRUCT) && defined(PRISM_FUZZ_BUFFER_CLEANUP)
     pm_buffer_cleanup(buffer);

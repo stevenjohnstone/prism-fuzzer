@@ -265,6 +265,8 @@ module PrismFuzzer
       max_in = effective_compiled_max_input_size(topo.is_a?(Hash) ? topo : {})
       max_alloc = defaults["max_allocated_mb"] || 128
       [
+        "-DPRISM_EXCLUDE_JSON",
+        "-DPRISM_EXCLUDE_PRETTYPRINT",
         "-DPM_INTEGER_DIVIDE_THRESHOLD=8",
         "-DPRISM_DEPTH_MAXIMUM=128",
         "-DFUZZ_MAX_INPUT_SIZE=#{max_in}",

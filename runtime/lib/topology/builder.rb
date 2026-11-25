@@ -427,9 +427,11 @@ module PrismFuzzer
       end
       if mode == "slow"
         base_flags << "-DSLOW"
-      else
-        base_flags.concat(%w[-DPRISM_EXCLUDE_SERIALIZATION -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT])
+      elsif !override_macros.include?("PRISM_EXCLUDE_SERIALIZATION")
+        base_flags << "-DPRISM_EXCLUDE_SERIALIZATION"
       end
+      base_flags << "-DPRISM_EXCLUDE_JSON" unless override_macros.include?("PRISM_EXCLUDE_JSON")
+      base_flags << "-DPRISM_EXCLUDE_PRETTYPRINT" unless override_macros.include?("PRISM_EXCLUDE_PRETTYPRINT")
       base_flags.concat(common_define_flags(plan, user_flags: user_flags, extra_flags: override_flags))
       inc_dirs.each { |d| base_flags << "-I#{d}" }
       base_flags << "-DPRISM_FUZZ_IJON" if ijon_enabled

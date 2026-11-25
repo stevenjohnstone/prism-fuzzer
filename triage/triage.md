@@ -174,7 +174,7 @@ Spawning a sanitized executable once per archived crash incurs ASAN initializati
 
 ### Build Profiles (`verify_bucket.sh`)
 
-`verify_bucket.sh` compiles and caches `<ws>/build/verify/verify_runner.<profile>` (rebuilding automatically whenever any file under the target `src/`, `include/`, `harnesses/prism/`, or `verify_runner.c` changes, or when `--rebuild-verifiers` is passed; falls back to `${TMPDIR:-/tmp}/prism-fuzzer-verify/<key>` if that directory is not writable). Every profile shares `-DPM_INTEGER_DIVIDE_THRESHOLD=8`, `-DPRISM_DEPTH_MAXIMUM=128`, `-DFUZZ_MAX_INPUT_SIZE`, `-DFUZZ_MAX_ALLOCATED`, and `-DFUZZ_HARD_RSS_LIMIT`, plus:
+`verify_bucket.sh` compiles and caches `<ws>/build/verify/verify_runner.<profile>` (rebuilding automatically whenever any file under the target `src/`, `include/`, `harnesses/prism/`, or `verify_runner.c` changes, or when `--rebuild-verifiers` is passed; falls back to `${TMPDIR:-/tmp}/prism-fuzzer-verify/<key>` if that directory is not writable). Every `prism_parse` profile shares `-DPRISM_EXCLUDE_JSON`, `-DPRISM_EXCLUDE_PRETTYPRINT`, `-DPM_INTEGER_DIVIDE_THRESHOLD=8`, `-DPRISM_DEPTH_MAXIMUM=128`, `-DFUZZ_MAX_INPUT_SIZE`, `-DFUZZ_MAX_ALLOCATED`, and `-DFUZZ_HARD_RSS_LIMIT`, plus:
 
 | Profile | Selected When | Compile Flags |
 | :--- | :--- | :--- |

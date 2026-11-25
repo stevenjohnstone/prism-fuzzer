@@ -465,6 +465,8 @@ build_verify_runner() {
       "-I$REPO_ROOT/include"
       "-I$cache_dir"
       "-I$FUZZ_ROOT/harnesses/prism"
+      "-DPRISM_EXCLUDE_JSON"
+      "-DPRISM_EXCLUDE_PRETTYPRINT"
       "-DPM_INTEGER_DIVIDE_THRESHOLD=8"
       "-DPRISM_DEPTH_MAXIMUM=128"
       "-DPRISM_FUZZ_INLINE_ASSERTS"

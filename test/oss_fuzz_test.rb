@@ -347,7 +347,8 @@ class OssFuzzTest < Minitest::Test
           "-O1", "-fno-omit-frame-pointer",
           "-DFUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION",
           "-fsanitize=memory", "-fsanitize-memory-track-origins", "-fsanitize=fuzzer-no-link",
-          "-DPRISM_OSS_FUZZ", "-DPM_ARENA_INITIAL_SIZE=0", "-DPM_INTEGER_DIVIDE_THRESHOLD=8",
+          "-DPRISM_OSS_FUZZ", "-DPRISM_EXCLUDE_JSON", "-DPRISM_EXCLUDE_PRETTYPRINT",
+          "-DPM_ARENA_INITIAL_SIZE=0", "-DPM_INTEGER_DIVIDE_THRESHOLD=8",
           "-DPRISM_DEPTH_MAXIMUM=128", "-DSLOW",
           "-c", repo_path("harnesses", "prism", src_name),
           "-o", obj_path

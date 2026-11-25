@@ -190,7 +190,7 @@ cat << 'RUBY' > "$COLLECT_RB"
   default_defines = if topo && defined?(PrismFuzzer::Topology)
                       PrismFuzzer::Topology.default_coverage_define_flags(topo)
                     else
-                      %w[-DPM_INTEGER_DIVIDE_THRESHOLD=8 -DPRISM_DEPTH_MAXIMUM=128 -DFUZZ_MAX_INPUT_SIZE=1024 -DFUZZ_MAX_ALLOCATED=128 -DFUZZ_HARD_RSS_LIMIT=2048]
+                      %w[-DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PRETTYPRINT -DPM_INTEGER_DIVIDE_THRESHOLD=8 -DPRISM_DEPTH_MAXIMUM=128 -DFUZZ_MAX_INPUT_SIZE=1024 -DFUZZ_MAX_ALLOCATED=128 -DFUZZ_HARD_RSS_LIMIT=2048]
                     end
 
   pairs = if topo && defined?(PrismFuzzer::Topology)

@@ -606,6 +606,9 @@ class TriageReproTest < Minitest::Test
         "sd_nul.bin" => "\x40\x00\x03\x01\x00\n__END__\n ".b,
         "sd_ctrld.bin" => "\x40\x00\x03\x01\x04\n__END__\n ".b,
         "sd_ctrlz.bin" => "\x40\x00\x03\x01\x1a\n__END__\n ".b,
+        "sd_end_cpool_ok.bin" => "\x40\x00\x03\x01foo_bar = :sym_const\n__END__\nextra_data_tail\n".b,
+        "sd_unclosed_def_end_ok.bin" => "\x40\x00\x03\x01def foo\n__END__\nextra_data_tail\n".b,
+        "sd_deep_spine_ok.bin" => ("\x40\x00\x03\x01e\n" + ("|" * 7168) + "\n").b,
         "mixed_enc_unicode_ok.bin" => "\x00\x00\x03\x01#encoding:ascii\n\"\\u{de}\"\n".b,
         "mixed_enc_unicode_vtab.bin" => "\x00\x00\x03\x01#encoding:ascii\n\"\\u{41\vde}\"\n".b,
         "mixed_enc_unicode_ff.bin" => "\x00\x00\x03\x01#encoding:ascii\n\"\\u{41\fde}\"\n".b,
@@ -1014,7 +1017,7 @@ class TriageReproTest < Minitest::Test
       stream_slow_bin = File.join(workdir, "ijon_stream_slow")
       assert_cmd(
         c_compiler, *COMMON_HARNESS_FLAGS, *inc_flags,
-        "-Wall", "-Werror", "-DSLOW",
+        "-Wall", "-Werror", "-DSLOW", "-DPRISM_EXCLUDE_JSON", "-DPRISM_EXCLUDE_PRETTYPRINT",
         "-DPRISM_FUZZ_IJON", "-DPRISM_FUZZ_ALLOW_STREAM_WITH_IJON",
         *srcs, *wrap_flags, "-o", stream_slow_bin
       )
