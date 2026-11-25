@@ -23,6 +23,7 @@
 #include <unistd.h>
 
 #include "cruby_vm.h"
+#include <ruby/encoding.h>
 
 /* CRuby internal helpers in thread.c (not exposed in public ruby.h). */
 extern void rb_thread_stop_timer_thread(void);
@@ -202,6 +203,8 @@ void diff_classify_cruby_msg(const char *cls, const char *line, char *tag_buf, s
 
 static VALUE diff_rb_mAST = Qnil;
 static ID diff_id_parse = 0;
+static ID diff_id_script_lines = 0;
+static VALUE diff_ast_parse_kw = Qnil;
 static VALUE diff_rb_cISeq = Qnil;
 static ID diff_id_compile = 0;
 static ID diff_id_message = 0;
@@ -216,6 +219,12 @@ static void diff_core_ids_init(void) {
     diff_rb_mAST = rb_const_get(rb_cRubyVM, rb_intern("AbstractSyntaxTree"));
     rb_gc_register_mark_object(diff_rb_mAST);
     diff_id_parse = rb_intern("parse");
+    diff_id_script_lines = rb_intern("script_lines");
+
+    diff_ast_parse_kw = rb_hash_new();
+    rb_hash_aset(diff_ast_parse_kw, ID2SYM(rb_intern("keep_script_lines")), Qtrue);
+    rb_obj_freeze(diff_ast_parse_kw);
+    rb_gc_register_mark_object(diff_ast_parse_kw);
 
     diff_rb_cISeq = rb_const_get(rb_cRubyVM, rb_intern("InstructionSequence"));
     rb_gc_register_mark_object(diff_rb_cISeq);
@@ -226,7 +235,65 @@ static void diff_core_ids_init(void) {
 
 static VALUE diff_ast_parse_cb(VALUE src_str) {
     diff_core_ids_init();
-    return rb_funcall(diff_rb_mAST, diff_id_parse, 1, src_str);
+    VALUE args[2] = { src_str, diff_ast_parse_kw };
+    return rb_funcallv_kw(diff_rb_mAST, diff_id_parse, 2, args, RB_PASS_KEYWORDS);
+}
+
+void diff_cruby_extract_script_meta(
+    VALUE ast_node,
+    char *enc_buf,
+    size_t enc_cap,
+    bool *out_has_lines,
+    size_t *out_total_bytes,
+    size_t *out_last_line_bytes,
+    bool *out_last_line_is_end
+) {
+    if (enc_cap > 0) snprintf(enc_buf, enc_cap, "UTF-8");
+    *out_has_lines = false;
+    *out_total_bytes = 0;
+    *out_last_line_bytes = 0;
+    *out_last_line_is_end = false;
+
+    if (NIL_P(ast_node)) {
+        return;
+    }
+    diff_core_ids_init();
+    volatile VALUE lines = rb_funcall(ast_node, diff_id_script_lines, 0);
+    if (!RB_TYPE_P(lines, T_ARRAY) || RARRAY_LEN(lines) == 0) {
+        RB_GC_GUARD(lines);
+        return;
+    }
+
+    long n = RARRAY_LEN(lines);
+    *out_has_lines = true;
+    VALUE first = RARRAY_AREF(lines, 0);
+    if (RB_TYPE_P(first, T_STRING) && enc_cap > 0) {
+        rb_encoding *enc = rb_enc_get(first);
+        if (enc != NULL && enc->name != NULL) {
+            snprintf(enc_buf, enc_cap, "%s", enc->name);
+        }
+    }
+
+    size_t total = 0;
+    for (long i = 0; i < n; i++) {
+        VALUE line = RARRAY_AREF(lines, i);
+        if (RB_TYPE_P(line, T_STRING)) {
+            total += (size_t) RSTRING_LEN(line);
+        }
+    }
+    *out_total_bytes = total;
+
+    VALUE last = RARRAY_AREF(lines, n - 1);
+    if (RB_TYPE_P(last, T_STRING)) {
+        size_t llen = (size_t) RSTRING_LEN(last);
+        const char *lptr = RSTRING_PTR(last);
+        *out_last_line_bytes = llen;
+        if (llen >= 7 && memcmp(lptr, "__END__", 7) == 0 &&
+            (llen == 7 || lptr[7] == '\n' || lptr[7] == '\r')) {
+            *out_last_line_is_end = true;
+        }
+    }
+    RB_GC_GUARD(lines);
 }
 
 static VALUE diff_iseq_compile_cb(VALUE src_str) {

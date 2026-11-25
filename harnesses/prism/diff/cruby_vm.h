@@ -47,5 +47,14 @@ void diff_fail_syntax_mismatch(
 /* cruby_walker.c */
 void diff_ast_ids_init(void);
 void diff_collect_cruby_summary(VALUE ast_node, diff_summary_t *out);
+void diff_cruby_extract_script_meta(
+    VALUE ast_node,
+    char *enc_buf,
+    size_t enc_cap,
+    bool *out_has_lines,
+    size_t *out_total_bytes,
+    size_t *out_last_line_bytes,
+    bool *out_last_line_is_end
+);
 
 #endif

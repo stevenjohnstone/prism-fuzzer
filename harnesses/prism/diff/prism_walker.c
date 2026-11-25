@@ -278,6 +278,115 @@ static void diff_prism_visit_interpolated_parts(const pm_node_list_t *parts, dif
     }
 }
 
+static void diff_prism_hash_static_parts(
+    const pm_node_list_t *parts,
+    uint64_t *hash_io,
+    size_t *len_io,
+    size_t depth
+) {
+    if (parts == NULL || depth >= DIFF_MAX_AST_DEPTH) {
+        return;
+    }
+    for (size_t i = 0; i < parts->size; i++) {
+        const pm_node_t *part = parts->nodes[i];
+        if (part == NULL) {
+            continue;
+        }
+        switch (PM_NODE_TYPE(part)) {
+            case PM_STRING_NODE: {
+                const pm_string_node_t *sn = (const pm_string_node_t *) part;
+                const uint8_t *src = pm_string_source(&sn->unescaped);
+                size_t slen = pm_string_length(&sn->unescaped);
+                if (src != NULL && slen > 0) {
+                    *hash_io = diff_fnv64_update(*hash_io, src, slen);
+                    *len_io += slen;
+                }
+                break;
+            }
+            case PM_INTERPOLATED_STRING_NODE: {
+                const pm_interpolated_string_node_t *nested = (const pm_interpolated_string_node_t *) part;
+                diff_prism_hash_static_parts(&nested->parts, hash_io, len_io, depth + 1);
+                break;
+            }
+            case PM_EMBEDDED_STATEMENTS_NODE: {
+                const pm_embedded_statements_node_t *emb = (const pm_embedded_statements_node_t *) part;
+                if (emb->statements != NULL) {
+                    diff_prism_hash_static_parts(&emb->statements->body, hash_io, len_io, depth + 1);
+                }
+                break;
+            }
+            default:
+                break;
+        }
+    }
+}
+
+static unsigned int diff_prism_regexp_opts(pm_node_flags_t flags) {
+    unsigned int opts = 0;
+    if (flags & PM_REGULAR_EXPRESSION_FLAGS_IGNORE_CASE) opts |= 1u;
+    if (flags & PM_REGULAR_EXPRESSION_FLAGS_EXTENDED)    opts |= 2u;
+    if (flags & PM_REGULAR_EXPRESSION_FLAGS_MULTI_LINE)  opts |= 4u;
+    return opts;
+}
+
+static void diff_prism_emit_bytes_leaf(
+    diff_summary_t *out,
+    diff_tok_tag_t tag,
+    const uint8_t *data,
+    size_t len
+) {
+    uint64_t h = DIFF_FNV64_OFFSET;
+    if (data != NULL && len > 0) {
+        h = diff_fnv64_update(h, data, len);
+    }
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%zu:%016llx", len, (unsigned long long) h);
+    diff_tree_leaf_cstr(out, tag, buf);
+}
+
+static void diff_prism_emit_regexp_leaf(
+    diff_summary_t *out,
+    unsigned int opts,
+    uint64_t h,
+    size_t len
+) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%u:%zu:%016llx", opts, len, (unsigned long long) h);
+    diff_tree_leaf_cstr(out, DIFF_TOK_REGX, buf);
+}
+
+static void diff_prism_format_integer(const pm_integer_t *iv, char *buf, size_t cap) {
+    uint32_t nwords = 0;
+    const uint32_t *words = pm_integer_words(iv, &nwords);
+    if (nwords == 0) {
+        snprintf(buf, cap, "0");
+    } else if (nwords <= 2) {
+        uint64_t mag = (uint64_t) words[0];
+        if (nwords == 2) {
+            mag |= ((uint64_t) words[1]) << 32;
+        }
+        snprintf(buf, cap, "%s%llu", iv->negative ? "-" : "", (unsigned long long) mag);
+    } else {
+        uint64_t h = DIFF_FNV64_OFFSET;
+        for (uint32_t i = 0; i < nwords; i++) {
+            uint8_t le[4] = {
+                (uint8_t) (words[i] & 0xffu),
+                (uint8_t) ((words[i] >> 8) & 0xffu),
+                (uint8_t) ((words[i] >> 16) & 0xffu),
+                (uint8_t) ((words[i] >> 24) & 0xffu)
+            };
+            h = diff_fnv64_update(h, le, 4);
+        }
+        snprintf(buf, cap, "%sbig:%u:%016llx", iv->negative ? "-" : "", nwords, (unsigned long long) h);
+    }
+}
+
+static void diff_prism_format_float(double val, char *buf, size_t cap) {
+    uint64_t bits = 0;
+    memcpy(&bits, &val, sizeof(bits));
+    snprintf(buf, cap, "%016llx", (unsigned long long) bits);
+}
+
 static void diff_prism_visit_interpolated(
     const pm_node_t *node,
     const pm_node_list_t *parts,
@@ -300,7 +409,16 @@ static void diff_prism_visit_interpolated(
         }
     }
     if (all_cruby_folded || all_deep_static) {
-        diff_tree_leaf_cstr(ctx->out, leaf_tag, NULL);
+        uint64_t h = DIFF_FNV64_OFFSET;
+        size_t total_len = 0;
+        diff_prism_hash_static_parts(parts, &h, &total_len, ctx->depth);
+        if (leaf_tag == DIFF_TOK_REGX) {
+            diff_prism_emit_regexp_leaf(ctx->out, diff_prism_regexp_opts(node->flags), h, total_len);
+        } else {
+            char buf[48];
+            snprintf(buf, sizeof(buf), "%zu:%016llx", total_len, (unsigned long long) h);
+            diff_tree_leaf_cstr(ctx->out, leaf_tag, buf);
+        }
         return;
     }
     diff_tree_open_cstr(ctx->out, dyn_tag, NULL);
@@ -1667,19 +1785,87 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
         case PM_SOURCE_FILE_NODE:     diff_tree_leaf_cstr(ctx->out, DIFF_TOK_FILE, NULL);     break;
         case PM_SOURCE_LINE_NODE:     diff_tree_leaf_cstr(ctx->out, DIFF_TOK_LINE, NULL);     break;
         case PM_SOURCE_ENCODING_NODE: diff_tree_leaf_cstr(ctx->out, DIFF_TOK_ENCODING, NULL); break;
-        case PM_INTEGER_NODE:         diff_tree_leaf_cstr(ctx->out, DIFF_TOK_INT, NULL);      break;
-        case PM_FLOAT_NODE:           diff_tree_leaf_cstr(ctx->out, DIFF_TOK_FLOAT, NULL);    break;
-        case PM_RATIONAL_NODE:        diff_tree_leaf_cstr(ctx->out, DIFF_TOK_RATIONAL, NULL); break;
-        case PM_IMAGINARY_NODE:       diff_tree_leaf_cstr(ctx->out, DIFF_TOK_IMAGINARY, NULL); break;
-        case PM_STRING_NODE:          diff_tree_leaf_cstr(ctx->out, DIFF_TOK_STR, NULL);      break;
-        case PM_SYMBOL_NODE:          diff_tree_leaf_cstr(ctx->out, DIFF_TOK_SYM, NULL);      break;
-        case PM_REGULAR_EXPRESSION_NODE: diff_tree_leaf_cstr(ctx->out, DIFF_TOK_REGX, NULL);  break;
-        case PM_X_STRING_NODE:        diff_tree_leaf_cstr(ctx->out, DIFF_TOK_XSTR, NULL);     break;
-        case PM_MATCH_LAST_LINE_NODE:
+        case PM_INTEGER_NODE: {
+            const pm_integer_node_t *in = (const pm_integer_node_t *) node;
+            char buf[64];
+            diff_prism_format_integer(&in->value, buf, sizeof(buf));
+            diff_tree_leaf_cstr(ctx->out, DIFF_TOK_INT, buf);
+            break;
+        }
+        case PM_FLOAT_NODE: {
+            const pm_float_node_t *fn = (const pm_float_node_t *) node;
+            char buf[32];
+            diff_prism_format_float(fn->value, buf, sizeof(buf));
+            diff_tree_leaf_cstr(ctx->out, DIFF_TOK_FLOAT, buf);
+            break;
+        }
+        case PM_RATIONAL_NODE: {
+            const pm_rational_node_t *rn = (const pm_rational_node_t *) node;
+            char nbuf[64], dbuf[64], buf[140];
+            diff_prism_format_integer(&rn->numerator, nbuf, sizeof(nbuf));
+            diff_prism_format_integer(&rn->denominator, dbuf, sizeof(dbuf));
+            snprintf(buf, sizeof(buf), "%s/%s", nbuf, dbuf);
+            diff_tree_leaf_cstr(ctx->out, DIFF_TOK_RATIONAL, buf);
+            break;
+        }
+        case PM_IMAGINARY_NODE: {
+            const pm_imaginary_node_t *im = (const pm_imaginary_node_t *) node;
+            char buf[160];
+            if (im->numeric != NULL && PM_NODE_TYPE_P(im->numeric, PM_INTEGER_NODE)) {
+                char ibuf[64];
+                diff_prism_format_integer(&((const pm_integer_node_t *) im->numeric)->value, ibuf, sizeof(ibuf));
+                snprintf(buf, sizeof(buf), "i:%s", ibuf);
+                diff_tree_leaf_cstr(ctx->out, DIFF_TOK_IMAGINARY, buf);
+            } else if (im->numeric != NULL && PM_NODE_TYPE_P(im->numeric, PM_FLOAT_NODE)) {
+                char fbuf[32];
+                diff_prism_format_float(((const pm_float_node_t *) im->numeric)->value, fbuf, sizeof(fbuf));
+                snprintf(buf, sizeof(buf), "f:%s", fbuf);
+                diff_tree_leaf_cstr(ctx->out, DIFF_TOK_IMAGINARY, buf);
+            } else if (im->numeric != NULL && PM_NODE_TYPE_P(im->numeric, PM_RATIONAL_NODE)) {
+                const pm_rational_node_t *rn = (const pm_rational_node_t *) im->numeric;
+                char nbuf[64], dbuf[64];
+                diff_prism_format_integer(&rn->numerator, nbuf, sizeof(nbuf));
+                diff_prism_format_integer(&rn->denominator, dbuf, sizeof(dbuf));
+                snprintf(buf, sizeof(buf), "r:%s/%s", nbuf, dbuf);
+                diff_tree_leaf_cstr(ctx->out, DIFF_TOK_IMAGINARY, buf);
+            } else {
+                diff_tree_leaf_cstr(ctx->out, DIFF_TOK_IMAGINARY, NULL);
+            }
+            break;
+        }
+        case PM_STRING_NODE: {
+            const pm_string_node_t *sn = (const pm_string_node_t *) node;
+            diff_prism_emit_bytes_leaf(ctx->out, DIFF_TOK_STR, pm_string_source(&sn->unescaped), pm_string_length(&sn->unescaped));
+            break;
+        }
+        case PM_SYMBOL_NODE: {
+            const pm_symbol_node_t *sn = (const pm_symbol_node_t *) node;
+            diff_prism_emit_bytes_leaf(ctx->out, DIFF_TOK_SYM, pm_string_source(&sn->unescaped), pm_string_length(&sn->unescaped));
+            break;
+        }
+        case PM_REGULAR_EXPRESSION_NODE: {
+            const pm_regular_expression_node_t *re = (const pm_regular_expression_node_t *) node;
+            const uint8_t *src = pm_string_source(&re->unescaped);
+            size_t slen = pm_string_length(&re->unescaped);
+            uint64_t h = (src != NULL && slen > 0) ? diff_fnv64_update(DIFF_FNV64_OFFSET, src, slen) : DIFF_FNV64_OFFSET;
+            diff_prism_emit_regexp_leaf(ctx->out, diff_prism_regexp_opts(re->base.flags), h, slen);
+            break;
+        }
+        case PM_X_STRING_NODE: {
+            const pm_x_string_node_t *xs = (const pm_x_string_node_t *) node;
+            diff_prism_emit_bytes_leaf(ctx->out, DIFF_TOK_XSTR, pm_string_source(&xs->unescaped), pm_string_length(&xs->unescaped));
+            break;
+        }
+        case PM_MATCH_LAST_LINE_NODE: {
+            const pm_match_last_line_node_t *ml = (const pm_match_last_line_node_t *) node;
+            const uint8_t *src = pm_string_source(&ml->unescaped);
+            size_t slen = pm_string_length(&ml->unescaped);
+            uint64_t h = (src != NULL && slen > 0) ? diff_fnv64_update(DIFF_FNV64_OFFSET, src, slen) : DIFF_FNV64_OFFSET;
             diff_tree_open_match_last_line(ctx->out);
-            diff_tree_leaf_cstr(ctx->out, DIFF_TOK_REGX, NULL);
+            diff_prism_emit_regexp_leaf(ctx->out, diff_prism_regexp_opts(ml->base.flags), h, slen);
             diff_tree_close_match_last_line(ctx->out);
             break;
+        }
         case PM_INTERPOLATED_STRING_NODE:
             diff_prism_visit_interpolated(node, &((const pm_interpolated_string_node_t *) node)->parts, DIFF_TOK_DSTR, DIFF_TOK_STR, ctx);
             break;

@@ -853,6 +853,137 @@ static void diff_cruby_emit_dstr_dyn_parts(VALUE val, diff_cruby_ctx_t ctx) {
     diff_cruby_visit_val_ctx(val, ctx);
 }
 
+static void diff_cruby_hash_dstr_static(VALUE val, uint64_t *hash_io, size_t *len_io, size_t depth) {
+    if (depth >= DIFF_MAX_AST_DEPTH || NIL_P(val)) {
+        return;
+    }
+    if (RB_TYPE_P(val, T_STRING)) {
+        size_t slen = (size_t) RSTRING_LEN(val);
+        if (slen > 0) {
+            *hash_io = diff_fnv64_update(*hash_io, (const uint8_t *) RSTRING_PTR(val), slen);
+            *len_io += slen;
+        }
+        return;
+    }
+    if (RB_TYPE_P(val, T_ARRAY)) {
+        for (long i = 0; i < RARRAY_LEN(val); i++) {
+            diff_cruby_hash_dstr_static(RARRAY_AREF(val, i), hash_io, len_io, depth + 1);
+        }
+        return;
+    }
+    if (!diff_cruby_is_ast_node(val)) {
+        return;
+    }
+    ID tid = diff_cruby_node_tid(val);
+    volatile VALUE ch = rb_funcall(val, id_children, 0);
+    if (RB_TYPE_P(ch, T_ARRAY)) {
+        if (tid == diff_ids.str_n && RARRAY_LEN(ch) >= 1) {
+            diff_cruby_hash_dstr_static(RARRAY_AREF(ch, 0), hash_io, len_io, depth + 1);
+        } else if (tid == diff_ids.list_n) {
+            for (long i = 0; i < RARRAY_LEN(ch); i++) {
+                diff_cruby_hash_dstr_static(RARRAY_AREF(ch, i), hash_io, len_io, depth + 1);
+            }
+        } else if (tid == diff_ids.dstr || tid == diff_ids.dregx || tid == diff_ids.dsym || tid == diff_ids.dxstr) {
+            for (long i = 0; i < RARRAY_LEN(ch); i++) {
+                diff_cruby_hash_dstr_static(RARRAY_AREF(ch, i), hash_io, len_io, depth + 1);
+            }
+        }
+    }
+    RB_GC_GUARD(ch);
+}
+
+static void diff_cruby_emit_bytes_leaf(diff_summary_t *out, diff_tok_tag_t tag, VALUE str) {
+    uint64_t h = DIFF_FNV64_OFFSET;
+    size_t slen = 0;
+    if (RB_TYPE_P(str, T_STRING)) {
+        slen = (size_t) RSTRING_LEN(str);
+        if (slen > 0) {
+            h = diff_fnv64_update(h, (const uint8_t *) RSTRING_PTR(str), slen);
+        }
+    }
+    char buf[48];
+    snprintf(buf, sizeof(buf), "%zu:%016llx", slen, (unsigned long long) h);
+    diff_tree_leaf_cstr(out, tag, buf);
+}
+
+static void diff_cruby_emit_regexp_leaf(diff_summary_t *out, VALUE re) {
+    unsigned int opts = 0;
+    uint64_t h = DIFF_FNV64_OFFSET;
+    size_t slen = 0;
+    if (RB_TYPE_P(re, T_REGEXP)) {
+        opts = (unsigned int) (rb_reg_options(re) & 7);
+        slen = (size_t) RREGEXP_SRC_LEN(re);
+        if (slen > 0) {
+            h = diff_fnv64_update(h, (const uint8_t *) RREGEXP_SRC_PTR(re), slen);
+        }
+    }
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%u:%zu:%016llx", opts, slen, (unsigned long long) h);
+    diff_tree_leaf_cstr(out, DIFF_TOK_REGX, buf);
+}
+
+static void diff_cruby_format_integer(VALUE v, char *buf, size_t cap) {
+    if (!RB_INTEGER_TYPE_P(v)) {
+        snprintf(buf, cap, "?");
+        return;
+    }
+    if (FIXNUM_P(v)) {
+        long lv = FIX2LONG(v);
+        if (lv == 0) {
+            snprintf(buf, cap, "0");
+        } else if (lv < 0) {
+            unsigned long mag = (unsigned long) (-(lv + 1)) + 1UL;
+            snprintf(buf, cap, "-%lu", mag);
+        } else {
+            snprintf(buf, cap, "%lu", (unsigned long) lv);
+        }
+        return;
+    }
+    size_t nwords = rb_absint_numwords(v, 32, NULL);
+    if (nwords == 0) {
+        snprintf(buf, cap, "0");
+        return;
+    }
+    bool neg = false;
+    if (nwords <= 2) {
+        uint32_t words[2] = { 0, 0 };
+        int sign = rb_integer_pack(v, words, nwords, sizeof(uint32_t), 0,
+            INTEGER_PACK_LSWORD_FIRST | INTEGER_PACK_NATIVE_BYTE_ORDER);
+        neg = (sign < 0);
+        uint64_t mag = (uint64_t) words[0];
+        if (nwords == 2) {
+            mag |= ((uint64_t) words[1]) << 32;
+        }
+        snprintf(buf, cap, "%s%llu", neg ? "-" : "", (unsigned long long) mag);
+        return;
+    }
+    uint32_t *words = (uint32_t *) malloc(nwords * sizeof(uint32_t));
+    if (words == NULL) {
+        abort();
+    }
+    int sign = rb_integer_pack(v, words, nwords, sizeof(uint32_t), 0,
+        INTEGER_PACK_LSWORD_FIRST | INTEGER_PACK_NATIVE_BYTE_ORDER);
+    neg = (sign < 0);
+    uint64_t h = DIFF_FNV64_OFFSET;
+    for (size_t i = 0; i < nwords; i++) {
+        uint8_t le[4] = {
+            (uint8_t) (words[i] & 0xffu),
+            (uint8_t) ((words[i] >> 8) & 0xffu),
+            (uint8_t) ((words[i] >> 16) & 0xffu),
+            (uint8_t) ((words[i] >> 24) & 0xffu)
+        };
+        h = diff_fnv64_update(h, le, 4);
+    }
+    free(words);
+    snprintf(buf, cap, "%sbig:%zu:%016llx", neg ? "-" : "", nwords, (unsigned long long) h);
+}
+
+static void diff_cruby_format_float(double val, char *buf, size_t cap) {
+    uint64_t bits = 0;
+    memcpy(&bits, &val, sizeof(bits));
+    snprintf(buf, cap, "%016llx", (unsigned long long) bits);
+}
+
 static void diff_cruby_visit_dstr_like(
     VALUE ch,
     diff_tok_tag_t dyn_tag,
@@ -864,7 +995,20 @@ static void diff_cruby_visit_dstr_like(
     bool has_dyn = diff_cruby_dstr_val_has_dynamic(head, ctx.depth + 1) ||
                    diff_cruby_dstr_val_has_dynamic(tail, ctx.depth + 1);
     if (!has_dyn) {
-        diff_tree_leaf_cstr(ctx.out, leaf_tag, NULL);
+        uint64_t h = DIFF_FNV64_OFFSET;
+        size_t total_len = 0;
+        if (RARRAY_LEN(ch) >= 1) {
+            diff_cruby_hash_dstr_static(RARRAY_AREF(ch, 0), &h, &total_len, ctx.depth + 1);
+        }
+        diff_cruby_hash_dstr_static(head, &h, &total_len, ctx.depth + 1);
+        diff_cruby_hash_dstr_static(tail, &h, &total_len, ctx.depth + 1);
+        char buf[64];
+        if (leaf_tag == DIFF_TOK_REGX) {
+            snprintf(buf, sizeof(buf), "0:%zu:%016llx", total_len, (unsigned long long) h);
+        } else {
+            snprintf(buf, sizeof(buf), "%zu:%016llx", total_len, (unsigned long long) h);
+        }
+        diff_tree_leaf_cstr(ctx.out, leaf_tag, buf);
         return;
     }
     diff_tree_open_cstr(ctx.out, dyn_tag, NULL);
@@ -1524,25 +1668,65 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         diff_tree_leaf_cstr(ctx.out, DIFF_TOK_LINE, NULL);
     } else if (tid == diff_ids.encoding_n) {
         diff_tree_leaf_cstr(ctx.out, DIFF_TOK_ENCODING, NULL);
-    } else if (tid == diff_ids.integer_n) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_INT, NULL);
-    } else if (tid == diff_ids.float_n) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_FLOAT, NULL);
-    } else if (tid == diff_ids.rational_n) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_RATIONAL, NULL);
-    } else if (tid == diff_ids.imaginary_n) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_IMAGINARY, NULL);
-    } else if (tid == diff_ids.str_n) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_STR, NULL);
-    } else if (tid == diff_ids.sym_n) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_SYM, NULL);
-    } else if (tid == diff_ids.regx) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_REGX, NULL);
-    } else if (tid == diff_ids.xstr) {
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_XSTR, NULL);
-    } else if (tid == diff_ids.match_n) {
+    } else if (tid == diff_ids.integer_n && len >= 1) {
+        char buf[64];
+        diff_cruby_format_integer(RARRAY_AREF(ch, 0), buf, sizeof(buf));
+        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_INT, buf);
+    } else if (tid == diff_ids.float_n && len >= 1) {
+        char buf[32];
+        double dv = RB_FLOAT_TYPE_P(RARRAY_AREF(ch, 0)) ? RFLOAT_VALUE(RARRAY_AREF(ch, 0)) : 0.0;
+        diff_cruby_format_float(dv, buf, sizeof(buf));
+        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_FLOAT, buf);
+    } else if (tid == diff_ids.rational_n && len >= 1) {
+        VALUE rv = RARRAY_AREF(ch, 0);
+        if (RB_TYPE_P(rv, T_RATIONAL)) {
+            char nbuf[64], dbuf[64], buf[140];
+            diff_cruby_format_integer(rb_rational_num(rv), nbuf, sizeof(nbuf));
+            diff_cruby_format_integer(rb_rational_den(rv), dbuf, sizeof(dbuf));
+            snprintf(buf, sizeof(buf), "%s/%s", nbuf, dbuf);
+            diff_tree_leaf_cstr(ctx.out, DIFF_TOK_RATIONAL, buf);
+        } else {
+            diff_tree_leaf_cstr(ctx.out, DIFF_TOK_RATIONAL, NULL);
+        }
+    } else if (tid == diff_ids.imaginary_n && len >= 1) {
+        VALUE cv = RARRAY_AREF(ch, 0);
+        if (RB_TYPE_P(cv, T_COMPLEX)) {
+            VALUE im = rb_complex_imag(cv);
+            char buf[160];
+            if (RB_INTEGER_TYPE_P(im)) {
+                char ibuf[64];
+                diff_cruby_format_integer(im, ibuf, sizeof(ibuf));
+                snprintf(buf, sizeof(buf), "i:%s", ibuf);
+                diff_tree_leaf_cstr(ctx.out, DIFF_TOK_IMAGINARY, buf);
+            } else if (RB_FLOAT_TYPE_P(im)) {
+                char fbuf[32];
+                diff_cruby_format_float(RFLOAT_VALUE(im), fbuf, sizeof(fbuf));
+                snprintf(buf, sizeof(buf), "f:%s", fbuf);
+                diff_tree_leaf_cstr(ctx.out, DIFF_TOK_IMAGINARY, buf);
+            } else if (RB_TYPE_P(im, T_RATIONAL)) {
+                char nbuf[64], dbuf[64];
+                diff_cruby_format_integer(rb_rational_num(im), nbuf, sizeof(nbuf));
+                diff_cruby_format_integer(rb_rational_den(im), dbuf, sizeof(dbuf));
+                snprintf(buf, sizeof(buf), "r:%s/%s", nbuf, dbuf);
+                diff_tree_leaf_cstr(ctx.out, DIFF_TOK_IMAGINARY, buf);
+            } else {
+                diff_tree_leaf_cstr(ctx.out, DIFF_TOK_IMAGINARY, NULL);
+            }
+        } else {
+            diff_tree_leaf_cstr(ctx.out, DIFF_TOK_IMAGINARY, NULL);
+        }
+    } else if (tid == diff_ids.str_n && len >= 1) {
+        diff_cruby_emit_bytes_leaf(ctx.out, DIFF_TOK_STR, RARRAY_AREF(ch, 0));
+    } else if (tid == diff_ids.sym_n && len >= 1) {
+        VALUE sv = RARRAY_AREF(ch, 0);
+        diff_cruby_emit_bytes_leaf(ctx.out, DIFF_TOK_SYM, SYMBOL_P(sv) ? rb_sym2str(sv) : sv);
+    } else if (tid == diff_ids.regx && len >= 1) {
+        diff_cruby_emit_regexp_leaf(ctx.out, RARRAY_AREF(ch, 0));
+    } else if (tid == diff_ids.xstr && len >= 1) {
+        diff_cruby_emit_bytes_leaf(ctx.out, DIFF_TOK_XSTR, RARRAY_AREF(ch, 0));
+    } else if (tid == diff_ids.match_n && len >= 1) {
         diff_tree_open_match_last_line(ctx.out);
-        diff_tree_leaf_cstr(ctx.out, DIFF_TOK_REGX, NULL);
+        diff_cruby_emit_regexp_leaf(ctx.out, RARRAY_AREF(ch, 0));
         diff_tree_close_match_last_line(ctx.out);
     } else if (tid == diff_ids.dstr) {
         diff_cruby_visit_dstr_like(ch, DIFF_TOK_DSTR, DIFF_TOK_STR, ctx);

@@ -36,7 +36,10 @@ class TriageDiffParseYTest < Minitest::Test
     "->{D{{\"\":t=r rescue b}.z,=o}}\n".b,
     "def o =nil".b,
     "o[]=def f(*)rescue[*];[]end ".b,
-    "x ([*a])\n([]) ".b
+    "x ([*a])\n([]) ".b,
+    "[42, 0xff, 1_000_000_000_000_000_000_000, 3.14, 1e309, 3.5r, 2.5i, \"a\\nb\", :sym, `ls`, /abc/im, <<~E]\n  hi\nE\n".b,
+    "# coding: ASCII-8BIT\n1\n".b,
+    "1\n__END__\nhello\n".b
   ].freeze
 
   def test_diff_parse_y_signature_deduplication
@@ -210,6 +213,36 @@ class TriageDiffParseYTest < Minitest::Test
       fail_rep = JSON.parse(fail_out)
       assert_equal 1, fail_rep["failed"], "expected failed=1 for unfiltered divergence: #{fail_rep.inspect}"
       assert_includes fail_rep.dig("failures", 0, "output").to_s, "ast_tree_mismatch"
+
+      # Synthetic literal value mismatch fails verify_runner with ast_tree_mismatch sub=label.
+      File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("MOCK_DIFF_LIT_MISMATCH = 42\n"))
+      lit_out, lit_err, lit_st = run_cmd(
+        verify_bucket_sh,
+        "--repo-root", mock_diff_prism,
+        "--fuzz-root", root_dir,
+        "--bucket-dir", diff_bucket,
+        "--json",
+        env: { "VERIFY_BUILD_DIR" => mock_prism_verify_build }
+      )
+      assert_equal 1, lit_st.exitstatus,
+                   "expected verify_bucket.sh diff_parse_y literal mismatch FAIL exit 1, got #{lit_st.exitstatus}\nstdout=#{lit_out}\nstderr=#{lit_err}"
+      lit_rep = JSON.parse(lit_out)
+      assert_includes lit_rep.dig("failures", 0, "output").to_s, "sub=label"
+
+      # Synthetic __END__ data_loc mismatch fails verify_runner with data_loc_mismatch.
+      File.binwrite(File.join(diff_bucket, "input.min"), seed_bytes("MOCK_DIFF_DATA_LOC_MISMATCH\n__END__\ntrailing\n"))
+      dl_out, dl_err, dl_st = run_cmd(
+        verify_bucket_sh,
+        "--repo-root", mock_diff_prism,
+        "--fuzz-root", root_dir,
+        "--bucket-dir", diff_bucket,
+        "--json",
+        env: { "VERIFY_BUILD_DIR" => mock_prism_verify_build }
+      )
+      assert_equal 1, dl_st.exitstatus,
+                   "expected verify_bucket.sh diff_parse_y data_loc mismatch FAIL exit 1, got #{dl_st.exitstatus}\nstdout=#{dl_out}\nstderr=#{dl_err}"
+      dl_rep = JSON.parse(dl_out)
+      assert_includes dl_rep.dig("failures", 0, "output").to_s, "data_loc_mismatch"
 
       # Fatal CRuby parse.y signals must report WIFSIGNALED cleanly with CRASH[diff_parse_y]
       # instead of silently swallowing signals, respect FUZZ_DIFF_BACKTRACE=0, and stay
@@ -1048,6 +1081,19 @@ class TriageDiffParseYTest < Minitest::Test
               if (prog->statements != NULL && prog->statements->body.size > 0) {
                   prog->statements->body.size = 0;
               }
+          }
+          if (node != NULL && parser->end - parser->start >= 22 && memcmp(parser->start, "MOCK_DIFF_LIT_MISMATCH", 22) == 0 && PM_NODE_TYPE_P(node, PM_PROGRAM_NODE)) {
+              pm_program_node_t *prog = (pm_program_node_t *) node;
+              if (prog->statements != NULL && prog->statements->body.size > 0 && PM_NODE_TYPE_P(prog->statements->body.nodes[0], PM_CONSTANT_WRITE_NODE)) {
+                  pm_constant_write_node_t *cw = (pm_constant_write_node_t *) prog->statements->body.nodes[0];
+                  if (cw->value != NULL && PM_NODE_TYPE_P(cw->value, PM_INTEGER_NODE)) {
+                      ((pm_integer_node_t *) cw->value)->value.words.value[0] = 43;
+                  }
+              }
+          }
+          if (node != NULL && parser->end - parser->start >= 27 && memcmp(parser->start, "MOCK_DIFF_DATA_LOC_MISMATCH", 27) == 0) {
+              parser->data_loc.start = 0;
+              parser->data_loc.length = 0;
           }
     C
     File.write(prism_c_path, src[0...ridx] + inject + src[ridx..])

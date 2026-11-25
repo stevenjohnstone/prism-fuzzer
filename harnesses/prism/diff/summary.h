@@ -228,6 +228,17 @@ void diff_tree_open_attrasgn(diff_summary_t *out, const char *name, size_t len);
 void diff_tree_open_match_last_line(diff_summary_t *out);
 void diff_tree_close_match_last_line(diff_summary_t *out);
 
+#define DIFF_FNV64_OFFSET 14695981039346656037ULL
+#define DIFF_FNV64_PRIME  1099511628211ULL
+
+static inline uint64_t diff_fnv64_update(uint64_t h, const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        h ^= (uint64_t) data[i];
+        h *= DIFF_FNV64_PRIME;
+    }
+    return h;
+}
+
 void diff_summary_init(diff_summary_t *s);
 void diff_summary_free(diff_summary_t *s);
 void diff_finalize_summary(diff_summary_t *s);

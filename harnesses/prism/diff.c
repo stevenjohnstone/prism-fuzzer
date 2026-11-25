@@ -137,6 +137,20 @@ static void diff_resolve_mismatch_prism_context(
     free(copy);
 }
 
+static bool diff_enc_equal(const char *a, const char *b) {
+    if (a == NULL || b == NULL) return false;
+    while (*a != '\0' && *b != '\0') {
+        char ca = (*a >= 'A' && *a <= 'Z') ? (char) (*a + ('a' - 'A')) : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? (char) (*b + ('a' - 'A')) : *b;
+        if (ca == '_') ca = '-';
+        if (cb == '_') cb = '-';
+        if (ca != cb) return false;
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
 static void diff_run_prism(
     const uint8_t *source,
     size_t size,
@@ -145,11 +159,17 @@ static void diff_run_prism(
     const char **out_first_diag,
     char *out_enc,
     size_t out_enc_cap,
+    bool *out_has_data_loc,
+    uint32_t *out_data_start,
+    uint32_t *out_data_len,
     diff_summary_t *out_summary
 ) {
     *out_ok = false;
     *out_err_count = 0;
     *out_first_diag = "ok";
+    *out_has_data_loc = false;
+    *out_data_start = 0;
+    *out_data_len = 0;
     if (out_enc_cap > 0) {
         snprintf(out_enc, out_enc_cap, "UTF-8");
     }
@@ -176,6 +196,12 @@ static void diff_run_prism(
 #endif
     pm_node_t *root = pm_parse(parser);
     diff_copy_enc_token(pm_parser_encoding_name(parser), out_enc, out_enc_cap);
+    const pm_location_t *dloc = pm_parser_data_loc(parser);
+    if (dloc != NULL && dloc->length > 0) {
+        *out_has_data_loc = true;
+        *out_data_start = dloc->start;
+        *out_data_len = dloc->length;
+    }
 
     size_t err_count = pm_parser_errors_size(parser);
     *out_err_count = err_count;
@@ -211,13 +237,9 @@ diff_ignore_syntax_mismatch(bool prism_ok, bool cruby_ok, const char *cruby_tag,
         return true;
     }
 
-    // Documented Prism vs CRuby parse.y divergences (test/prism/fixtures_test.rb):
-    // 3.4/command_call_do_block_in_arguments.txt (Ruby #21168) and
-    // pattern_alternation_non_captures.txt (Ruby #22310, fixed on mainline 4.1).
+    // Documented Prism vs CRuby parse.y divergence (test/prism/fixtures_test.rb):
+    // 3.4/command_call_do_block_in_arguments.txt (Ruby #21168).
     if (strcmp(cruby_tag, "SyntaxError:unexpected_do_block") == 0) {
-        return true;
-    }
-    if (strstr(exc_buf, "alternative pattern after variable capture") != NULL) {
         return true;
     }
 
@@ -254,10 +276,25 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     size_t prism_errs = 0;
     const char *prism_diag = "ok";
     char prism_enc[48];
+    bool prism_has_data = false;
+    uint32_t prism_data_start = 0;
+    uint32_t prism_data_len = 0;
     diff_summary_t prism_ast;
     diff_summary_init(&prism_ast);
 
-    diff_run_prism(source, source_size, &prism_ok, &prism_errs, &prism_diag, prism_enc, sizeof(prism_enc), &prism_ast);
+    diff_run_prism(
+        source,
+        source_size,
+        &prism_ok,
+        &prism_errs,
+        &prism_diag,
+        prism_enc,
+        sizeof(prism_enc),
+        &prism_has_data,
+        &prism_data_start,
+        &prism_data_len,
+        &prism_ast
+    );
 
     bool cruby_ok = false;
     char exc_buf[160];
@@ -309,6 +346,67 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     }
 
     if (prism_ok && cruby_ok) {
+        char cruby_enc_raw[48];
+        char cruby_enc[48];
+        bool cruby_has_lines = false;
+        size_t cruby_total_bytes = 0;
+        size_t cruby_last_line_bytes = 0;
+        bool cruby_last_line_is_end = false;
+        diff_cruby_extract_script_meta(
+            ast_node,
+            cruby_enc_raw,
+            sizeof(cruby_enc_raw),
+            &cruby_has_lines,
+            &cruby_total_bytes,
+            &cruby_last_line_bytes,
+            &cruby_last_line_is_end
+        );
+        diff_copy_enc_token(cruby_enc_raw, cruby_enc, sizeof(cruby_enc));
+
+        if (cruby_has_lines && !diff_enc_equal(prism_enc, cruby_enc)) {
+            diff_summary_free(&prism_ast);
+            diff_invariant_fail(
+                "INVARIANT[diff_parse_y]: kind=encoding_mismatch prism=%s cruby=%s\n",
+                prism_enc,
+                cruby_enc
+            );
+        }
+
+        bool has_bom = (source_size >= 3 && source[0] == 0xEF && source[1] == 0xBB && source[2] == 0xBF);
+        if (cruby_has_lines && !has_bom) {
+            bool cruby_has_data = (cruby_total_bytes < source_size && cruby_last_line_is_end);
+            bool prism_has_trailing_data = (prism_has_data && (size_t) prism_data_start + 8 < source_size);
+            if (cruby_has_data != prism_has_trailing_data) {
+                if (cruby_has_data || prism_has_trailing_data) {
+                    size_t cruby_start = cruby_has_data ? (cruby_total_bytes - cruby_last_line_bytes) : 0;
+                    diff_summary_free(&prism_ast);
+                    diff_invariant_fail(
+                        "INVARIANT[diff_parse_y]: kind=data_loc_mismatch [detail: prism_has=%d prism_start=%u prism_len=%u cruby_has=%d cruby_start=%zu cruby_bytes=%zu size=%zu]\n",
+                        prism_has_data ? 1 : 0,
+                        prism_data_start,
+                        prism_data_len,
+                        cruby_has_data ? 1 : 0,
+                        cruby_start,
+                        cruby_total_bytes,
+                        source_size
+                    );
+                }
+            } else if (cruby_has_data) {
+                size_t cruby_start = cruby_total_bytes - cruby_last_line_bytes;
+                if (cruby_start != (size_t) prism_data_start) {
+                    diff_summary_free(&prism_ast);
+                    diff_invariant_fail(
+                        "INVARIANT[diff_parse_y]: kind=data_loc_mismatch [detail: prism_has=1 prism_start=%u prism_len=%u cruby_has=1 cruby_start=%zu cruby_bytes=%zu size=%zu]\n",
+                        prism_data_start,
+                        prism_data_len,
+                        cruby_start,
+                        cruby_total_bytes,
+                        source_size
+                    );
+                }
+            }
+        }
+
         diff_summary_t cruby_ast;
         diff_summary_init(&cruby_ast);
         diff_collect_cruby_summary(ast_node, &cruby_ast);
