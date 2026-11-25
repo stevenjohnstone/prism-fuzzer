@@ -16,6 +16,7 @@ A self-contained fuzzing orchestration framework built primarily to fuzz [Prism]
   - Unsorted comments, invalid diagnostics/magic comments, non-monotonic `line_offsets`, recursion depth exceeding `PRISM_DEPTH_MAXIMUM` without a `nesting_too_deep`/`stack_exhausted` error, and `PM_ERROR_RECOVERY_NODE` emitted with zero parser errors;
   - Streaming (`pm_parse_stream`) vs. full-buffer (`pm_parse`) parse parity (`stream_diff`) and 32-bit vs. 64-bit serialized AST parity (`oracle_arm32` / `oracle_ppc` in [`harnesses/prism/parse32.c`](harnesses/prism/parse32.c)).
 - **Divergences between Prism and CRuby's `parse.y`**: Differential oracle checks in [`harnesses/prism/diff.c`](harnesses/prism/diff.c) and [`harnesses/prism/diff/summary.c`](harnesses/prism/diff/summary.c) catching `syntax_mismatch`, lexical scope variable mismatches (`locals_count_mismatch`, `locals_name_mismatch`), structural AST/def/block-owner divergences (`ast_tree_mismatch`, `ast_scope_kind_mismatch`, `ast_scope_count_mismatch`, `ast_node_count_mismatch`, `ast_def_name_mismatch`, `ast_block_owner_mismatch`), and `eval`/ISeq discrepancies — plus two-version A/B Prism-vs-Prism regressions (`diff_prism` in [`harnesses/prism/prism_diff.c`](harnesses/prism/prism_diff.c)).
+- **CRuby compiler & bytecode-verifier bugs**: Dual-compiler (`cruby_compile`) and 4-stage pipeline (`cruby_pipeline_diff`) checks in [`harnesses/prism/cruby_compile.c`](harnesses/prism/cruby_compile.c) catching `rb_bug` / `RUBY_ASSERT` crashes in `prism_compile.c`, `compile.c`, and `iseq.c`, internal `iseq_set_sequence` bytecode-verifier `COMPILE_ERROR`s (`internal_compile_error`), `compile_mismatch` between Prism and `parse.y` compilation, and cross-pipeline `syntax_mismatch`.
 
 ---
 
@@ -65,15 +66,15 @@ end
 
 Built on **AFL++ v5.03c** and **LLVM 20**, `prism-fuzzer` combines modern greybox, grammar, and differential techniques across [`harnesses/prism/`](harnesses/prism/) and [`patches/afl/`](patches/afl/):
 
-- **Sanitizer-free AFL++ coverage patch ([`aflplusplus.patch`](patches/afl/aflplusplus.patch))**: Patches `SanitizerCoverageLTO.so` and `SanitizerCoveragePCGUARD.so` to strip compiler-inserted ASan/UBSan/MSan runtime checks, MSan shadow `select`/`icmp` propagation, and `assert()` traps from the coverage CFG—eliminating 40–130% bitmap inflation without disabling runtime sanitizer traps.
-- **LTO, CmpLog (Redqueen), IJON & Sand**: Combines link-time instrumentation (`afl: :lto`), CmpLog comparison solving (`fuzz.cmplog`), custom AFL++ IJON state feedback (`fuzz.ijon`) paired with `PM_XALLOCATOR`, AFL++ Sand (`fuzz.sand`), and diverse mutation schedules (`exploit`, `explore`, `coe`, `lin`, `fast`, `-L 0`, `-Z`).
-- **Live grammar synthesis with [`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz) ([`runtime/grammar.rb`](runtime/grammar.rb))**: Derives Ruby programs directly from CRuby's `parse.y` LALR(1) grammar, evolves them against Prism's C extension (`fuzz-ruby-ext`), and feeds expanded AST, regexp, encoding, comment, and heredoc seeds into AFL++ via foreign sync (`-F`).
+- **Sanitizer-free coverage instrumentation ([`aflplusplus.patch`](patches/afl/aflplusplus.patch))**: Strips compiler-inserted ASan/UBSan/MSan checks and `assert()` traps from AFL++'s coverage CFG, eliminating 40–130% bitmap inflation without disabling runtime sanitizer detection.
+- **LTO, CmpLog (Redqueen), IJON & Sand**: Combines collision-free link-time coverage, input-to-state comparison solving (CmpLog), state-guided exploration (IJON) paired with strict allocation tracking (`PM_XALLOCATOR`), decoupled sanitizer execution (AFL++ Sand), and diverse power schedules.
+- **Live grammar synthesis ([`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz), [`runtime/grammar.rb`](runtime/grammar.rb))**: Evolves structurally valid and near-valid Ruby programs directly from CRuby's `parse.y` grammar with parser feedback, continuously feeding deep syntax, regexp, encoding, comment, and heredoc seeds into the AFL++ fleet.
 - **Multi-oracle differential fuzzing**:
-  - **Prism vs. CRuby `parse.y` oracle (`fuzz.diff`)**: Compares Prism against CRuby's `parse.y` oracle across syntax validity, AST structure, scope locals, and bytecode/eval behavior.
-  - **CRuby dual-compiler & full-pipeline differential fuzzing (`fuzz.compile` in [`campaigns/compile.rb`](campaigns/compile.rb), `fuzz.pipeline` in [`campaigns/pipeline.rb`](campaigns/pipeline.rb))**: `fuzz.compile` gates inputs on Prism + `parse.y` parser agreement to focus purely on `compile.o` + `iseq.o` crashes and internal bytecode-verifier `COMPILE_ERROR`s; `fuzz.pipeline` (`shape: :cruby_pipeline_diff`) instruments `prism.o` + `parse.o` + `compile.o` + `iseq.o` and runs `(prism_parse && prism_compile)` vs. `(parsey_parse && parsey_compile)` independently—catching `syntax_mismatch`, `compile_mismatch` (while ignoring phase-split rejections), `internal_compile_error`, and faults across both parsers and both compilers.
-  - **Prism A vs. Prism B (`fuzz.prism_diff`)**: Links two arbitrary Prism commits into one binary with `objcopy --redefine-syms` symbol isolation and per-side PCGUARD domain coverage IDs (`AFL_LLVM_DOCUMENT_IDS`).
-  - **32-bit cross-arch endianness & alignment (`fuzz.arm32`, `fuzz.ppc`)**: Executes 32-bit ARM and PowerPC harnesses under QEMU user-mode emulation, comparing 32-bit vs. 64-bit serialized AST parity via custom mutator `mutator_oracle64.so` alongside [`0001-arena-32bit-alignment.patch`](patches/prism/0001-arena-32bit-alignment.patch).
-  - **Deep parser invariants & SIMD checks**: Exercises `fuzz.slow` (`pm_serialize`, `pm_serialize_parse_stream`, `pm_errors_format`), post-parse AST/sub-location/span/stream-vs-buffer invariants (`fuzz_invariants.h`), and SIMD-vs-SWAR scanner differential fuzzing (`test/test_accel.sh`).
+  - **Prism vs. CRuby `parse.y` ([`diff.c`](harnesses/prism/diff.c))**: Compares syntax acceptance, AST structure, lexical scope locals, and bytecode/eval behavior against CRuby's legacy parser.
+  - **CRuby dual-compiler & full-pipeline differential ([`compile.rb`](campaigns/compile.rb), [`pipeline.rb`](campaigns/pipeline.rb))**: Compiles inputs through both Prism and `parse.y` backends—either gated on parser agreement to concentrate coverage on bytecode compilation and verification, or end-to-end across all four parse/compile stages to catch cross-pipeline syntax and compilation divergences.
+  - **A/B regression diffing ([`prism_diff.c`](harnesses/prism/prism_diff.c))**: Links two arbitrary Prism commits in-process with isolated coverage domains to hunt behavioral regressions between revisions.
+  - **Cross-architecture 32-bit vs. 64-bit parity ([`parse32.c`](harnesses/prism/parse32.c))**: Runs 32-bit ARM (little-endian) and PowerPC (big-endian) harnesses under QEMU user-mode emulation against 64-bit serialized AST oracles to catch alignment and endianness bugs.
+  - **Deep parser invariants & SIMD checks ([`parse.c`](harnesses/prism/parse.c), [`test_accel.sh`](test/test_accel.sh))**: Validates post-parse AST/span/location invariants, streaming-vs-buffer parse parity, serialization round-trips, and SIMD-vs-SWAR scanner equivalence.
 
 ### 3. Zero-Setup Toolchain Completely Inside Docker
 
@@ -87,7 +88,7 @@ Your local machine only needs Ruby and Docker. Every heavy build, cross-compilat
 
 Raw crashes are automatically processed into actionable root-cause groups by the pipeline under [`triage/`](triage/triage.md):
 
-- **Normalization & parallel minimization ([`triage/triage.rb`](triage/triage.rb), [`signature.sh`](triage/signature.sh), `halfempty`)**: Deduplicates crashes via normalized trace and `INVARIANT[...]` 64-bit xxHash signatures, minimizes inputs alongside 4-byte option headers, archives unique inputs (`inputs.tar.gz`), and emits standalone `verify.sh` wrappers.
+- **Normalization, parallel minimization & hang-drift protection ([`triage/triage.rb`](triage/triage.rb), [`signature.sh`](triage/signature.sh), `halfempty`, `afl-tmin`)**: Deduplicates crashes via normalized stack traces, CRuby `[BUG]` dump headers, and prioritized `INVARIANT[...]` 64-bit xxHash signatures; minimizes crash inputs alongside 4-byte option headers; re-verifies `afl-tmin -H` hang minimizations against the full hang timeout (preserving the original hang on drift while forwarding any newly uncovered crash into its own bucket); archives unique inputs (`inputs.tar.gz`); and emits standalone `verify.sh` wrappers.
 - **Metadata-only root-cause clustering ([`triage/cluster.rb`](triage/cluster.rb), [`clustering.md`](triage/clustering.md))**: Runs UPGMA agglomerative clustering using Weighted Jaccard similarity over Laplace-smoothed corpus-IDF `afl-showmap` edge coverage, leaf-anchored Prism call frames, and a soft crash-reason prior—unifying crashes from the same bug even when triggered across ASan, MSan, UBSan, and invariant `ABRT` builds.
 - **Fast C99 batch verification ([`verify_runner.c`](triage/verify_runner.c), [`verify.rb`](triage/verify.rb))**: Re-verifies thousands of archived raw inputs quickly under `fork()` + shared `mmap` isolation, tracks `FAIL` / `PARTIAL` / `PASS` lifecycles, extracts surviving inputs, and refreshes crops after fixes ([`retriage.rb`](triage/retriage.rb)).
 - **Interactive diagnostics & automated `git bisect`**:
@@ -105,7 +106,7 @@ Running `report` (or setting `after_run { report ... }`) compiles a self-contain
 - **Time-Series SVG Charts & Sync Yield**: Plots edge coverage %, edges discovered, corpus growth, throughput (`execs/sec`), cumulative executions, pending favored queue, foreign synced imports, locally discovered items, grammar seed creation/import rates, and peer-sync import/reject/skip yield bars across workers.
 - **Crash Lineage & Interactive Triage Sankey ([`report/sankey.rb`](report/sankey.rb))**: Tracks crash provenance (grammar seeds vs. initial corpus vs. local mutations vs. synced peers) and visualizes fuzzer/origin → crash reason → root-cause cluster → signature bucket flows.
 - **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Writes `<ws>/report/index.html` immediately after triage so fleet and triage tabs are usable right away, then streams progressive per-pair coverage summaries and `llvm-cov` HTML links into open `file://` or `https://` tabs via `coverage/coverage.js` (with incremental `(last_cutoff, cutoff]` `.profdata` caching across mid-run snapshots; see [`docs/architecture.md`](docs/architecture.md#3-decoupled-reporting--incremental-per-pair-llvm-coverage-reportreportrb--reportcoveragesh)).
-- **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive complete multi-run report snapshots (including `llvm-cov` HTML and `triage/` bucket artifacts) into a gitignored `reports/` `gh-pages` branch worktree.
+- **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Splits heavy triage and worker payloads into size-bounded lazy-loaded JS chunks (`data/*.js`) so `<ws>/report/index.html` stays fast on large runs; filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive complete multi-run report snapshots (including `llvm-cov` HTML and `triage/` bucket artifacts) into a gitignored `reports/` `gh-pages` branch worktree.
 
 ---
 
@@ -225,6 +226,7 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 │   ├── compile.rb                  CRuby dual-compiler crash & bytecode-verifier campaign (`tmp/fuzz-compile`)
 │   ├── default.rb                  default executable multi-fuzzer campaign script
 │   ├── ijon.rb                     IJON-centric fleet campaign (sanitized, slow, MSan, and parse.y IJON hub)
+│   ├── ijon-funnel.rb              two-island 256B -> 8 KiB asymmetric IJON funnel fleet (`tmp/fuzz-ijon-funnel`)
 │   ├── ijon-small.rb               256-byte IJON-centric fleet variant (`tmp/fuzz-ijon-small`, `-G 260`)
 │   └── pipeline.rb                 4-stage full-pipeline Prism vs. parse.y + dual-compiler campaign (`tmp/fuzz-pipeline`)
 ├── dict
@@ -240,6 +242,7 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 ├── harnesses
 │   └── prism
 │       ├── accel.c                 SIMD vs. SWAR scanner differential test harness
+│       ├── cruby_compile.c         CRuby dual-compiler (`compile.rb`) and 4-stage pipeline (`pipeline.rb`) harness
 │       ├── diff.c                  Prism vs. CRuby parse.y differential oracle harness
 │       ├── explain.c               diagnostics helper for inline AST, stream, and ISeq diffs
 │       ├── fuzz.c                  AFL++ / libFuzzer persistent entrypoint and PM_XALLOCATOR
