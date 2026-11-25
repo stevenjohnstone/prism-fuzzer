@@ -1054,6 +1054,23 @@ static bool diff_cruby_emit_call_like(VALUE target, VALUE iter_block, diff_cruby
     return false;
 }
 
+static void diff_cruby_visit_logical_leaf(VALUE val, ID op_tid, diff_cruby_ctx_t ctx) {
+    if (ctx.depth < DIFF_MAX_AST_DEPTH && diff_cruby_is_ast_node(val) && diff_cruby_node_tid(val) == op_tid) {
+        ID tid = 0;
+        volatile VALUE ch = diff_cruby_get_children(val, ctx.out, &tid);
+        long len = RARRAY_LEN(ch);
+        diff_cruby_ctx_t sub = ctx;
+        sub.depth = ctx.depth + 1;
+        sub.in_container = false;
+        for (long i = 0; i < len; i++) {
+            diff_cruby_visit_logical_leaf(RARRAY_AREF(ch, i), op_tid, sub);
+        }
+        RB_GC_GUARD(ch);
+        return;
+    }
+    diff_cruby_visit_val_ctx(val, ctx);
+}
+
 static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
     if (ctx.depth >= DIFF_MAX_AST_DEPTH) {
         return;
@@ -1244,7 +1261,7 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
     } else if ((tid == diff_ids.and_n || tid == diff_ids.or_n)) {
         diff_tree_open_cstr(ctx.out, tid == diff_ids.and_n ? DIFF_TOK_AND : DIFF_TOK_OR, NULL);
         for (long i = 0; i < len; i++) {
-            diff_cruby_visit_val_ctx(RARRAY_AREF(ch, i), sub);
+            diff_cruby_visit_logical_leaf(RARRAY_AREF(ch, i), tid, sub);
         }
         diff_tree_close(ctx.out);
     } else if (tid == diff_ids.rescue_n && len >= 3) {
@@ -1331,10 +1348,12 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         if (ctx.in_target) {
             diff_tree_open_cstr(ctx.out, DIFF_TOK_TARGET, "attr");
         }
+        diff_cruby_ctx_t expr_ctx = sub;
+        expr_ctx.in_target = false;
         diff_cruby_tree_open_sym(RARRAY_AREF(ch, 1), DIFF_TOK_ATTRASGN, ctx.out);
-        diff_cruby_visit_slot("recv", RARRAY_AREF(ch, 0), sub);
+        diff_cruby_visit_slot("recv", RARRAY_AREF(ch, 0), expr_ctx);
         diff_tree_open_slot(ctx.out, "args");
-        diff_cruby_emit_seq_elems(RARRAY_AREF(ch, 2), "arg", sub, ctx.in_target);
+        diff_cruby_emit_seq_elems(RARRAY_AREF(ch, 2), "arg", expr_ctx, ctx.in_target);
         diff_tree_close(ctx.out);
         diff_tree_close(ctx.out);
         if (ctx.in_target) {
@@ -1366,8 +1385,10 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
              * producing a bogus Symbol whose rb_sym2str crashes CRuby. ch[0] already has COLON2/COLON3.
              */
             if (ctx.in_target) {
+                diff_cruby_ctx_t expr_ctx = sub;
+                expr_ctx.in_target = false;
                 diff_tree_open_cstr(ctx.out, DIFF_TOK_TARGET, "cp");
-                diff_cruby_visit_val_ctx(RARRAY_AREF(ch, 0), sub);
+                diff_cruby_visit_val_ctx(RARRAY_AREF(ch, 0), expr_ctx);
                 diff_tree_close(ctx.out);
             } else {
                 diff_tree_open_cstr(ctx.out, DIFF_TOK_CDECL, NULL);

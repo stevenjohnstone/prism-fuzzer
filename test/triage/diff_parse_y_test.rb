@@ -27,7 +27,16 @@ class TriageDiffParseYTest < Minitest::Test
     "/(?<\r/".b,
     "%r (#$ ".b,
     "while def d;break end\nend ".b,
-    "(unless def ! =s then end.o,(((::B,))))=unless{}then end::B{}end".b
+    "(unless def ! =s then end.o,(((::B,))))=unless{}then end::B{}end".b,
+    "(a||={})[],=a\n".b,
+    "f,f[1,o=2]=o ".b,
+    "BEGIN{N{{}};BEGIN{N{$&}}} ".b,
+    "case a\nin B|B|:d\nend".b,
+    "x in (1)|((1)|(2))\n".b,
+    "->{D{{\"\":t=r rescue b}.z,=o}}\n".b,
+    "def o =nil".b,
+    "o[]=def f(*)rescue[*];[]end ".b,
+    "x ([*a])\n([]) ".b
   ].freeze
 
   def test_diff_parse_y_signature_deduplication

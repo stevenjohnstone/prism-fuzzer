@@ -408,9 +408,7 @@ static void diff_prism_visit_begin_parts(
             diff_tree_open_cstr(ctx->out, DIFF_TOK_RESBODY, NULL);
             diff_tree_open_slot(ctx->out, "exc");
             for (size_t i = 0; i < r->exceptions.size; i++) {
-                diff_tree_open_slot(ctx->out, "elem");
-                diff_prism_visit_child(r->exceptions.nodes[i], ctx);
-                diff_tree_close(ctx->out);
+                diff_prism_emit_seq_elem(r->exceptions.nodes[i], i, "elem", ctx);
             }
             diff_tree_close(ctx->out);
             diff_prism_visit_slot("var", r->reference, ctx);
@@ -596,6 +594,20 @@ static void diff_prism_visit_hash_elems(const pm_node_list_t *elements, diff_pri
 }
 
 static void diff_prism_visit_logical_leaf(const pm_node_t *node, pm_node_type_t ntype, diff_prism_ctx_t *ctx) {
+    if (ntype == PM_ALTERNATION_PATTERN_NODE && node != NULL && ctx->depth < DIFF_MAX_AST_DEPTH) {
+        while (node != NULL && PM_NODE_TYPE_P(node, PM_PARENTHESES_NODE)) {
+            const pm_node_t *body = ((const pm_parentheses_node_t *) node)->body;
+            if (body != NULL && PM_NODE_TYPE_P(body, PM_STATEMENTS_NODE)) {
+                const pm_statements_node_t *stmts = (const pm_statements_node_t *) body;
+                if (stmts->body.size == 1) {
+                    node = stmts->body.nodes[0];
+                    continue;
+                }
+                break;
+            }
+            node = body;
+        }
+    }
     if (node != NULL && PM_NODE_TYPE_P(node, ntype) && ctx->depth < DIFF_MAX_AST_DEPTH) {
         const pm_node_t *left = NULL;
         const pm_node_t *right = NULL;
@@ -762,6 +774,13 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
         }
         case PM_PARENTHESES_NODE: {
             const pm_parentheses_node_t *p = (const pm_parentheses_node_t *) node;
+            if (in_args && p->body != NULL && PM_NODE_TYPE_P(p->body, PM_STATEMENTS_NODE)) {
+                const pm_statements_node_t *stmts = (const pm_statements_node_t *) p->body;
+                if (stmts->body.size == 1) {
+                    diff_prism_visit_expr(stmts->body.nodes[0], ctx, true);
+                    break;
+                }
+            }
             diff_prism_visit_child(p->body, ctx);
             break;
         }
@@ -800,7 +819,18 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
                 ctx->out->has_nested_preexe = true;
             }
             ctx->preexe_depth++;
-            diff_prism_visit_stmt_list(pre->statements, ctx);
+            if (pre->statements != NULL) {
+                const pm_node_list_t *stmts = &pre->statements->body;
+                for (int pass = 0; pass < 2; pass++) {
+                    bool want_pre = (pass == 0);
+                    for (size_t i = 0; i < stmts->size; i++) {
+                        const pm_node_t *stmt = stmts->nodes[i];
+                        if (stmt != NULL && (PM_NODE_TYPE_P(stmt, PM_PRE_EXECUTION_NODE) != 0) == want_pre) {
+                            diff_prism_visit_child(stmt, ctx);
+                        }
+                    }
+                }
+            }
             ctx->preexe_depth--;
             break;
         }
@@ -826,7 +856,19 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
             if (def_n->parameters != NULL) {
                 diff_prism_visit_params_node(&def_n->parameters->base, ctx);
             }
-            diff_prism_visit_slot("body", def_n->body, ctx);
+            const pm_node_t *def_body = def_n->body;
+            if (def_body != NULL) {
+                if (PM_NODE_TYPE_P(def_body, PM_NIL_NODE)) {
+                    def_body = NULL;
+                } else if (PM_NODE_TYPE_P(def_body, PM_STATEMENTS_NODE)) {
+                    const pm_statements_node_t *stmts = (const pm_statements_node_t *) def_body;
+                    if (stmts->body.size == 1 && stmts->body.nodes[0] != NULL &&
+                        PM_NODE_TYPE_P(stmts->body.nodes[0], PM_NIL_NODE)) {
+                        def_body = NULL;
+                    }
+                }
+            }
+            diff_prism_visit_slot("body", def_body, ctx);
             diff_tree_close(ctx->out);
             diff_tree_close(ctx->out);
             break;
