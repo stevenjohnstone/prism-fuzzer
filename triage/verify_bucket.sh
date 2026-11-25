@@ -26,7 +26,7 @@ usage() {
 Usage: verify_bucket.sh [--repo-root DIR] [--fuzz-root DIR] [--bucket-dir DIR] [OPTIONS]
   --repo-root DIR           Target Prism source directory (alias: --target DIR; default: PRISM_A_DIR or build/targets/prism_a)
   --fuzz-root DIR           prism-fuzzer root containing harnesses/prism (default: script repo)
-  --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_parse_y_asan | diff_prism | arm32_oracle | ppc_oracle
+  --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_parse_y_asan | cruby_compile | cruby_compile_asan | diff_prism | arm32_oracle | ppc_oracle
   --runner PATH             Use a precompiled verify_runner binary
   --build-only              Build (if stale) and print the runner binary path
   --rebuild-verifiers       Force recompilation of verify_runner (bypasses source fingerprint cache)
@@ -140,33 +140,6 @@ if [ -z "$REPO_ROOT" ] && [ -f "$res_topo" ]; then
   ' "$res_topo" || true)"
 fi
 
-if [ -z "$REPO_ROOT" ]; then
-  echo "verify_bucket.sh: --repo-root is required (or set PRISM_A_DIR / run make targets-sync)" >&2
-  usage >&2
-  exit 2
-fi
-
-if [ "$BUILD_ONLY" -eq 0 ] && [ -z "$BUCKET_DIR" ]; then
-  echo "verify_bucket.sh: --bucket-dir is required" >&2
-  usage >&2
-  exit 2
-fi
-
-if [ ! -f "$REPO_ROOT/include/prism.h" ] || [ ! -d "$REPO_ROOT/src" ]; then
-  echo "verify_bucket.sh: invalid Prism root '$REPO_ROOT'" >&2
-  exit 2
-fi
-
-if [ ! -f "$FUZZ_ROOT/harnesses/prism/parse.c" ] || [ ! -f "$FUZZ_ROOT/triage/verify_runner.c" ]; then
-  echo "verify_bucket.sh: invalid fuzz root '$FUZZ_ROOT'" >&2
-  exit 2
-fi
-
-if [ "$BUILD_ONLY" -eq 0 ] && [ ! -d "$BUCKET_DIR" ]; then
-  echo "verify_bucket.sh: bucket directory not found: '$BUCKET_DIR'" >&2
-  exit 2
-fi
-
 if [ -z "$PROFILE" ]; then
   if [ -n "$BUCKET_DIR" ]; then
     profile_rb=""
@@ -183,6 +156,35 @@ if [ -z "$PROFILE" ]; then
   else
     PROFILE="asan_ubsan"
   fi
+fi
+
+if [ "$PROFILE" != "cruby_compile" ] && [ "$PROFILE" != "cruby_compile_asan" ]; then
+  if [ -z "$REPO_ROOT" ]; then
+    echo "verify_bucket.sh: --repo-root is required (or set PRISM_A_DIR / run make targets-sync)" >&2
+    usage >&2
+    exit 2
+  fi
+
+  if [ ! -f "$REPO_ROOT/include/prism.h" ] || [ ! -d "$REPO_ROOT/src" ]; then
+    echo "verify_bucket.sh: invalid Prism root '$REPO_ROOT'" >&2
+    exit 2
+  fi
+fi
+
+if [ "$BUILD_ONLY" -eq 0 ] && [ -z "$BUCKET_DIR" ]; then
+  echo "verify_bucket.sh: --bucket-dir is required" >&2
+  usage >&2
+  exit 2
+fi
+
+if [ ! -f "$FUZZ_ROOT/harnesses/prism/parse.c" ] || [ ! -f "$FUZZ_ROOT/triage/verify_runner.c" ]; then
+  echo "verify_bucket.sh: invalid fuzz root '$FUZZ_ROOT'" >&2
+  exit 2
+fi
+
+if [ "$BUILD_ONLY" -eq 0 ] && [ ! -d "$BUCKET_DIR" ]; then
+  echo "verify_bucket.sh: bucket directory not found: '$BUCKET_DIR'" >&2
+  exit 2
 fi
 
 ensure_target_templates() {
@@ -407,17 +409,21 @@ build_verify_runner() {
   local profile="$1"
   if [ "$profile" = "diff_parse_y" ] && diff_bucket_needs_asan "${BUCKET_DIR:-}"; then
     profile="diff_parse_y_asan"
+  elif [ "$profile" = "cruby_compile" ] && diff_bucket_needs_asan "${BUCKET_DIR:-}"; then
+    profile="cruby_compile_asan"
   fi
   local cache_dir="${VERIFY_BUILD_DIR:-$ws_build_dir/verify}"
   if ! mkdir -p "$cache_dir" 2>/dev/null || [ ! -w "$cache_dir" ]; then
     local target_key
-    target_key="$(ruby -rdigest -e 'puts Digest::SHA256.hexdigest(File.expand_path(ARGV[0]))[0, 12]' "$REPO_ROOT")"
+    target_key="$(ruby -rdigest -e 'puts Digest::SHA256.hexdigest(File.expand_path(ARGV[0]))[0, 12]' "${REPO_ROOT:-$FUZZ_ROOT}")"
     cache_dir="${TMPDIR:-/tmp}/prism-fuzzer-verify/$target_key"
     mkdir -p "$cache_dir"
   fi
 
-  ensure_target_templates "$REPO_ROOT" "$cache_dir"
-  check_target_api_support "$REPO_ROOT"
+  if [ -n "$REPO_ROOT" ]; then
+    ensure_target_templates "$REPO_ROOT" "$cache_dir"
+    check_target_api_support "$REPO_ROOT"
+  fi
 
   local prism_b=""
   if [ "$profile" = "diff_prism" ]; then
@@ -434,7 +440,7 @@ build_verify_runner() {
 
   local sub_loc_gen="$FUZZ_ROOT/harnesses/prism/gen_node_locations.rb"
   local sub_loc_inc="$cache_dir/node_locations.inc"
-  if [ -f "$sub_loc_gen" ] && [ -f "$REPO_ROOT/config.yml" ]; then
+  if [ -n "$REPO_ROOT" ] && [ -f "$sub_loc_gen" ] && [ -f "$REPO_ROOT/config.yml" ]; then
     if [ ! -f "$sub_loc_inc" ] || [ "$REPO_ROOT/config.yml" -nt "$sub_loc_inc" ] || [ "$sub_loc_gen" -nt "$sub_loc_inc" ]; then
       ruby "$sub_loc_gen" "$REPO_ROOT/config.yml" "$sub_loc_inc" >&2 || {
         echo "verify_bucket.sh: failed to generate $sub_loc_inc" >&2
@@ -453,7 +459,7 @@ build_verify_runner() {
 
   local flags=()
   local probe_arr=()
-  if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ]; then
+  if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ] || [ "$profile" = "cruby_compile" ] || [ "$profile" = "cruby_compile_asan" ]; then
     flags=("$profile" "$max_input")
   elif [ "$profile" = "diff_prism" ]; then
     flags=("diff_prism" "$max_input" "$prism_b")
@@ -594,6 +600,23 @@ build_verify_runner() {
           --output "$tmp_bin"; then
         rm -f "$tmp_bin"
         echo "verify_bucket.sh: failed to compile verify_runner ($profile) against '$REPO_ROOT'" >&2
+        exit 125
+      fi
+    elif [ "$profile" = "cruby_compile" ] || [ "$profile" = "cruby_compile_asan" ]; then
+      local compile_extra_args=()
+      if [ "$profile" = "cruby_compile_asan" ]; then
+        compile_extra_args=(--cflag -fsanitize=address)
+      fi
+      if ! "$FUZZ_ROOT/harnesses/prism/build_cruby_compile.sh" \
+          --mode verify \
+          --fuzz-root "$FUZZ_ROOT" \
+          --oracle-dir "$cache_dir/compile-oracle" \
+          --cc "$cc" \
+          --max-input-size "$max_input" \
+          ${compile_extra_args[@]+"${compile_extra_args[@]}"} \
+          --output "$tmp_bin"; then
+        rm -f "$tmp_bin"
+        echo "verify_bucket.sh: failed to compile verify_runner ($profile)" >&2
         exit 125
       fi
     elif [ "$profile" = "diff_prism" ]; then
@@ -828,7 +851,7 @@ if [ "$SYMBOLIZE" != "1" ]; then
   sym_flag=":symbolize=0"
 fi
 leak_flag=""
-if [ "$PROFILE" = "diff_parse_y" ] || [ "$PROFILE" = "diff_parse_y_asan" ]; then
+if [ "$PROFILE" = "diff_parse_y" ] || [ "$PROFILE" = "diff_parse_y_asan" ] || [ "$PROFILE" = "cruby_compile" ] || [ "$PROFILE" = "cruby_compile_asan" ]; then
   leak_flag=":detect_leaks=0:detect_stack_use_after_return=0"
 fi
 export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1${leak_flag}:max_allocation_size_mb=${max_alloc}:hard_rss_limit_mb=${hard_rss}${sym_flag}}"

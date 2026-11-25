@@ -491,6 +491,9 @@
         },
         {
           "$ref": "#/$defs/fuzzer_prism_cross_oracle"
+        },
+        {
+          "$ref": "#/$defs/fuzzer_cruby_compile"
         }
       ]
     },
@@ -716,6 +719,67 @@
         "repro": {
           "type": "string",
           "minLength": 1
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sanitizer"
+          },
+          "uniqueItems": true
+        },
+        "afl": {
+          "$ref": "#/$defs/afl_mode"
+        },
+        "ijon": {
+          "type": "boolean"
+        },
+        "document_ids": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cflags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "fuzzer_cruby_compile": {
+      "type": "object",
+      "required": [
+        "shape",
+        "ruby"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "const": "cruby_compile"
+        },
+        "ruby": {
+          "$ref": "#/$defs/identifier"
+        },
+        "prism": {
+          "$ref": "#/$defs/identifier"
         },
         "sanitizers": {
           "type": "array",

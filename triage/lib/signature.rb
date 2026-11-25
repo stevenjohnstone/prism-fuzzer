@@ -16,6 +16,7 @@ module FuzzTriage
     EXEC_SUCCESS = "Execution successful.".b.freeze
     RT_ERR_MARKER = ": runtime error: ".b.freeze
     DIFF_HANDLER = "diff_fatal_signal_handler".b.freeze
+    COMPILE_HANDLER = "compile_fatal_signal_handler".b.freeze
     SIGRETURN_1 = "__kernel_rt_sigreturn".b.freeze
     SIGRETURN_2 = "__restore_rt".b.freeze
 
@@ -105,7 +106,7 @@ module FuzzTriage
 
       return nil if line == EXEC_SUCCESS
       return nil if line.start_with?("Reading ".b) && line.match?(/\AReading [0-9]+ bytes from /n)
-      return nil if line.include?(DIFF_HANDLER)
+      return nil if line.include?(DIFF_HANDLER) || line.include?(COMPILE_HANDLER)
       return nil if line.include?(SIGRETURN_1) || line.include?(SIGRETURN_2)
       return nil if line.include?("rb_print_backtrace".b) && line.match?(/\(rb_print_backtrace(?:\+0x[0-9a-fA-F]+)?\)/n)
 

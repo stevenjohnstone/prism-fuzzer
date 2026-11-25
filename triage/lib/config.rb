@@ -128,7 +128,8 @@ module FuzzTriage
       disable_leaks = if !detect_leaks.nil?
                         !detect_leaks
                       elsif executable
-                        FuzzVerifyProfile.diff_bucket?(executable: executable, triage_dir: triage_dir)
+                        FuzzVerifyProfile.diff_bucket?(executable: executable, triage_dir: triage_dir) ||
+                          FuzzVerifyProfile.cruby_compile_bucket?(executable: executable, triage_dir: triage_dir)
                       else
                         false
                       end

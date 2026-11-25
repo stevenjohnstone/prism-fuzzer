@@ -897,6 +897,49 @@ class CampaignDslAndSchemaTest < Minitest::Test
     refute ir.fetch("workers").any? { |w| w.key?("when") || w.key?("when_lt_4_workers") }
   end
 
+  def test_cruby_compile_campaign_dsl_and_dry_run_build
+    val_out, = assert_cmd(repo_path("campaigns/compile.rb"), "validate", "--json")
+    v = JSON.parse(val_out)
+    assert_equal true, v["valid"]
+    assert_equal 2, v["schema_version"]
+    assert_equal 10, v.fetch("workers").size
+
+    comp_out, = assert_cmd(repo_path("campaigns/compile.rb"), "compile")
+    ir = JSON.parse(comp_out)
+    schema = JSON.parse(File.read(repo_path("topology.schema.json")))
+    PrismFuzzer::JsonSchema.validate!(schema, ir)
+    assert_equal "cruby_compile", ir.dig("fuzzers", "fuzz.compile", "shape")
+    assert_equal "cruby_compile", ir.dig("fuzzers", "fuzz.ijon.compile", "shape")
+
+    plan = PrismFuzzer::Topology.compile_plan(ir, fuzz_root: root_dir)
+    assert_equal "cruby_compile", plan.dig("fuzzers", "fuzz.compile", "verify_profile")
+    assert_equal ["prism_a"], plan.dig("fuzzers", "fuzz.compile", "coverage_sources")
+
+    dry_env = prism_a_dir ? { "PRISM_DIR" => prism_a_dir } : {}
+    dry_out, = assert_cmd(repo_path("campaigns/compile.rb"), "build", "--dry-run", env: dry_env)
+    assert_includes dry_out, "build_cruby_compile.sh --mode fuzz --oracle-dir"
+    assert_includes dry_out, "AFL_LLVM_IJON=1 build_cruby_compile.sh --mode fuzz"
+    assert_includes dry_out, "--cflag -DPRISM_FUZZ_IJON"
+
+    # Minimal ruby-only cruby_compile campaign (without a :prism source) must also validate cleanly.
+    with_tmpdir("dsl-ruby-only-") do |dir|
+      camp_rb = File.join(dir, "ruby_only.rb")
+      File.write(camp_rb, <<~RB)
+        PrismFuzzer.campaign "ruby-only-compile" do
+          workspace "tmp/test-ruby-only"
+          ruby :ruby, dir: "/opt/ruby"
+          fuzzer "fuzz.compile", shape: :cruby_compile, ruby: :ruby
+          sync_group :afl, dir: "afl", primary: true
+          worker :main, fuzzer: "fuzz.compile", sync_group: :afl, afl_role: :main
+        end
+      RB
+      ruby_only_ir = PrismFuzzer::CampaignDSL.compile_file(camp_rb, fuzz_root: root_dir)
+      PrismFuzzer::Topology.validate_ir!(ruby_only_ir, fuzz_root: root_dir)
+      ruby_only_plan = PrismFuzzer::Topology.compile_plan(ruby_only_ir, fuzz_root: root_dir)
+      assert_empty ruby_only_plan.dig("fuzzers", "fuzz.compile", "coverage_sources")
+    end
+  end
+
   def test_lifecycle_schema_timer_and_post_steps
     with_tmpdir("dsl-lifecycle-") do |dir|
       upstream = PrismFuzzerTest::Fixtures.build_synthetic_upstream_prism(File.join(dir, "upstream"))

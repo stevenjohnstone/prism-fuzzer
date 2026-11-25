@@ -388,7 +388,8 @@ module FuzzClustering
         Regexp.last_match(1)
       elsif ns == "stream_diff" || headline.start_with?("INVARIANT[stream_diff]:")
         "stream_diff"
-      elsif bucket["verify_profile"].to_s == "diff_parse_y" || headline.start_with?("CRASH[diff_parse_y]:")
+      elsif %w[diff_parse_y cruby_compile].include?(bucket["verify_profile"].to_s) ||
+            headline.start_with?("CRASH[diff_parse_y]:", "CRASH[cruby_compile]:", "INVARIANT[cruby_compile]:")
         has_prism = Array(bucket["frames"]).any? { |f| prism_frame?(f) } || prism_symptom?(bucket)
         has_prism ? "crash_or_inv" : "cruby_crash"
       else

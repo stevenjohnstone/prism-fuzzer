@@ -11,7 +11,7 @@ REPORT_LIB_DEPS := report/report.rb report/sankey.rb $(sort $(wildcard report/li
 TEST_RUNNER_DEPS := test/run.rb test/lib/autorun.rb test/lib/test_helpers.rb test/lib/fixtures.rb
 PRISM_A_STATE_DEP := $(wildcard $(PRISM_A_DIR)/.fuzz-target-state.json)
 PRISM_A_CONFIG_DEP := $(PRISM_A_DIR)/config.yml
-FUZZ_DIFF_DEPS := harnesses/prism/diff.c harnesses/prism/diff/summary.h harnesses/prism/diff/summary.c harnesses/prism/diff/cruby_vm.h harnesses/prism/diff/cruby_vm.c harnesses/prism/diff/prism_walker.h harnesses/prism/diff/prism_walker.c harnesses/prism/diff/cruby_walker.c harnesses/prism/build_diff.sh harnesses/prism/gen_diff_ids.rb runtime/provenance.rb
+FUZZ_DIFF_DEPS := harnesses/prism/diff.c harnesses/prism/diff/summary.h harnesses/prism/diff/summary.c harnesses/prism/diff/cruby_vm.h harnesses/prism/diff/cruby_vm.c harnesses/prism/diff/prism_walker.h harnesses/prism/diff/prism_walker.c harnesses/prism/diff/cruby_walker.c harnesses/prism/build_diff.sh harnesses/prism/cruby_compile.c harnesses/prism/build_cruby_compile.sh harnesses/prism/gen_diff_ids.rb runtime/provenance.rb
 FUZZ_PRISM_DIFF_DEPS := harnesses/prism/prism_diff.c harnesses/prism/prism_diff_side.c harnesses/prism/prism_diff_side.h harnesses/prism/build_prism_diff.sh harnesses/prism/gen_diff_ids.rb runtime/provenance.rb
 TRIAGE_COMMON_DEPS := triage/triage.rb triage/verify.rb triage/verify_bucket.sh triage/retriage.rb triage/cluster.rb triage/match.rb triage/inspect.rb triage/explain.rb triage/signature.sh triage/halfempty.sh triage/halfempty_compare.sh triage/bisect.rb $(sort $(wildcard triage/lib/*.rb)) runtime/common.rb runtime/fuzz_header.rb runtime/provenance.rb $(RUNTIME_TOPOLOGY_DEPS)
 
@@ -237,7 +237,7 @@ $(TEST_STAMPS_DIR)/triage_bisect.stamp: test/triage/bisect_test.rb $(TEST_RUNNER
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/bisect_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_diff_parse_y.stamp: test/triage/diff_parse_y_test.rb $(TEST_RUNNER_DEPS) $(FUZZ_DIFF_DEPS) triage/verify_runner.c harnesses/prism/include/fuzz_options.h $(TRIAGE_COMMON_DEPS) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) $(FUZZ_DOCKER_STAMP)
-	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) DIFF_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/diff" DIFF_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/diff-oracle" ruby test/run.rb test/triage/diff_parse_y_test.rb)
+	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) DIFF_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/diff" DIFF_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/diff-oracle" COMPILE_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/compile" COMPILE_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/compile-oracle" ruby test/run.rb test/triage/diff_parse_y_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_provenance.stamp: test/triage/provenance_test.rb $(TEST_RUNNER_DEPS) $(FUZZ_AFL_STAMP) $(TRIAGE_COMMON_DEPS) $(REPORT_LIB_DEPS) $(RUNTIME_CAMPAIGN_DEPS) lib/prism_fuzzer.rb runtime/campaign_dsl.rb runtime/progress.rb campaigns/default.rb Makefile test/tests.mk
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/provenance_test.rb)

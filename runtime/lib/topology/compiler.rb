@@ -78,6 +78,15 @@ module PrismFuzzer
           raise TopologyError, "Fuzzer '#{fid}' role '#{role_key}' expected kind=#{expected_kind}, got #{src['kind']}" unless src["kind"].to_s == expected_kind.to_s
         end
 
+        (shape[:optional_source_roles] || {}).each do |role_key, expected_kind|
+          next if f[role_key].nil? || f[role_key].to_s.empty?
+
+          src_id = f[role_key].to_s
+          src = raw_sources[src_id]
+          raise TopologyError, "Fuzzer '#{fid}' (#{shape_name}) references unknown #{expected_kind} source '#{src_id}' for '#{role_key}'" unless src
+          raise TopologyError, "Fuzzer '#{fid}' role '#{role_key}' expected kind=#{expected_kind}, got #{src['kind']}" unless src["kind"].to_s == expected_kind.to_s
+        end
+
         if shape_name == "prism_cross_oracle"
           arch = f["arch"].to_s
           raise TopologyError, "Fuzzer '#{fid}' has unsupported cross-oracle arch '#{arch}'" unless CROSS_ARCH_CONFIGS.key?(arch)

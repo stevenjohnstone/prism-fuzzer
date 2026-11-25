@@ -58,7 +58,10 @@ module PrismFuzzerReport
       if sanitize.nil?
         if File.basename(File.dirname(path)) == "crashes"
           bt_text = crash_file_bt_text(path)
-          diff ||= bt_text.include?("INVARIANT[diff_parse_y]") || bt_text.include?("CRASH[diff_parse_y]")
+          diff ||= bt_text.include?("INVARIANT[diff_parse_y]") ||
+                   bt_text.include?("CRASH[diff_parse_y]") ||
+                   bt_text.include?("INVARIANT[cruby_compile]") ||
+                   bt_text.include?("CRASH[cruby_compile]")
           sig_reason = crash_filename_signal_reason(path)
           sanitize = !diff && PrismFuzzer::LoupeUrl.sanitizer_crash?(sig_reason, bt_text)
         else
@@ -147,9 +150,10 @@ module PrismFuzzerReport
       record_for_bucket = lambda do |b|
         reason = b["reason"].to_s
         headline = b.dig("symptom", "headline").to_s
-        is_diff = b["verify_profile"].to_s == "diff_parse_y" ||
-                  b.dig("target", "shape").to_s == "prism_diff_ruby" ||
-                  headline.include?("diff_parse_y")
+        is_diff = %w[diff_parse_y cruby_compile].include?(b["verify_profile"].to_s) ||
+                  %w[prism_diff_ruby cruby_compile].include?(b.dig("target", "shape").to_s) ||
+                  headline.include?("diff_parse_y") ||
+                  headline.include?("cruby_compile")
         { reason: reason, headline: headline, is_diff: is_diff }
       end
 
@@ -221,7 +225,7 @@ module PrismFuzzerReport
           next unless w.is_a?(Hash)
 
           fspec = topo.dig("fuzzers", w["fuzzer"].to_s)
-          if fspec.is_a?(Hash) && (fspec["shape"].to_s == "prism_diff_ruby" || fspec["verify_profile"].to_s == "diff_parse_y")
+          if fspec.is_a?(Hash) && (%w[prism_diff_ruby cruby_compile].include?(fspec["shape"].to_s) || %w[diff_parse_y cruby_compile].include?(fspec["verify_profile"].to_s))
             flags[w["id"].to_s] = true
           end
         end
@@ -230,7 +234,7 @@ module PrismFuzzerReport
         stats = StatsIngest.parse_fuzzer_stats(File.join(dir, "fuzzer_stats"))
         banner = stats["afl_banner"].to_s
         cmd = stats["command_line"].to_s
-        if File.basename(banner) == "fuzz.diff" || cmd.match?(%r{(?:\A|[/\s])fuzz\.diff(?:\s|\z)})
+        if %w[fuzz.diff fuzz.compile].include?(File.basename(banner)) || cmd.match?(%r{(?:\A|[/\s])fuzz\.(?:diff|compile)(?:\s|\z)})
           flags[wname] = true
         end
       end
@@ -263,6 +267,8 @@ module PrismFuzzerReport
                  is_diff = (trec && trec[:is_diff]) ||
                            bt_text.include?("INVARIANT[diff_parse_y]") ||
                            bt_text.include?("CRASH[diff_parse_y]") ||
+                           bt_text.include?("INVARIANT[cruby_compile]") ||
+                           bt_text.include?("CRASH[cruby_compile]") ||
                            (worker_diff_flags && worker_diff_flags[s[:worker].to_s])
                  is_san = !is_diff && PrismFuzzer::LoupeUrl.sanitizer_crash?(reason, crash_output)
                  parse_testcase_file(p, sanitize: is_san, diff: is_diff)

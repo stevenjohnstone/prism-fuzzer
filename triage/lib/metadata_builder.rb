@@ -647,6 +647,7 @@ module FuzzTriage
         cov_bin_cand, = resolve_coverage_target(triage_dir: triage_dir)
         candidates = []
         candidates << File.join(bdir, "fuzz.prism_diff") if verify_text.include?("diff_prism")
+        candidates << File.join(bdir, "fuzz.compile") if verify_text.include?("cruby_compile")
         candidates << File.join(bdir, "fuzz.diff") if verify_text.include?("diff_parse_y")
         candidates << File.join(bdir, "fuzz.arm32.repro") if verify_text.include?("arm32_oracle") || build_text.include?("arm-linux-gnueabihf")
         candidates << File.join(bdir, "fuzz.ppc.repro") if verify_text.include?("ppc_oracle") || build_text.include?("powerpc-linux-gnu")

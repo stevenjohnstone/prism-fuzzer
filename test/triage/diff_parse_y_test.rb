@@ -616,6 +616,131 @@ class TriageDiffParseYTest < Minitest::Test
     end
   end
 
+  def test_cruby_compile_build_fuzz_triage_and_verify
+    compile_san = FuzzTriage.env_sanitizer_env(executable: "/tmp/ws/bin/fuzz.compile")
+    assert_includes compile_san.fetch("ASAN_OPTIONS"), "detect_leaks=0"
+    assert_includes compile_san.fetch("ASAN_OPTIONS"), "detect_stack_use_after_return=0"
+    assert_equal "cruby_compile", FuzzVerifyProfile.bucket_verify_profile(reason: "SEGV", executable: "./build/fuzz.compile")
+
+    require_ruby_oracle!
+    skip "requires AFL PCGUARD toolchain (afl-clang-fast + SanitizerCoveragePCGUARD.so)" unless afl_pcguard_ready?
+
+    with_tmpdir("cruby-compile-e2e-") do |workdir|
+      oracle_dir = resolve_env_or_tmp_dir(
+        "COMPILE_TC_ORACLE_DIR",
+        File.join(workdir, "compile-oracle")
+      )
+      verify_build_dir = resolve_env_or_tmp_dir(
+        "COMPILE_VERIFY_BUILD_DIR",
+        File.join(workdir, "verify-build")
+      )
+      fuzz_compile = File.join(workdir, "build", "fuzz.compile")
+      FileUtils.mkdir_p([oracle_dir, verify_build_dir, File.dirname(fuzz_compile)])
+
+      assert_cmd(
+        repo_path("harnesses/prism/build_cruby_compile.sh"),
+        "--mode", "fuzz",
+        "--ruby-dir", "/opt/ruby",
+        "--fuzz-root", root_dir,
+        "--oracle-dir", oracle_dir,
+        "--afl-path", afl_build_dir,
+        "--output", fuzz_compile
+      )
+      assert File.executable?(fuzz_compile), "expected executable #{fuzz_compile}"
+
+      ver_out, = assert_cmd(fuzz_compile, "--version")
+      assert_includes ver_out, "ruby_version="
+
+      ids_path = "#{fuzz_compile}.ids"
+      assert_path_exists ids_path
+      ids_info = FuzzTriage.load_coverage_ids(ids_path)
+      assert_equal true, ids_info[:available]
+      domains = ids_info[:edge_domains].values.uniq
+      assert_includes domains, "cruby_compile", "expected cruby_compile domain in #{ids_path}: #{domains.inspect}"
+      assert_includes domains, "harness", "expected harness domain in #{ids_path}: #{domains.inspect}"
+
+      # Syntax errors (Prism syntax error and parse.y-only invalid UTF-8) and clean valid Ruby
+      # across compile_option bitmasks must exit 0 without stderr noise.
+      inputs_ok = {
+        "prism_err.bin" => seed_bytes("def broken(\n"),
+        "parse_y_utf8_err.bin" => "\x00\x00\x03\x01\"\xff\"\n".b,
+        "valid_default.bin" => seed_bytes("def add(a, k: 1); a + k; end; add(2)\n"),
+        "valid_opt_mask.bin" => "\x3f\x00\x03\x01def fact(n); n <= 1 ? 1 : fact(n - 1); end\n".b
+      }
+      inputs_ok.each do |name, payload|
+        in_path = File.join(workdir, name)
+        File.binwrite(in_path, payload)
+        out, err = assert_cmd(fuzz_compile, in_path)
+        assert_equal "", out + err, "expected silent exit 0 for #{name}"
+      end
+
+      if (showmap_bin = find_executable("afl-showmap"))
+        valid_path = File.join(workdir, "valid_default.bin")
+        batch = FuzzTriage.collect_showmap_batch({ "valid" => valid_path }, fuzz_compile, showmap_bin)
+        assert_equal true, batch[:ok]
+        hit_domains = batch.dig(:maps, "valid").keys.filter_map { |eid| ids_info[:edge_domains][eid] }.uniq
+        assert_includes hit_domains, "cruby_compile", "expected afl-showmap hits in cruby_compile domain: #{hit_domains.inspect}"
+      end
+
+      # Dual-valid Ruby input (accepted by both Prism and parse.y) triggering CRuby 4.1 compile_keyword_arg SEGV
+      # (if fixed in a future /opt/ruby bump, verify clean execution; otherwise verify full triage + verify_bucket.sh flow).
+      kw_crash_bytes = seed_bytes("s = 1; m c, *[s: 1], *[*y]\n")
+      kw_path = File.join(workdir, "kw_crash.bin")
+      File.binwrite(kw_path, kw_crash_bytes)
+      _cout, cerr, cst = run_cmd(fuzz_compile, kw_path)
+      if !cst.success?
+        assert_includes cerr, "CRASH[cruby_compile]: signal=SIGSEGV"
+        sig1 = run_signature(cerr)
+        assert_match(/\A[0-9a-f]{16}\z/, sig1)
+
+        afl_crashes = File.join(workdir, "afl", "compile-main", "crashes")
+        triage_dir = File.join(workdir, "triage")
+        FileUtils.mkdir_p([afl_crashes, triage_dir])
+        File.write(File.join(File.dirname(afl_crashes), "cmdline"), "#{fuzz_compile}\n")
+        File.binwrite(File.join(afl_crashes, "id:000000,sig:11"), kw_crash_bytes)
+
+        with_env("TRIAGE_MINIMIZE" => "0", "FUZZ_DIR" => workdir, "FUZZ_BUILD_DIR" => File.join(workdir, "build")) do
+          capture_io do
+            FuzzTriage.run_triage_pipeline(
+              output_dirs: [File.join(workdir, "afl")],
+              testcases_dir: triage_dir,
+              coverage_bin: "",
+              diff_coverage_bin: "",
+              threads: 1
+            )
+          end
+        end
+
+        segv_buckets = Dir.glob(File.join(triage_dir, "SEGV", "*")).select { |d| File.directory?(d) }
+        assert_equal 1, segv_buckets.size, "expected 1 triaged SEGV bucket under #{triage_dir}"
+        bdir = segv_buckets.first
+        meta = JSON.parse(File.read(File.join(bdir, "meta.json")))
+        assert_equal "cruby_compile", meta["verify_profile"]
+        assert_equal "cruby_crash", FuzzClustering.oracle_family(meta)
+
+        # Verify verify_bucket.sh auto-infers cruby_compile and reproduces WITHOUT --repo-root!
+        v_out, _v_err, v_st = run_cmd(
+          repo_path("triage/verify_bucket.sh"),
+          "--fuzz-root", root_dir,
+          "--bucket-dir", bdir,
+          "--json",
+          env: {
+            "VERIFY_BUILD_DIR" => verify_build_dir,
+            "PRISM_A_DIR" => nil,
+            "PRISM_DIR" => nil,
+            "PRISM_ROOT" => nil,
+            "FUZZ_BUILD_DIR" => File.join(workdir, "build")
+          }
+        )
+        assert_equal 1, v_st.exitstatus, "expected verify_bucket.sh to reproduce cruby_compile SEGV: #{v_out}"
+        v_rep = JSON.parse(v_out)
+        assert_equal 0, v_rep["passed"]
+        assert_equal 2, v_rep["failed"], "expected both input.min and archived raw input to fail: #{v_rep.inspect}"
+        assert_includes v_rep.dig("failures", 0, "headline").to_s, "CRASH[cruby_compile]: signal=SIGSEGV"
+      end
+    end
+  end
+
   private
 
   def run_signature(trace_bytes, siglines: 10)

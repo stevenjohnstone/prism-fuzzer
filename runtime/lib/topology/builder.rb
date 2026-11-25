@@ -377,12 +377,13 @@ module PrismFuzzer
     end
 
     def build_prism_parse!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil)
-      src = plan.fetch("sources").fetch(fspec.fetch("source"))
-      src_dir = src.fetch("path")
-      gen_dir = src.fetch("gen_dir")
+      src_id = fspec.fetch("source")
+      src = plan.fetch("sources").fetch(src_id)
+      src_dir = dry_run ? (src["path"] || src["dir"] || File.join(build_dir, "targets", src_id)) : src.fetch("path")
+      gen_dir = dry_run ? (src["gen_dir"] || File.join(build_dir, "targets", "gen", src_id)) : src.fetch("gen_dir")
       out_path = File.expand_path(fspec.fetch("binary"), fuzz_root)
       stamps_dir = File.join(build_dir, ".stamps")
-      FileUtils.mkdir_p(File.dirname(out_path))
+      FileUtils.mkdir_p(File.dirname(out_path)) unless dry_run
 
       c_files = prism_c_sources(src_dir)
       h_files = prism_headers(src_dir)
@@ -585,6 +586,88 @@ module PrismFuzzer
         "--prism-root", prism_src.fetch("path"),
         "--fuzz-root", fuzz_root,
         "--oracle-dir", File.join(build_dir, "diff-oracle"),
+        "--afl-path", afl_path,
+        "--max-input-size", max_in,
+        "--output", out_path
+      ]
+      if ruby_src["oracle_dir"] && !ruby_src["oracle_dir"].empty?
+        cmd.push("--ruby-dir", ruby_src["oracle_dir"])
+      end
+      extra_cflags.each { |flag| cmd.push("--cflag", flag) }
+      run_env = env.dup
+      run_env["FUZZ_SUB_JOBS"] = sub_jobs.to_s if sub_jobs && sub_jobs > 0
+      if (cdir = resolve_ccache_dir(fuzz_root: fuzz_root))
+        run_env["CCACHE_DIR"] ||= cdir
+      end
+      run_build_cmd(pool, *cmd, env: run_env)
+      record_stamp(stamp_file, bkey, out_path)
+    end
+
+    def build_cruby_compile!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil, sub_jobs: nil)
+      ruby_src = plan.fetch("sources").fetch(fspec.fetch("ruby"))
+      out_path = File.expand_path(fspec.fetch("binary"), fuzz_root)
+      stamps_dir = File.join(build_dir, ".stamps")
+      stamp_file = File.join(stamps_dir, "#{id}.json")
+      afl_mode = fspec["afl"].to_s.empty? ? "pcguard" : fspec["afl"].to_s
+      ijon_enabled = !!fspec["ijon"]
+      sans = Array(fspec["sanitizers"]).map(&:to_s)
+      override_flags, user_flags, = fuzzer_override_flags(fspec)
+
+      extra_cflags = []
+      extra_cflags << "-DPRISM_FUZZ_IJON" if ijon_enabled
+      extra_cflags.concat(user_flags)
+      extra_cflags.concat(override_flags)
+
+      env = {
+        "FUZZ_GIT_COMMIT" => "",
+        "FUZZ_GIT_DIRTY" => ""
+      }
+      env["AFL_USE_ASAN"] = "1" if sans.include?("asan")
+      env.merge!(sanitizer_afl_env(sans))
+      env["AFL_LLVM_IJON"] = "1" if ijon_enabled
+
+      if dry_run
+        san_env = env.reject { |k, _| k.start_with?("FUZZ_GIT_") }
+        env_tokens = san_env.map { |k, v| "#{k}=#{v}" }
+        env_str = env_tokens.empty? ? "" : "#{format_dry_run_tokens(env_tokens)} "
+        cflag_tokens = extra_cflags.flat_map { |f| ["--cflag", f] }
+        cflag_str = cflag_tokens.empty? ? "" : " #{format_dry_run_tokens(cflag_tokens)}"
+        puts "#{env_str}build_cruby_compile.sh --mode fuzz --oracle-dir #{Shellwords.escape(File.join(build_dir, 'compile-oracle'))}#{cflag_str} --output #{Shellwords.escape(fspec.fetch('binary'))}"
+        return
+      end
+
+      build_compile_sh = File.join(fuzz_root, "harnesses", "prism", "build_cruby_compile.sh")
+      deps = [
+        File.join(fuzz_root, "harnesses", "prism", "cruby_compile.c"),
+        build_compile_sh,
+        File.join(fuzz_root, "harnesses", "prism", "gen_diff_ids.rb"),
+        File.join(fuzz_root, "runtime", "provenance.rb"),
+        afl_stamp
+      ]
+      max_in = effective_compiled_max_input_size(plan).to_s
+      git_state = FuzzProvenance.detect_git_state(fuzz_root, paths: FuzzProvenance::GIT_DIRTY_PATHS)
+      env["FUZZ_GIT_COMMIT"] = git_state && git_state["git_commit"] ? git_state["git_commit"] : "unknown"
+      env["FUZZ_GIT_DIRTY"] = git_state && !git_state["git_dirty"].nil? ? (git_state["git_dirty"] ? "1" : "0") : "unknown"
+      bkey = build_key_digest({
+        shape: "cruby_compile",
+        id: id,
+        afl: afl_mode,
+        ijon: ijon_enabled,
+        sans: sans,
+        env: env,
+        flags: extra_cflags,
+        ruby: ruby_src["oracle_dir"] || ruby_src["commit"],
+        max_in: max_in
+      })
+      return if stamp_up_to_date?(stamp_file, out_path, bkey, deps) && (!fspec["document_ids"] || File.file?("#{out_path}.ids"))
+
+      log_progress "building CRuby compiler fuzz binary #{id} (#{fspec['ruby']}#{sans.empty? ? '' : ", #{sans.join('+')}"}#{ijon_enabled ? ', ijon' : ''})"
+      FileUtils.rm_f("#{out_path}.ids")
+      cmd = [
+        build_compile_sh,
+        "--mode", "fuzz",
+        "--fuzz-root", fuzz_root,
+        "--oracle-dir", File.join(build_dir, "compile-oracle"),
         "--afl-path", afl_path,
         "--max-input-size", max_in,
         "--output", out_path
@@ -1060,7 +1143,7 @@ module PrismFuzzer
 
       fuzzers = plan.fetch("fuzzers")
       fuzzers.each do |_id, fspec|
-        unless %w[prism_parse prism_diff_ruby prism_diff_prism prism_cross_oracle].include?(fspec.fetch("shape"))
+        unless %w[prism_parse prism_diff_ruby prism_diff_prism prism_cross_oracle cruby_compile].include?(fspec.fetch("shape"))
           raise TopologyError, "No builder registered for shape '#{fspec['shape']}'"
         end
       end
@@ -1072,6 +1155,8 @@ module PrismFuzzer
             build_prism_parse!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
           when "prism_diff_ruby"
             build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
+          when "cruby_compile"
+            build_cruby_compile!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
           when "prism_diff_prism"
             build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
           when "prism_cross_oracle"
@@ -1088,7 +1173,7 @@ module PrismFuzzer
       end
 
       pool = BuildPool.new(default_build_jobs(jobs))
-      script_count = fuzzers.values.count { |fs| %w[prism_diff_ruby prism_diff_prism].include?(fs["shape"]) } + Array(plan["grammar_ext_sources"]).size
+      script_count = fuzzers.values.count { |fs| %w[prism_diff_ruby prism_diff_prism cruby_compile].include?(fs["shape"]) } + Array(plan["grammar_ext_sources"]).size
       sub_jobs = [[pool.jobs / [script_count, 1].max, 2].max, 8].min
 
       tasks = []
@@ -1099,6 +1184,8 @@ module PrismFuzzer
             build_prism_parse!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool)
           when "prism_diff_ruby"
             build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
+          when "cruby_compile"
+            build_cruby_compile!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
           when "prism_diff_prism"
             build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
           when "prism_cross_oracle"

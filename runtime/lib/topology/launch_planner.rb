@@ -307,7 +307,7 @@ module PrismFuzzer
         sans = aux_fspec ? (fspec_sans | Array(aux_fspec["sanitizers"]).map(&:to_s)) : fspec_sans
 
         env_prefix = []
-        env_prefix << "FUZZ_DIFF_BACKTRACE=#{diff_bt}" if fspec["shape"] == "prism_diff_ruby"
+        env_prefix << "FUZZ_DIFF_BACKTRACE=#{diff_bt}" if %w[prism_diff_ruby cruby_compile].include?(fspec["shape"])
         env_prefix << "AFL_FUZZER_LOOPCOUNT=#{w['loopcount']}" if w["loopcount"]
         env_prefix << "AFL_DISABLE_TRIM=1" if w["no_trim"]
         w["env"].each { |k, v| env_prefix << "#{k}=#{Shellwords.escape(v.to_s)}" } if w["env"].is_a?(Hash)
@@ -352,8 +352,8 @@ module PrismFuzzer
           }
         else
           env_prefix << "MSAN_OPTIONS=#{msan_opts}" if sans.include?("msan")
-          is_diff_ruby = fspec["shape"] == "prism_diff_ruby" || aux_fspec&.dig("shape") == "prism_diff_ruby"
-          asan_eff = is_diff_ruby ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
+          is_cruby_vm = %w[prism_diff_ruby cruby_compile].include?(fspec["shape"]) || %w[prism_diff_ruby cruby_compile].include?(aux_fspec&.dig("shape"))
+          asan_eff = is_cruby_vm ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
           env_prefix << "LSAN_OPTIONS=#{lsan_opts}" if sans.include?("lsan")
           env_prefix << "ASAN_OPTIONS=#{asan_eff}" if sans.include?("asan")
           env_prefix << "UBSAN_OPTIONS=#{ubsan_opts}" if sans.include?("ubsan")
@@ -386,7 +386,7 @@ module PrismFuzzer
           # Reuse fuzz-time sanitizer options (especially ASan detect_leaks=0 / symbolize=0)
           # so embedded runtimes like CRuby do not fail LSan or stall on exit during seed screening.
           self_pass_env = { "FUZZ_DIFF_BACKTRACE" => "0" }
-          asan_eff = fspec["shape"] == "prism_diff_ruby" ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
+          asan_eff = %w[prism_diff_ruby cruby_compile].include?(fspec["shape"]) ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
           self_pass_env["MSAN_OPTIONS"] = msan_opts if fspec_sans.include?("msan")
           self_pass_env["LSAN_OPTIONS"] = lsan_opts if fspec_sans.include?("lsan")
           self_pass_env["ASAN_OPTIONS"] = asan_eff if fspec_sans.include?("asan")

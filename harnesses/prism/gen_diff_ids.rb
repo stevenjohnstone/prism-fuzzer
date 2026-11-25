@@ -151,7 +151,8 @@ module FuzzDiffIds
 
   def classify_domain(src, archive_path, archive_a: nil, archive_b: nil)
     base = File.basename(src)
-    return "harness" if %w[diff.o prism_diff.o].include?(base)
+    return "harness" if %w[diff.o prism_diff.o cruby_compile.o].include?(base)
+    return "cruby_compile" if src.include?("(compile.o)") || src.include?("(iseq.o)") || src.include?("/libcruby_compile") || src.start_with?("libcruby_compile")
 
     if archive_a && (src.start_with?("#{archive_a}(") || src.include?("/#{File.basename(archive_a)}("))
       return "prism_a"

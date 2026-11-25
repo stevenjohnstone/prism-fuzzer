@@ -177,6 +177,12 @@ module FuzzTriage
             "func" => Regexp.last_match(3),
             "expr" => Regexp.last_match(4)
           }.compact
+        elsif assertion.nil? && line =~ /\[BUG\] Assertion Failed: ([^:\s]+):(\d+):(.+)\z/
+          assertion = {
+            "file" => normalize_repo_path(Regexp.last_match(1)),
+            "line" => Regexp.last_match(2).to_i,
+            "expr" => Regexp.last_match(3).strip
+          }.compact
         end
       end
 
@@ -207,7 +213,7 @@ module FuzzTriage
           reason = "memory-leak"
         elsif clean_output.include?("FUZZ_MAX_ALLOCATED_BYTES")
           reason = "allocation-size-too-big"
-        elsif clean_output.include?("Assertion `") || clean_output.include?("INVARIANT[")
+        elsif clean_output.include?("Assertion `") || clean_output.include?("[BUG] Assertion Failed:") || clean_output.include?("INVARIANT[")
           reason = "ABRT"
         elsif clean_output =~ /^CRASH\[[^\]]+\]:\s*signal=SIG([A-Z0-9_]+)/
           reason = Regexp.last_match(1)
@@ -243,7 +249,7 @@ module FuzzTriage
 
     def differential_invariant_present?(raw_output)
       b = raw_output.to_s.b
-      b.include?("INVARIANT[".b) && b.match?(/^INVARIANT\[(?:diff_parse_y|diff_prism|oracle_[A-Za-z0-9_]+)\]:/n)
+      b.include?("INVARIANT[".b) && b.match?(/^INVARIANT\[(?:diff_parse_y|diff_prism|cruby_compile|oracle_[A-Za-z0-9_]+)\]:/n)
     end
 
     def with_testcase_timeout(seconds)
@@ -381,8 +387,8 @@ module FuzzTriage
                      executable
                    end
 
-      is_diff_or_oracle = executable.end_with?("diff", "prism_diff", "arm32", "arm32.repro", "ppc", "ppc.repro") ||
-                          (fspec && %w[prism_diff_ruby prism_diff_prism prism_cross_oracle].include?(fspec["shape"]))
+      is_diff_or_oracle = executable.end_with?("diff", "prism_diff", "compile", "arm32", "arm32.repro", "ppc", "ppc.repro") ||
+                          (fspec && %w[prism_diff_ruby prism_diff_prism cruby_compile prism_cross_oracle].include?(fspec["shape"]))
 
       if reason == "hang"
         executable = replay_exe
