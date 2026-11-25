@@ -1,10 +1,111 @@
+const reportChunkManifest = window.__PRISM_FUZZER_CHUNK_MANIFEST__ || null;
+const reportChunkCache = new Map();
+const reportChunkPromises = new Map();
+const reportChunkPartBuffers = new Map();
+const evoStepStore = Object.create(null);
+const drawerSpecStore = Object.create(null);
+let applyLatestWorkerBannerCoverage = null;
+
+window.__PRISM_FUZZER_ON_CHUNK__ = function(chunkId, payload) {
+  reportChunkCache.set(chunkId, payload);
+  if (payload && payload.kind === 'steps' && payload.steps) {
+    Object.assign(evoStepStore, payload.steps);
+  } else if (payload && payload.kind === 'drawers' && payload.drawers) {
+    Object.assign(drawerSpecStore, payload.drawers);
+  }
+};
+
+window.__PRISM_FUZZER_ON_CHUNK_PART__ = function(chunkId, partIdx, totalParts, sliceStr) {
+  let entry = reportChunkPartBuffers.get(chunkId);
+  if (!entry) {
+    entry = { parts: new Array(totalParts), seen: 0, total: totalParts };
+    reportChunkPartBuffers.set(chunkId, entry);
+  }
+  if (entry.parts[partIdx] === undefined) {
+    entry.parts[partIdx] = sliceStr;
+    entry.seen += 1;
+  }
+  if (entry.seen >= entry.total) {
+    reportChunkPartBuffers.delete(chunkId);
+    const parsed = JSON.parse(entry.parts.join(''));
+    window.__PRISM_FUZZER_ON_CHUNK__(chunkId, parsed);
+  }
+};
+
+function loadChunkScriptFile(relUrl) {
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.async = true;
+    script.src = relUrl;
+    script.onload = () => {
+      script.remove();
+      resolve();
+    };
+    script.onerror = () => {
+      script.remove();
+      reject(new Error('Failed to load report chunk: ' + relUrl));
+    };
+    document.head.appendChild(script);
+  });
+}
+
+function loadReportChunk(chunkId) {
+  if (!chunkId) return Promise.resolve(null);
+  if (reportChunkCache.has(chunkId)) return Promise.resolve(reportChunkCache.get(chunkId));
+  if (!reportChunkManifest || !Array.isArray(reportChunkManifest[chunkId])) {
+    return Promise.resolve(null);
+  }
+  if (reportChunkPromises.has(chunkId)) return reportChunkPromises.get(chunkId);
+
+  const files = reportChunkManifest[chunkId];
+  const p = Promise.all(files.map(loadChunkScriptFile))
+    .then(() => reportChunkCache.get(chunkId) || null)
+    .finally(() => { reportChunkPromises.delete(chunkId); });
+  reportChunkPromises.set(chunkId, p);
+  return p;
+}
+
+function ensureTabPanelLoaded(panel) {
+  if (!panel || panel.dataset.chunkLoaded === '1' || !panel.dataset.tabChunk) {
+    return Promise.resolve(true);
+  }
+  if (panel._chunkLoadingPromise) return panel._chunkLoadingPromise;
+
+  if (!panel.children.length) {
+    panel.innerHTML = '<div class="table-card" style="padding:24px;color:var(--muted);">Loading report section&hellip;</div>';
+  }
+  panel._chunkLoadingPromise = loadReportChunk(panel.dataset.tabChunk)
+    .then(payload => {
+      if (panel.dataset.chunkLoaded === '1') return true;
+      panel.innerHTML = (payload && payload.html) || '';
+      panel.dataset.chunkLoaded = '1';
+      initCharts(panel);
+      if (applyLatestWorkerBannerCoverage) applyLatestWorkerBannerCoverage(panel);
+      if (payload && payload.sankeyMeta && typeof mountSankeyView === 'function') {
+        mountSankeyView(payload.sankeyMeta, payload.sankeyInitial);
+      }
+      return true;
+    })
+    .catch(() => {
+      if (panel.dataset.chunkLoaded !== '1') {
+        panel.innerHTML = '<div class="table-card" style="padding:24px;color:var(--muted);">Failed to load report chunk (ensure the <code>chunks/</code> directory is alongside <code>index.html</code>).</div>';
+      }
+      return false;
+    })
+    .finally(() => {
+      panel._chunkLoadingPromise = null;
+    });
+  return panel._chunkLoadingPromise;
+}
+
 function selectTab(name, push = true) {
-  if (!document.getElementById('tab-' + name)) return;
+  const targetPanel = document.getElementById('tab-' + name);
+  if (!targetPanel) return Promise.resolve(false);
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.tab === name);
   });
   document.querySelectorAll('.tab-panel').forEach(panel => {
-    panel.classList.toggle('active', panel.id === 'tab-' + name);
+    panel.classList.toggle('active', panel === targetPanel);
   });
   const sel = document.getElementById('worker-tab-select');
   const wrap = document.getElementById('worker-nav-wrap');
@@ -20,6 +121,7 @@ function selectTab(name, push = true) {
     history.pushState({ tab: name }, '', targetHash);
     window.scrollTo({ top: 0, behavior: 'instant' });
   }
+  return ensureTabPanelLoaded(targetPanel);
 }
 
 function stepWorkerTab(delta) {
@@ -85,152 +187,229 @@ function escapeHtml(v) {
     .replace(/'/g, '&#39;');
 }
 
-document.querySelectorAll('.chart-card[data-series]').forEach(card => {
-  const series = JSON.parse(card.dataset.series || '[]');
-  const minX = parseFloat(card.dataset.minX);
-  const maxX = parseFloat(card.dataset.maxX);
-  const padL = parseFloat(card.dataset.padL);
-  const plotW = parseFloat(card.dataset.plotW);
-  const svg = card.querySelector('.plot-svg');
-  const hoverLine = card.querySelector('.hover-line');
-  const hoverDot = card.querySelector('.hover-dot');
-  const lineBadge = card.querySelector('.line-badge');
-  const tooltip = card.querySelector('.chart-tooltip');
-  const groups = Array.from(card.querySelectorAll('.series-group'));
-  const legendItems = Array.from(card.querySelectorAll('.legend-item'));
-  if (!svg || !series.length) return;
+function initCharts(root) {
+  (root || document).querySelectorAll('.chart-card[data-series]').forEach(card => {
+    if (card.dataset.chartBound === '1') return;
+    card.dataset.chartBound = '1';
+    const series = JSON.parse(card.dataset.series || '[]');
+    const minX = parseFloat(card.dataset.minX);
+    const maxX = parseFloat(card.dataset.maxX);
+    const padL = parseFloat(card.dataset.padL);
+    const plotW = parseFloat(card.dataset.plotW);
+    const svg = card.querySelector('.plot-svg');
+    const hoverLine = card.querySelector('.hover-line');
+    const hoverDot = card.querySelector('.hover-dot');
+    const lineBadge = card.querySelector('.line-badge');
+    const tooltip = card.querySelector('.chart-tooltip');
+    const groups = Array.from(card.querySelectorAll('.series-group'));
+    const legendItems = Array.from(card.querySelectorAll('.legend-item'));
+    if (!svg || !series.length) return;
 
-  let pinnedSeries = null;
+    let pinnedSeries = null;
 
-  function highlightSeries(activeName) {
-    if (groups.length <= 1) return;
-    groups.forEach(g => {
-      const match = g.dataset.seriesName === activeName;
-      g.classList.toggle('active', !!activeName && match);
-      g.classList.toggle('dimmed', !!activeName && !match);
-      if (match && activeName && g.parentNode) {
-        g.parentNode.appendChild(g);
-        if (hoverLine) g.parentNode.appendChild(hoverLine);
-        if (hoverDot) g.parentNode.appendChild(hoverDot);
-      }
-    });
+    function highlightSeries(activeName) {
+      if (groups.length <= 1) return;
+      groups.forEach(g => {
+        const match = g.dataset.seriesName === activeName;
+        g.classList.toggle('active', !!activeName && match);
+        g.classList.toggle('dimmed', !!activeName && !match);
+        if (match && activeName && g.parentNode) {
+          g.parentNode.appendChild(g);
+          if (hoverLine) g.parentNode.appendChild(hoverLine);
+          if (hoverDot) g.parentNode.appendChild(hoverDot);
+        }
+      });
+      legendItems.forEach(item => {
+        const match = item.dataset.seriesName === activeName;
+        item.classList.toggle('active', !!activeName && match);
+        item.classList.toggle('dimmed', !!activeName && !match);
+      });
+    }
+
     legendItems.forEach(item => {
-      const match = item.dataset.seriesName === activeName;
-      item.classList.toggle('active', !!activeName && match);
-      item.classList.toggle('dimmed', !!activeName && !match);
+      const sName = item.dataset.seriesName;
+      item.addEventListener('mouseenter', () => highlightSeries(sName));
+      item.addEventListener('mouseleave', () => highlightSeries(pinnedSeries));
+      item.addEventListener('click', () => {
+        pinnedSeries = (pinnedSeries === sName) ? null : sName;
+        highlightSeries(pinnedSeries);
+      });
     });
-  }
 
-  legendItems.forEach(item => {
-    const sName = item.dataset.seriesName;
-    item.addEventListener('mouseenter', () => highlightSeries(sName));
-    item.addEventListener('mouseleave', () => highlightSeries(pinnedSeries));
-    item.addEventListener('click', () => {
-      pinnedSeries = (pinnedSeries === sName) ? null : sName;
-      highlightSeries(pinnedSeries);
+    svg.addEventListener('mousemove', e => {
+      const rect = svg.getBoundingClientRect();
+      const scaleX = 580 / rect.width;
+      const scaleY = 270 / rect.height;
+      const svgX = (e.clientX - rect.left) * scaleX;
+      const svgY = (e.clientY - rect.top) * scaleY;
+      if (svgX < padL || svgX > padL + plotW) {
+        hoverLine.style.display = 'none';
+        hoverDot.style.display = 'none';
+        lineBadge.style.display = 'none';
+        tooltip.style.display = 'none';
+        highlightSeries(pinnedSeries);
+        return;
+      }
+      const ratio = (svgX - padL) / plotW;
+      const targetT = minX + ratio * (maxX - minX);
+
+      hoverLine.setAttribute('x1', svgX.toFixed(1));
+      hoverLine.setAttribute('x2', svgX.toFixed(1));
+      hoverLine.style.display = '';
+
+      // Determine closest series at this time slice (or directly hovered path)
+      const directHit = e.target.closest('.series-hit');
+      let hoveredSeriesName = directHit ? directHit.dataset.seriesName : null;
+      let closestPointBySeries = {};
+      let minVerticalDist = Infinity;
+      let nearestSeries = null;
+
+      series.forEach(s => {
+        if (!s.points.length) return;
+        let best = s.points[0];
+        let bestDist = Math.abs(best[0] - targetT);
+        for (let i = 1; i < s.points.length; i++) {
+          const d = Math.abs(s.points[i][0] - targetT);
+          if (d < bestDist) { bestDist = d; best = s.points[i]; }
+        }
+        closestPointBySeries[s.name] = { series: s, point: best };
+        const vDist = Math.abs(best[3] - svgY);
+        if (vDist < minVerticalDist) {
+          minVerticalDist = vDist;
+          nearestSeries = s.name;
+        }
+      });
+
+      if (!hoveredSeriesName && minVerticalDist <= 28) {
+        hoveredSeriesName = nearestSeries;
+      }
+      const activeName = pinnedSeries || hoveredSeriesName || (series.length === 1 ? series[0].name : null);
+      highlightSeries(activeName);
+
+      if (activeName && closestPointBySeries[activeName]) {
+        const activeInfo = closestPointBySeries[activeName];
+        const pt = activeInfo.point;
+        const ptSvgX = padL + ((pt[0] - minX) / (maxX - minX)) * plotW;
+        const ptSvgY = pt[3];
+        hoverDot.setAttribute('cx', ptSvgX.toFixed(1));
+        hoverDot.setAttribute('cy', ptSvgY.toFixed(1));
+        hoverDot.setAttribute('fill', activeInfo.series.color);
+        hoverDot.style.display = '';
+
+        const badgeLeft = (ptSvgX / 580) * rect.width;
+        const badgeTop = (ptSvgY / 270) * rect.height;
+        lineBadge.style.left = Math.min(Math.max(badgeLeft, 50), rect.width - 60) + 'px';
+        lineBadge.style.top = Math.max(badgeTop, 28) + 'px';
+        lineBadge.innerHTML = '<span class="legend-dot" style="background:' + escapeHtml(activeInfo.series.color) + '"></span>' +
+          '<span>' + escapeHtml(activeInfo.series.name) + ': <strong>' + escapeHtml(pt[2]) + '</strong></span>';
+        lineBadge.style.display = 'flex';
+      } else {
+        hoverDot.style.display = 'none';
+        lineBadge.style.display = 'none';
+      }
+
+      let html = '<div class="tt-time">t = ' + formatDuration(targetT) + '</div>';
+      const sortedSeries = series
+        .filter(s => closestPointBySeries[s.name])
+        .slice()
+        .sort((a, b) => {
+          const va = closestPointBySeries[a.name].point[1];
+          const vb = closestPointBySeries[b.name].point[1];
+          return vb - va;
+        });
+      sortedSeries.forEach(s => {
+        const info = closestPointBySeries[s.name];
+        const isAct = s.name === activeName;
+        html += '<div class="tt-row' + (isAct ? ' active' : '') + '">' +
+          '<span><span class="legend-dot" style="background:' + escapeHtml(s.color) + '"></span> ' + escapeHtml(s.name) + '</span>' +
+          '<strong>' + escapeHtml(info.point[2]) + '</strong></div>';
+      });
+      tooltip.innerHTML = html;
+      tooltip.style.display = 'block';
     });
-  });
 
-  svg.addEventListener('mousemove', e => {
-    const rect = svg.getBoundingClientRect();
-    const scaleX = 580 / rect.width;
-    const scaleY = 270 / rect.height;
-    const svgX = (e.clientX - rect.left) * scaleX;
-    const svgY = (e.clientY - rect.top) * scaleY;
-    if (svgX < padL || svgX > padL + plotW) {
+    svg.addEventListener('mouseleave', () => {
       hoverLine.style.display = 'none';
       hoverDot.style.display = 'none';
       lineBadge.style.display = 'none';
       tooltip.style.display = 'none';
       highlightSeries(pinnedSeries);
-      return;
-    }
-    const ratio = (svgX - padL) / plotW;
-    const targetT = minX + ratio * (maxX - minX);
+    });
+  });
+}
 
-    hoverLine.setAttribute('x1', svgX.toFixed(1));
-    hoverLine.setAttribute('x2', svgX.toFixed(1));
-    hoverLine.style.display = '';
+initCharts(document);
 
-    // Determine closest series at this time slice (or directly hovered path)
-    const directHit = e.target.closest('.series-hit');
-    let hoveredSeriesName = directHit ? directHit.dataset.seriesName : null;
-    let closestPointBySeries = {};
-    let minVerticalDist = Infinity;
-    let nearestSeries = null;
+function buildEvoDrawerInnerHtml(spec) {
+  const steps = Array.isArray(spec.s) ? spec.s : [];
+  const stepsHtml = steps.map((sid, idx) => {
+    const isLast = (idx === steps.length - 1);
+    const cls = idx === 0
+      ? 'evo-step evo-step-root'
+      : (isLast && spec.k ? 'evo-step evo-step-crash' : 'evo-step');
+    const tail = evoStepStore[String(sid)] || '';
+    return '<div class="' + cls + '"><div class="evo-step-head"><span class="evo-step-num">Step ' + idx + '</span>\n' + tail + '\n</div>';
+  }).join('<div class="evo-connector">&darr;</div>');
+  return '<td colspan="' + (Number(spec.c) || 7) + '" class="hunk-drawer-cell">' +
+    '<div class="origin-hunk-title">' + (spec.t || '') + '</div>' +
+    '<div class="evo-chain-wrap">' + stepsHtml + '</div></td>';
+}
 
-    series.forEach(s => {
-      if (!s.points.length) return;
-      let best = s.points[0];
-      let bestDist = Math.abs(best[0] - targetT);
-      for (let i = 1; i < s.points.length; i++) {
-        const d = Math.abs(s.points[i][0] - targetT);
-        if (d < bestDist) { bestDist = d; best = s.points[i]; }
-      }
-      closestPointBySeries[s.name] = { series: s, point: best };
-      const vDist = Math.abs(best[3] - svgY);
-      if (vDist < minVerticalDist) {
-        minVerticalDist = vDist;
-        nearestSeries = s.name;
+function hydrateDrawerRows(rows) {
+  const pending = rows.filter(r => r && r.dataset.drawerShard && r.dataset.drawerHydrated !== '1' && !r.children.length);
+  if (!pending.length) return Promise.resolve();
+
+  const drawerShards = Array.from(new Set(pending.map(r => r.dataset.drawerShard).filter(Boolean)));
+  return Promise.all(drawerShards.map(loadReportChunk)).then(() => {
+    const stepShards = new Set();
+    pending.forEach(r => {
+      const spec = drawerSpecStore[r.id];
+      if (spec && Array.isArray(spec.deps)) {
+        spec.deps.forEach(dep => stepShards.add(dep));
       }
     });
-
-    if (!hoveredSeriesName && minVerticalDist <= 28) {
-      hoveredSeriesName = nearestSeries;
-    }
-    const activeName = pinnedSeries || hoveredSeriesName || (series.length === 1 ? series[0].name : null);
-    highlightSeries(activeName);
-
-    if (activeName && closestPointBySeries[activeName]) {
-      const activeInfo = closestPointBySeries[activeName];
-      const pt = activeInfo.point;
-      const ptSvgX = padL + ((pt[0] - minX) / (maxX - minX)) * plotW;
-      const ptSvgY = pt[3];
-      hoverDot.setAttribute('cx', ptSvgX.toFixed(1));
-      hoverDot.setAttribute('cy', ptSvgY.toFixed(1));
-      hoverDot.setAttribute('fill', activeInfo.series.color);
-      hoverDot.style.display = '';
-
-      const badgeLeft = (ptSvgX / 580) * rect.width;
-      const badgeTop = (ptSvgY / 270) * rect.height;
-      lineBadge.style.left = Math.min(Math.max(badgeLeft, 50), rect.width - 60) + 'px';
-      lineBadge.style.top = Math.max(badgeTop, 28) + 'px';
-      lineBadge.innerHTML = '<span class="legend-dot" style="background:' + escapeHtml(activeInfo.series.color) + '"></span>' +
-        '<span>' + escapeHtml(activeInfo.series.name) + ': <strong>' + escapeHtml(pt[2]) + '</strong></span>';
-      lineBadge.style.display = 'flex';
-    } else {
-      hoverDot.style.display = 'none';
-      lineBadge.style.display = 'none';
-    }
-
-    let html = '<div class="tt-time">t = ' + formatDuration(targetT) + '</div>';
-    const sortedSeries = series
-      .filter(s => closestPointBySeries[s.name])
-      .slice()
-      .sort((a, b) => {
-        const va = closestPointBySeries[a.name].point[1];
-        const vb = closestPointBySeries[b.name].point[1];
-        return vb - va;
-      });
-    sortedSeries.forEach(s => {
-      const info = closestPointBySeries[s.name];
-      const isAct = s.name === activeName;
-      html += '<div class="tt-row' + (isAct ? ' active' : '') + '">' +
-        '<span><span class="legend-dot" style="background:' + escapeHtml(s.color) + '"></span> ' + escapeHtml(s.name) + '</span>' +
-        '<strong>' + escapeHtml(info.point[2]) + '</strong></div>';
+    return Promise.all(Array.from(stepShards).map(loadReportChunk));
+  }).then(() => {
+    pending.forEach(r => {
+      if (r.dataset.drawerHydrated === '1' || r.children.length) return;
+      const spec = drawerSpecStore[r.id];
+      if (!spec) return;
+      if (typeof spec.html === 'string') {
+        r.innerHTML = spec.html;
+      } else if (Array.isArray(spec.s)) {
+        r.innerHTML = buildEvoDrawerInnerHtml(spec);
+      }
+      r.dataset.drawerHydrated = '1';
     });
-    tooltip.innerHTML = html;
-    tooltip.style.display = 'block';
   });
+}
 
-  svg.addEventListener('mouseleave', () => {
-    hoverLine.style.display = 'none';
-    hoverDot.style.display = 'none';
-    lineBadge.style.display = 'none';
-    tooltip.style.display = 'none';
-    highlightSeries(pinnedSeries);
-  });
-});
+function ensureExtraRowsLoaded(tbody) {
+  if (!tbody || tbody.dataset.extraRowsHydrated === '1') return Promise.resolve();
+  const raw = tbody.dataset.extraRowShards || '';
+  const shardIds = raw.split(',').map(s => s.trim()).filter(Boolean);
+  if (!shardIds.length) {
+    tbody.dataset.extraRowsHydrated = '1';
+    return Promise.resolve();
+  }
+  if (tbody._extraRowsPromise) return tbody._extraRowsPromise;
+
+  tbody._extraRowsPromise = Promise.all(shardIds.map(loadReportChunk))
+    .then(chunks => {
+      if (tbody.dataset.extraRowsHydrated === '1') return;
+      const html = chunks.map(c => (c && c.html) || '').join('\n');
+      if (html) {
+        const tpl = document.createElement('template');
+        tpl.innerHTML = html;
+        tbody.appendChild(tpl.content);
+      }
+      tbody.dataset.extraRowsHydrated = '1';
+    })
+    .finally(() => {
+      tbody._extraRowsPromise = null;
+    });
+  return tbody._extraRowsPromise;
+}
 
 function applyHashTab() {
   const hash = decodeURIComponent(window.location.hash.replace(/^#/, '')) || 'overview';
@@ -243,51 +422,66 @@ function toggleHunkDrawer(id) {
   const row = document.getElementById(id);
   if (!row) return;
   const isHidden = row.style.display === 'none' || !row.style.display;
-  row.style.display = isHidden ? 'table-row' : 'none';
-  if (isHidden) {
-    row.querySelectorAll('.origin-hunk-group').forEach(g => { g.style.display = 'block'; });
+  if (!isHidden) {
+    row.style.display = 'none';
+    const caret = document.getElementById('caret-' + id);
+    if (caret) caret.innerHTML = '&#9656;';
+    return;
   }
-  const caret = document.getElementById('caret-' + id);
-  if (caret) caret.innerHTML = isHidden ? '&#9662;' : '&#9656;';
+  hydrateDrawerRows([row]).then(() => {
+    row.style.display = 'table-row';
+    row.querySelectorAll('.origin-hunk-group').forEach(g => { g.style.display = 'block'; });
+    const caret = document.getElementById('caret-' + id);
+    if (caret) caret.innerHTML = '&#9662;';
+  });
 }
 
 function toggleAllHunks(btn, prefix) {
   const rows = Array.from(document.querySelectorAll('.hunk-drawer-row')).filter(r => r.id && r.id.startsWith(prefix));
   const anyHidden = rows.some(r => r.style.display === 'none' || !r.style.display);
-  rows.forEach(row => {
-    row.style.display = anyHidden ? 'table-row' : 'none';
-    if (anyHidden) {
-      row.querySelectorAll('.origin-hunk-group').forEach(g => { g.style.display = 'block'; });
+  const finish = () => {
+    rows.forEach(row => {
+      row.style.display = anyHidden ? 'table-row' : 'none';
+      if (anyHidden) {
+        row.querySelectorAll('.origin-hunk-group').forEach(g => { g.style.display = 'block'; });
+      }
+      const caret = document.getElementById('caret-' + row.id);
+      if (caret) caret.innerHTML = anyHidden ? '&#9662;' : '&#9656;';
+    });
+    if (btn) {
+      const collapseLabel = (btn.dataset && btn.dataset.collapseLabel) || 'Collapse All';
+      const expandLabel = (btn.dataset && btn.dataset.expandLabel) || 'Expand All';
+      btn.textContent = anyHidden ? collapseLabel : expandLabel;
     }
-    const caret = document.getElementById('caret-' + row.id);
-    if (caret) caret.innerHTML = anyHidden ? '&#9662;' : '&#9656;';
-  });
-  if (btn) {
-    const collapseLabel = (btn.dataset && btn.dataset.collapseLabel) || 'Collapse All';
-    const expandLabel = (btn.dataset && btn.dataset.expandLabel) || 'Expand All';
-    btn.textContent = anyHidden ? collapseLabel : expandLabel;
+  };
+  if (anyHidden) {
+    hydrateDrawerRows(rows).then(finish);
+  } else {
+    finish();
   }
 }
 
 function toggleExtraTableRows(btn, tbodyId) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
-  const extras = Array.from(tbody.querySelectorAll('tr.extra-toggle-row'));
-  const anyHidden = extras.some(r => r.style.display === 'none' || !r.style.display);
-  extras.forEach(r => {
-    r.style.display = anyHidden ? 'table-row' : 'none';
-    if (!anyHidden && r.dataset.drawerId) {
-      const drawer = document.getElementById(r.dataset.drawerId);
-      if (drawer) drawer.style.display = 'none';
-      const caret = document.getElementById('caret-' + r.dataset.drawerId);
-      if (caret) caret.innerHTML = '&#9656;';
+  ensureExtraRowsLoaded(tbody).then(() => {
+    const extras = Array.from(tbody.querySelectorAll('tr.extra-toggle-row'));
+    const anyHidden = extras.some(r => r.style.display === 'none' || !r.style.display);
+    extras.forEach(r => {
+      r.style.display = anyHidden ? 'table-row' : 'none';
+      if (!anyHidden && r.dataset.drawerId) {
+        const drawer = document.getElementById(r.dataset.drawerId);
+        if (drawer) drawer.style.display = 'none';
+        const caret = document.getElementById('caret-' + r.dataset.drawerId);
+        if (caret) caret.innerHTML = '&#9656;';
+      }
+    });
+    if (btn) {
+      const hideLabel = (btn.dataset && btn.dataset.hideLabel) || 'Show Top';
+      const showLabel = (btn.dataset && btn.dataset.showLabel) || 'Show All';
+      btn.textContent = anyHidden ? hideLabel : showLabel;
     }
   });
-  if (btn) {
-    const hideLabel = (btn.dataset && btn.dataset.hideLabel) || 'Show Top';
-    const showLabel = (btn.dataset && btn.dataset.showLabel) || 'Show All';
-    btn.textContent = anyHidden ? hideLabel : showLabel;
-  }
 }
 
 function toggleVisibleHunks(btn, tbodyId) {
@@ -296,28 +490,36 @@ function toggleVisibleHunks(btn, tbodyId) {
   const visibleRows = Array.from(tbody.querySelectorAll('tr.clickable-row')).filter(r => r.style.display !== 'none');
   const drawers = visibleRows.map(r => r.dataset.drawerId && document.getElementById(r.dataset.drawerId)).filter(Boolean);
   const anyHidden = drawers.some(r => r.style.display === 'none' || !r.style.display);
-  drawers.forEach(row => {
-    row.style.display = anyHidden ? 'table-row' : 'none';
-    if (anyHidden) {
-      row.querySelectorAll('.origin-hunk-group').forEach(g => { g.style.display = 'block'; });
+  const finish = () => {
+    drawers.forEach(row => {
+      row.style.display = anyHidden ? 'table-row' : 'none';
+      if (anyHidden) {
+        row.querySelectorAll('.origin-hunk-group').forEach(g => { g.style.display = 'block'; });
+      }
+      const caret = document.getElementById('caret-' + row.id);
+      if (caret) caret.innerHTML = anyHidden ? '&#9662;' : '&#9656;';
+    });
+    if (btn) {
+      const collapseLabel = (btn.dataset && btn.dataset.collapseLabel) || 'Collapse All';
+      const expandLabel = (btn.dataset && btn.dataset.expandLabel) || 'Expand All';
+      btn.textContent = anyHidden ? collapseLabel : expandLabel;
     }
-    const caret = document.getElementById('caret-' + row.id);
-    if (caret) caret.innerHTML = anyHidden ? '&#9662;' : '&#9656;';
-  });
-  if (btn) {
-    const collapseLabel = (btn.dataset && btn.dataset.collapseLabel) || 'Collapse All';
-    const expandLabel = (btn.dataset && btn.dataset.expandLabel) || 'Expand All';
-    btn.textContent = anyHidden ? collapseLabel : expandLabel;
+  };
+  if (anyHidden) {
+    hydrateDrawerRows(drawers).then(finish);
+  } else {
+    finish();
   }
 }
 
 function jumpToCoveragePair(pairDomId) {
-  selectTab('coverage');
-  if (!pairDomId) return;
-  const el = document.getElementById(pairDomId);
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
+  Promise.resolve(selectTab('coverage')).then(() => {
+    if (!pairDomId) return;
+    const el = document.getElementById(pairDomId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  });
 }
 
 function filterLineageRows(prefix, tag, btn) {
@@ -325,21 +527,24 @@ function filterLineageRows(prefix, tag, btn) {
   if (!tbody) return;
   if (btn && btn.parentElement) {
     Array.from(btn.parentElement.querySelectorAll('button')).forEach(b => {
-      if (b.textContent.includes('Expand') || b.textContent.includes('Collapse')) return;
+      if (b.textContent.includes('Expand') || b.textContent.includes('Collapse') || (b.dataset && b.dataset.showLabel)) return;
       b.classList.toggle('cov-btn-secondary', b !== btn);
     });
   }
-  const rows = Array.from(tbody.querySelectorAll('tr.lineage-row'));
-  rows.forEach((r, idx) => {
-    const tags = (r.dataset.lineageTags || '').split(/\s+/);
-    const show = (tag === 'all') || tags.includes(tag);
-    r.style.display = show ? 'table-row' : 'none';
-    const drawer = document.getElementById(prefix + '-drawer-' + idx);
-    if (drawer && !show) {
-      drawer.style.display = 'none';
-      const caret = document.getElementById('caret-' + prefix + '-drawer-' + idx);
-      if (caret) caret.innerHTML = '&#9656;';
-    }
+  ensureExtraRowsLoaded(tbody).then(() => {
+    const rows = Array.from(tbody.querySelectorAll('tr.lineage-row'));
+    rows.forEach((r, idx) => {
+      const tags = (r.dataset.lineageTags || '').split(/\s+/);
+      const show = (tag === 'all') || tags.includes(tag);
+      r.style.display = show ? 'table-row' : 'none';
+      const drawerId = r.dataset.drawerId || (prefix + '-drawer-' + idx);
+      const drawer = document.getElementById(drawerId);
+      if (drawer && !show) {
+        drawer.style.display = 'none';
+        const caret = document.getElementById('caret-' + drawerId);
+        if (caret) caret.innerHTML = '&#9656;';
+      }
+    });
   });
 }
 
@@ -762,14 +967,19 @@ window.addEventListener('DOMContentLoaded', applyHashTab);
       const repEl = row && row.querySelector('[data-worker-cov-rep]');
       if (repEl) repEl.innerHTML = repHtml;
     });
-    document.querySelectorAll('[data-worker-cov-banner]').forEach(slot => {
-      const wname = slot.dataset.workerCovBanner;
-      slot.innerHTML = renderWorkerBannerBtns(resolveForWorker(wname));
-    });
+    const updateWorkerBannersIn = (rootEl) => {
+      (rootEl || document).querySelectorAll('[data-worker-cov-banner]').forEach(slot => {
+        const wname = slot.dataset.workerCovBanner;
+        slot.innerHTML = renderWorkerBannerBtns(resolveForWorker(wname));
+      });
+    };
+    applyLatestWorkerBannerCoverage = updateWorkerBannersIn;
+    updateWorkerBannersIn(document);
 
     // 5. Coverage tab body
     if (covPanel) {
       covPanel.innerHTML = renderCoverageTabInner(pairs, activePairs, payloadStatus, genAt, rawPayload.stage);
+      covPanel.dataset.chunkLoaded = '1';
     }
 
     if (payloadStatus === 'complete') {

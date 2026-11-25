@@ -222,6 +222,7 @@ module PrismFuzzerPublish
     copy_dir_contents!(triage_dir, triage_out, exclude_abs: excl) if triage_dir && File.directory?(triage_dir)
 
     artifacts["report"] = "report/index.html" if File.file?(File.join(rep_out, "index.html"))
+    artifacts["report_chunks"] = "report/chunks" if File.directory?(File.join(rep_out, "chunks"))
     artifacts["sankey"] = "report/sankey.html" if File.file?(File.join(rep_out, "sankey.html"))
 
     cov_html = find_coverage_html_artifact(cov_out)

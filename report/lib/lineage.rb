@@ -240,43 +240,53 @@ module PrismFuzzerReport
       {}
     end
 
-    def hydrate_chain_steps(chain, triage_crashes: nil, worker_diff_flags: nil, topo_ctx: nil)
-      hydrated = chain.map do |s|
-        p = s[:path]
-        sz = (p && File.file?(p)) ? File.size(p) : nil
-        parsed = if s[:kind] == "crashes" && p && File.file?(p)
-                   bt_text = crash_file_bt_text(p)
-                   trec = triage_crashes && (triage_crashes[p] || triage_crashes[File.expand_path(p)] || triage_crashes["#{s[:worker]}/#{s[:base]}"])
-                   if !trec && triage_crashes && !triage_crashes.empty?
-                     sha = begin
-                             Digest::SHA256.file(p).hexdigest
-                           rescue Errno::ENOENT, Errno::ESTALE
-                             nil
-                           rescue SystemCallError, IOError => e
-                             warn "Lineage: failed to hash #{p}: #{e.class}: #{e.message}" unless ENV["FUZZ_QUIET"] == "1"
-                             nil
-                           end
-                     trec = triage_crashes["sha256:#{sha}"] if sha
-                   end
-                   sig_reason = crash_filename_signal_reason(p)
-                   reason = trec ? trec[:reason] : sig_reason
-                   crash_output = bt_text.empty? ? (trec ? trec[:headline] : "") : bt_text
-                   is_diff = (trec && trec[:is_diff]) ||
-                             bt_text.include?("INVARIANT[diff_parse_y]") ||
-                             bt_text.include?("CRASH[diff_parse_y]") ||
-                             (worker_diff_flags && worker_diff_flags[s[:worker].to_s])
-                   is_san = !is_diff && PrismFuzzer::LoupeUrl.sanitizer_crash?(reason, crash_output)
-                   parse_testcase_file(p, sanitize: is_san, diff: is_diff)
-                 else
-                   parse_testcase_file(p, sanitize: false, diff: false)
+    def hydrate_single_step(s, triage_crashes: nil, worker_diff_flags: nil, topo_ctx: nil)
+      p = s[:path]
+      sz = (p && File.file?(p)) ? File.size(p) : nil
+      parsed = if s[:kind] == "crashes" && p && File.file?(p)
+                 bt_text = crash_file_bt_text(p)
+                 trec = triage_crashes && (triage_crashes[p] || triage_crashes[File.expand_path(p)] || triage_crashes["#{s[:worker]}/#{s[:base]}"])
+                 if !trec && triage_crashes && !triage_crashes.empty?
+                   sha = begin
+                           Digest::SHA256.file(p).hexdigest
+                         rescue Errno::ENOENT, Errno::ESTALE
+                           nil
+                         rescue SystemCallError, IOError => e
+                           warn "Lineage: failed to hash #{p}: #{e.class}: #{e.message}" unless ENV["FUZZ_QUIET"] == "1"
+                           nil
+                         end
+                   trec = triage_crashes["sha256:#{sha}"] if sha
                  end
-        s.merge(
-          size: sz,
-          op_desc: describe_afl_step_op(s[:base].to_s, s[:kind].to_s, consumer_worker: s[:worker].to_s, topo_ctx: topo_ctx),
-          preview: parsed[:preview],
-          opts_desc: parsed[:opts_desc],
-          loupe_url: parsed[:loupe_url]
-        )
+                 sig_reason = crash_filename_signal_reason(p)
+                 reason = trec ? trec[:reason] : sig_reason
+                 crash_output = bt_text.empty? ? (trec ? trec[:headline] : "") : bt_text
+                 is_diff = (trec && trec[:is_diff]) ||
+                           bt_text.include?("INVARIANT[diff_parse_y]") ||
+                           bt_text.include?("CRASH[diff_parse_y]") ||
+                           (worker_diff_flags && worker_diff_flags[s[:worker].to_s])
+                 is_san = !is_diff && PrismFuzzer::LoupeUrl.sanitizer_crash?(reason, crash_output)
+                 parse_testcase_file(p, sanitize: is_san, diff: is_diff)
+               else
+                 parse_testcase_file(p, sanitize: false, diff: false)
+               end
+      s.merge(
+        size: sz,
+        op_desc: describe_afl_step_op(s[:base].to_s, s[:kind].to_s, consumer_worker: s[:worker].to_s, topo_ctx: topo_ctx),
+        preview: parsed[:preview],
+        opts_desc: parsed[:opts_desc],
+        loupe_url: parsed[:loupe_url]
+      )
+    end
+
+    def hydrate_chain_steps(chain, triage_crashes: nil, worker_diff_flags: nil, topo_ctx: nil, step_cache: nil)
+      hydrated = chain.map do |s|
+        if step_cache
+          cache_key = [s[:path], s[:worker], s[:kind], s[:base]]
+          cached = (step_cache[cache_key] ||= hydrate_single_step(s, triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx))
+          cached.dup
+        else
+          hydrate_single_step(s, triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx)
+        end
       end
       # If Step 0 is a virtual root node (corpus or grammar) and Step 1 is its imported seed copy, share Step 1's source/metadata
       if hydrated.size >= 2
@@ -549,22 +559,23 @@ module PrismFuzzerReport
         end
       end
 
+      step_cache = {}
       pathways.each_value do |p|
-        p[:sample_chain] = hydrate_chain_steps(p[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx)
+        p[:sample_chain] = hydrate_chain_steps(p[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx, step_cache: step_cache)
         p.delete(:sample_raw_chain)
       end
       grammar_seed_crashes.each_value do |g|
-        g[:sample_chain] = hydrate_chain_steps(g[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx)
+        g[:sample_chain] = hydrate_chain_steps(g[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx, step_cache: step_cache)
         g.delete(:sample_raw_chain)
       end
       gen_seed_crashes_by_worker.each_value do |sub_h|
         sub_h.each_value do |g|
-          g[:sample_chain] = hydrate_chain_steps(g[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx)
+          g[:sample_chain] = hydrate_chain_steps(g[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx, step_cache: step_cache)
           g.delete(:sample_raw_chain)
         end
       end
       grammar_queue_pathways.each_value do |qp|
-        qp[:sample_chain] = hydrate_chain_steps(qp[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx)
+        qp[:sample_chain] = hydrate_chain_steps(qp[:sample_raw_chain], triage_crashes: triage_crashes, worker_diff_flags: worker_diff_flags, topo_ctx: topo_ctx, step_cache: step_cache)
         qp.delete(:sample_raw_chain)
         gen_q_pathways_by_worker[qp[:origin_worker]] << qp if qp[:origin_worker]
       end
@@ -644,12 +655,39 @@ module PrismFuzzerReport
       end.join('<span class="hop-arrow">&rarr;</span>')
     end
 
+    def format_evo_step_tail(s, color_by_name, topo_ctx: nil)
+      w = s[:worker].to_s
+      color = worker_step_color(w, color_by_name, topo_ctx: topo_ctx)
+      opts_badge = s[:opts_desc] ? %(<span class="sched-pill" title="4-byte fuzz_options_t header (decoded into pm_options_t query params for Prism Loupe)">opts: #{CGI.escapeHTML(s[:opts_desc])}</span>) : ""
+      size_badge = s[:size] ? %(<span class="evo-size">#{Helpers.format_int(s[:size])} B</span>) : ""
+      loupe_btn = if s[:loupe_url]
+                    %(<a class="cov-link" href="#{CGI.escapeHTML(s[:loupe_url])}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Animate this step's Ruby parse in Prism Loupe with its exact pm_options_t">Animate in Prism Loupe &nearr;</a>)
+                  else
+                    ""
+                  end
+      preview_block = if s[:preview]
+                        %(<pre class="evo-preview">#{CGI.escapeHTML(s[:preview])}</pre>)
+                      else
+                        ""
+                      end
+      <<~TAIL.chomp
+        <span class="hop-pill"><span class="legend-dot" style="background:#{color}"></span>#{CGI.escapeHTML(w)}</span>
+        <code class="evo-fname">#{CGI.escapeHTML(s[:base].to_s)}</code>
+        <span class="evo-op">#{s[:op_desc]}</span>
+        #{opts_badge}
+        <span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">
+          #{size_badge}
+          #{loupe_btn}
+        </span>
+        </div>
+        #{preview_block}
+      TAIL
+    end
+
     def render_evolution_chain_steps(chain, color_by_name, topo_ctx: nil)
       return "" if chain.nil? || chain.empty?
 
       steps_html = chain.each_with_index.map do |s, idx|
-        w = s[:worker].to_s
-        color = worker_step_color(w, color_by_name, topo_ctx: topo_ctx)
         is_last = (idx == chain.size - 1)
         step_cls = if idx == 0
                      "evo-step evo-step-root"
@@ -658,32 +696,12 @@ module PrismFuzzerReport
                    else
                      "evo-step"
                    end
-        opts_badge = s[:opts_desc] ? %(<span class="sched-pill" title="4-byte fuzz_options_t header (decoded into pm_options_t query params for Prism Loupe)">opts: #{CGI.escapeHTML(s[:opts_desc])}</span>) : ""
-        size_badge = s[:size] ? %(<span class="evo-size">#{Helpers.format_int(s[:size])} B</span>) : ""
-        loupe_btn = if s[:loupe_url]
-                      %(<a class="cov-link" href="#{CGI.escapeHTML(s[:loupe_url])}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="Animate this step's Ruby parse in Prism Loupe with its exact pm_options_t">Animate in Prism Loupe &nearr;</a>)
-                    else
-                      ""
-                    end
-        preview_block = if s[:preview]
-                          %(<pre class="evo-preview">#{CGI.escapeHTML(s[:preview])}</pre>)
-                        else
-                          ""
-                        end
+        tail = format_evo_step_tail(s, color_by_name, topo_ctx: topo_ctx)
         <<~STEP
           <div class="#{step_cls}">
             <div class="evo-step-head">
               <span class="evo-step-num">Step #{idx}</span>
-              <span class="hop-pill"><span class="legend-dot" style="background:#{color}"></span>#{CGI.escapeHTML(w)}</span>
-              <code class="evo-fname">#{CGI.escapeHTML(s[:base].to_s)}</code>
-              <span class="evo-op">#{s[:op_desc]}</span>
-              #{opts_badge}
-              <span style="margin-left:auto;display:inline-flex;align-items:center;gap:10px;">
-                #{size_badge}
-                #{loupe_btn}
-              </span>
-            </div>
-            #{preview_block}
+              #{tail}
           </div>
         STEP
       end.join('<div class="evo-connector">&darr;</div>')
@@ -691,11 +709,52 @@ module PrismFuzzerReport
       %(<div class="evo-chain-wrap">#{steps_html}</div>)
     end
 
-    def render_crash_lineage_table(pathways, total_crashes, color_by_name, id_prefix:, title:, subtitle:, filter_controls: false, topo_ctx: nil)
+    def render_evo_drawer_row(drawer_id, colspan:, title_html:, chain:, color_by_name:, topo_ctx: nil, chunker: nil)
+      safe_chain = Array(chain)
+      if chunker && !safe_chain.empty?
+        step_ids = safe_chain.map { |s| chunker.intern_evo_step(format_evo_step_tail(s, color_by_name, topo_ctx: topo_ctx)) }
+        last_s = safe_chain.last
+        crash_last = !!(last_s && (last_s[:kind] == "crashes" || last_s[:kind] == "hangs"))
+        shard_id = chunker.register_evo_drawer(
+          drawer_id,
+          colspan: colspan,
+          title_html: title_html,
+          step_ids: step_ids,
+          crash_last: crash_last
+        )
+        %(<tr id="#{drawer_id}" class="hunk-drawer-row" data-drawer-shard="#{CGI.escapeHTML(shard_id)}" style="display:none;"></tr>)
+      else
+        <<~DROW.chomp
+          <tr id="#{drawer_id}" class="hunk-drawer-row" style="display:none;">
+            <td colspan="#{colspan}" class="hunk-drawer-cell">
+              <div class="origin-hunk-title">
+                #{title_html}
+              </div>
+              #{render_evolution_chain_steps(safe_chain, color_by_name, topo_ctx: topo_ctx)}
+            </td>
+          </tr>
+        DROW
+      end
+    end
+
+    def partition_rows_for_chunker(row_items, preview_limit:, chunker:)
+      if chunker && preview_limit && row_items.size > preview_limit
+        vis = row_items.first(preview_limit).join("\n")
+        extra_shards = chunker.register_extra_rows(row_items.drop(preview_limit))
+        attr = extra_shards.empty? ? "" : %( data-extra-row-shards="#{CGI.escapeHTML(extra_shards.join(','))}")
+        [vis, attr]
+      else
+        [row_items.join("\n"), ""]
+      end
+    end
+
+    def render_crash_lineage_table(pathways, total_crashes, color_by_name, id_prefix:, title:, subtitle:, filter_controls: false, preview_limit: 50, topo_ctx: nil, chunker: nil)
       return "" if pathways.nil? || pathways.empty?
 
+      tbody_id = "#{id_prefix}-tbody"
+      eff_limit = chunker ? preview_limit : nil
       max_count = [pathways.map { |p| p[:count] }.max.to_i, 1].max
-      rows_html = pathways.each_with_index.map do |p, idx|
+      row_items = pathways.each_with_index.map do |p, idx|
         drawer_id = "#{id_prefix}-drawer-#{idx}"
         top_root, top_root_cnt = p[:roots].max_by { |_, c| c } || ["-", 0]
         pct_of_total = total_crashes > 0 ? (p[:count] * 100.0 / total_crashes) : 0.0
@@ -712,9 +771,26 @@ module PrismFuzzerReport
                      else
                        "<span class=\"muted\">&mdash;</span>"
                      end
+        is_extra = eff_limit && idx >= eff_limit
+        row_cls = is_extra ? "clickable-row lineage-row extra-toggle-row" : "clickable-row lineage-row"
+        row_style = is_extra ? ' style="display:none;"' : ""
+
+        drawer_title = <<~DTITLE.chomp
+          <span>Representative Testcase Evolution: #{render_pathway_pills(p[:hops], color_by_name, topo_ctx: topo_ctx)}</span>
+          <span class="muted">#{Helpers.format_int(p[:count])} crashes from #{Helpers.format_int(p[:parents].size)} parent queue items (#{Helpers.format_int(p[:roots].size)} root seeds)</span>
+        DTITLE
+        drawer_html = render_evo_drawer_row(
+          drawer_id,
+          colspan: 7,
+          title_html: drawer_title,
+          chain: p[:sample_chain],
+          color_by_name: color_by_name,
+          topo_ctx: topo_ctx,
+          chunker: chunker
+        )
 
         <<~ROW
-          <tr class="clickable-row lineage-row" data-lineage-prefix="#{id_prefix}" data-lineage-tags="#{row_tags.join(' ')}" onclick="toggleHunkDrawer('#{drawer_id}')">
+          <tr class="#{row_cls}" data-drawer-id="#{drawer_id}" data-lineage-prefix="#{id_prefix}" data-lineage-tags="#{row_tags.join(' ')}"#{row_style} onclick="toggleHunkDrawer('#{drawer_id}')">
             <td>
               <span id="caret-#{drawer_id}" class="muted" style="display:inline-block;width:14px;">&#9656;</span>
               #{render_pathway_pills(p[:hops], color_by_name, topo_ctx: topo_ctx)}
@@ -734,17 +810,16 @@ module PrismFuzzerReport
             <td><code>#{CGI.escapeHTML(top_root.to_s)}</code> <span class="muted">(#{Helpers.format_int(top_root_cnt)})</span></td>
             <td class="num">#{loupe_cell}</td>
           </tr>
-          <tr id="#{drawer_id}" class="hunk-drawer-row" style="display:none;">
-            <td colspan="7" class="hunk-drawer-cell">
-              <div class="origin-hunk-title">
-                <span>Representative Testcase Evolution: #{render_pathway_pills(p[:hops], color_by_name, topo_ctx: topo_ctx)}</span>
-                <span class="muted">#{Helpers.format_int(p[:count])} crashes from #{Helpers.format_int(p[:parents].size)} parent queue items (#{Helpers.format_int(p[:roots].size)} root seeds)</span>
-              </div>
-              #{render_evolution_chain_steps(p[:sample_chain], color_by_name, topo_ctx: topo_ctx)}
-            </td>
-          </tr>
+          #{drawer_html}
         ROW
-      end.join("\n")
+      end
+
+      rows_html, tbody_extra_attr = partition_rows_for_chunker(row_items, preview_limit: eff_limit, chunker: chunker)
+      show_all_btn = if eff_limit && pathways.size > eff_limit
+                       %(<button class="cov-btn cov-btn-secondary" data-show-label="Show All #{Helpers.format_int(pathways.size)} Pathways" data-hide-label="Show Top #{eff_limit} Pathways" onclick="toggleExtraTableRows(this, '#{tbody_id}')">Show All #{Helpers.format_int(pathways.size)} Pathways</button>)
+                     else
+                       ""
+                     end
 
       controls_html = if filter_controls
                         <<~CTRL
@@ -752,12 +827,14 @@ module PrismFuzzerReport
                             <button class="cov-btn" onclick="filterLineageRows('#{id_prefix}', 'all', this)">All Pathways (#{pathways.size})</button>
                             <button class="cov-btn cov-btn-secondary" onclick="filterLineageRows('#{id_prefix}', 'grammar', this)">&#9733; Grammar Rooted</button>
                             <button class="cov-btn cov-btn-secondary" onclick="filterLineageRows('#{id_prefix}', 'multihop', this)">Multi-Fuzzer Hops (&ge;2)</button>
+                            #{show_all_btn}
                             <button class="cov-btn cov-btn-secondary" data-expand-label="Expand All Evolution Chains" data-collapse-label="Collapse All Evolution Chains" onclick="toggleAllHunks(this, '#{id_prefix}-drawer-')">Expand All Evolution Chains</button>
                           </div>
                         CTRL
                       else
                         <<~CTRL
-                          <div>
+                          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                            #{show_all_btn}
                             <button class="cov-btn cov-btn-secondary" data-expand-label="Expand All Evolution Chains" data-collapse-label="Collapse All Evolution Chains" onclick="toggleAllHunks(this, '#{id_prefix}-drawer-')">Expand All Evolution Chains</button>
                           </div>
                         CTRL
@@ -784,7 +861,7 @@ module PrismFuzzerReport
                 <th class="num">Parse Animator</th>
               </tr>
             </thead>
-            <tbody id="#{id_prefix}-tbody">
+            <tbody id="#{tbody_id}"#{tbody_extra_attr}>
               #{rows_html}
             </tbody>
           </table>
@@ -805,18 +882,36 @@ module PrismFuzzerReport
       links.empty? ? '<span class="muted">&mdash;</span>' : links.join(" &bull; ")
     end
 
-    def render_grammar_seed_crashes_card(fleet_lineage, color_by_name, generator_name: nil, topo_ctx: nil)
+    def render_grammar_seed_crashes_card(fleet_lineage, color_by_name, preview_limit: 50, generator_name: nil, topo_ctx: nil, chunker: nil)
       gen_label = generator_name || "grammar"
       safe_gen = CGI.escapeHTML(gen_label)
       dom_slug = gen_label.gsub(/[^a-zA-Z0-9_-]/, "_")
       drawer_prefix = generator_name ? "gram-seed-crash-#{dom_slug}-" : "gram-seed-crash-"
+      tbody_id = generator_name ? "gram-seed-crashes-#{dom_slug}-tbody" : "gram-seed-crashes-tbody"
       g_crashes = fleet_lineage[:grammar_seed_crashes] || []
-      seed_rows_html = g_crashes.each_with_index.map do |g, idx|
+      eff_limit = chunker ? preview_limit : nil
+      seed_row_items = g_crashes.each_with_index.map do |g, idx|
         drawer_id = "#{drawer_prefix}#{idx}"
         last_step = g[:sample_chain].last || {}
         sample_crash_short = last_step[:id] ? "#{last_step[:worker]} id:#{last_step[:id]}" : last_step[:base].to_s
+        is_extra = eff_limit && idx >= eff_limit
+        row_cls = is_extra ? "clickable-row extra-toggle-row" : "clickable-row"
+        row_style = is_extra ? ' style="display:none;"' : ""
+        drawer_title = <<~DTITLE.chomp
+          <span>Grammar Seed <code>#{CGI.escapeHTML(g[:seed])}</code> &rarr; Crash Evolution</span>
+          <span class="muted">#{Helpers.format_int(g[:count])} crashes</span>
+        DTITLE
+        drawer_html = render_evo_drawer_row(
+          drawer_id,
+          colspan: 7,
+          title_html: drawer_title,
+          chain: g[:sample_chain],
+          color_by_name: color_by_name,
+          topo_ctx: topo_ctx,
+          chunker: chunker
+        )
         <<~ROW
-          <tr class="clickable-row" onclick="toggleHunkDrawer('#{drawer_id}')">
+          <tr class="#{row_cls}" data-drawer-id="#{drawer_id}"#{row_style} onclick="toggleHunkDrawer('#{drawer_id}')">
             <td>
               <span id="caret-#{drawer_id}" class="muted" style="display:inline-block;width:14px;">&#9656;</span>
               <code>#{CGI.escapeHTML(g[:seed])}</code>
@@ -828,17 +923,10 @@ module PrismFuzzerReport
             <td><code title="#{CGI.escapeHTML(last_step[:base].to_s)}">#{CGI.escapeHTML(sample_crash_short)}</code></td>
             <td class="num" style="white-space:nowrap;">#{render_loupe_pair_links(g[:sample_chain], last_label: "Crash")}</td>
           </tr>
-          <tr id="#{drawer_id}" class="hunk-drawer-row" style="display:none;">
-            <td colspan="7" class="hunk-drawer-cell">
-              <div class="origin-hunk-title">
-                <span>Grammar Seed <code>#{CGI.escapeHTML(g[:seed])}</code> &rarr; Crash Evolution</span>
-                <span class="muted">#{Helpers.format_int(g[:count])} crashes</span>
-              </div>
-              #{render_evolution_chain_steps(g[:sample_chain], color_by_name, topo_ctx: topo_ctx)}
-            </td>
-          </tr>
+          #{drawer_html}
         ROW
-      end.join("\n")
+      end
+      seed_rows_html, tbody_extra_attr = partition_rows_for_chunker(seed_row_items, preview_limit: eff_limit, chunker: chunker)
 
       crashes_table = if g_crashes.any?
                         <<~TBL
@@ -854,7 +942,7 @@ module PrismFuzzerReport
                                 <th class="num">Parse Animator</th>
                               </tr>
                             </thead>
-                            <tbody>
+                            <tbody id="#{tbody_id}"#{tbody_extra_attr}>
                               #{seed_rows_html}
                             </tbody>
                           </table>
@@ -863,6 +951,11 @@ module PrismFuzzerReport
                         %(<div style="padding:12px 16px;" class="muted">No crashes traced to <code>#{safe_gen}</code> seeds yet.</div>)
                       end
 
+      show_all_seeds_btn = if eff_limit && g_crashes.size > eff_limit
+                             %(<button class="cov-btn cov-btn-secondary" data-show-label="Show All #{Helpers.format_int(g_crashes.size)} Seeds" data-hide-label="Show Top #{eff_limit} Seeds" onclick="toggleExtraTableRows(this, '#{tbody_id}')">Show All #{Helpers.format_int(g_crashes.size)} Seeds</button>)
+                           else
+                             ""
+                           end
       expand_btn = if g_crashes.any?
                      %(<button class="cov-btn cov-btn-secondary" data-expand-label="Expand All Seed Crash Chains" data-collapse-label="Collapse All Seed Crash Chains" onclick="toggleAllHunks(this, '#{drawer_prefix}')">Expand All Seed Crash Chains</button>)
                    else
@@ -881,7 +974,8 @@ module PrismFuzzerReport
                 Click any seed row below to inspect the generated Ruby code and the mutation steps from seed to crash, or open directly in Prism Loupe.
               </p>
             </div>
-            <div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              #{show_all_seeds_btn}
               #{expand_btn}
             </div>
           </div>
@@ -890,7 +984,7 @@ module PrismFuzzerReport
       HTML
     end
 
-    def render_grammar_queue_pathways_card(fleet_lineage, color_by_name, preview_limit: 15, generator_name: nil, topo_ctx: nil)
+    def render_grammar_queue_pathways_card(fleet_lineage, color_by_name, preview_limit: 15, generator_name: nil, topo_ctx: nil, chunker: nil)
       q_paths = fleet_lineage[:grammar_queue_pathways] || []
       return "" if q_paths.empty?
 
@@ -903,7 +997,7 @@ module PrismFuzzerReport
       total_q = [fleet_lineage[:total_grammar_queue_items].to_i, 1].max
       max_q = [q_paths.map { |qp| (qp.is_a?(Hash) ? qp[:count] : qp[1]).to_i }.max.to_i, 1].max
 
-      rows_html = q_paths.each_with_index.map do |qp, idx|
+      row_items = q_paths.each_with_index.map do |qp, idx|
         hops = qp.is_a?(Hash) ? qp[:hops] : qp[0]
         cnt = (qp.is_a?(Hash) ? qp[:count] : qp[1]).to_i
         chain = qp.is_a?(Hash) ? (qp[:sample_chain] || []) : []
@@ -915,6 +1009,20 @@ module PrismFuzzerReport
         is_extra = idx >= preview_limit
         row_cls = is_extra ? "clickable-row extra-toggle-row" : "clickable-row"
         row_style = is_extra ? ' style="display:none;"' : ""
+
+        drawer_title = <<~DTITLE.chomp
+          <span>Representative Queue Evolution: #{render_pathway_pills(hops, color_by_name, topo_ctx: topo_ctx)}</span>
+          <span class="muted">#{Helpers.format_int(cnt)} queue entries across fleet</span>
+        DTITLE
+        drawer_html = render_evo_drawer_row(
+          drawer_id,
+          colspan: 5,
+          title_html: drawer_title,
+          chain: chain,
+          color_by_name: color_by_name,
+          topo_ctx: topo_ctx,
+          chunker: chunker
+        )
 
         <<~ROW
           <tr class="#{row_cls}" data-drawer-id="#{drawer_id}"#{row_style} onclick="toggleHunkDrawer('#{drawer_id}')">
@@ -935,17 +1043,10 @@ module PrismFuzzerReport
             <td><code title="#{CGI.escapeHTML(last_step[:base].to_s)}">#{CGI.escapeHTML(sample_short)}</code></td>
             <td class="num" style="white-space:nowrap;">#{render_loupe_pair_links(chain, last_label: "Queue")}</td>
           </tr>
-          <tr id="#{drawer_id}" class="hunk-drawer-row" style="display:none;">
-            <td colspan="5" class="hunk-drawer-cell">
-              <div class="origin-hunk-title">
-                <span>Representative Queue Evolution: #{render_pathway_pills(hops, color_by_name, topo_ctx: topo_ctx)}</span>
-                <span class="muted">#{Helpers.format_int(cnt)} queue entries across fleet</span>
-              </div>
-              #{render_evolution_chain_steps(chain, color_by_name, topo_ctx: topo_ctx)}
-            </td>
-          </tr>
+          #{drawer_html}
         ROW
-      end.join("\n")
+      end
+      rows_html, tbody_extra_attr = partition_rows_for_chunker(row_items, preview_limit: preview_limit, chunker: chunker)
 
       show_all_btn = if q_paths.size > preview_limit
                        %(<button class="cov-btn cov-btn-secondary" data-show-label="Show All #{Helpers.format_int(q_paths.size)} Pathways" data-hide-label="Show Top #{preview_limit} Pathways" onclick="toggleExtraTableRows(this, '#{tbody_id}')">Show All #{Helpers.format_int(q_paths.size)} Pathways</button>)
@@ -980,7 +1081,7 @@ module PrismFuzzerReport
                 <th class="num">Parse Animator</th>
               </tr>
             </thead>
-            <tbody id="#{tbody_id}">
+            <tbody id="#{tbody_id}"#{tbody_extra_attr}>
               #{rows_html}
             </tbody>
           </table>
@@ -988,7 +1089,7 @@ module PrismFuzzerReport
       HTML
     end
 
-    def render_grammar_lineage_section(fleet_lineage, color_by_name, generator_name: nil, topo_ctx: nil)
+    def render_grammar_lineage_section(fleet_lineage, color_by_name, generator_name: nil, topo_ctx: nil, chunker: nil)
       scoped = if generator_name && fleet_lineage[:by_generator] && fleet_lineage[:by_generator][generator_name]
                  fleet_lineage[:by_generator][generator_name]
                else
@@ -1015,7 +1116,8 @@ module PrismFuzzerReport
                                   id_prefix: "w-lineage-#{dom_slug}",
                                   title: "Crash Lineage Involving <code>#{safe_gen}</code> (#{Helpers.format_int(scoped[:total_grammar_crashes])} Crashes from #{Helpers.format_int(scoped[:unique_grammar_crash_seeds])} Seeds across #{grammar_paths.size} Pathways)",
                                   subtitle: "Pathways where #{safe_gen}-generated seeds were imported via -F foreign sync and mutated into crashes across the fuzzer fleet.",
-                                  topo_ctx: topo_ctx
+                                  topo_ctx: topo_ctx,
+                                  chunker: chunker
                                 )
                               else
                                 ""
@@ -1023,12 +1125,12 @@ module PrismFuzzerReport
 
       <<~HTML
         #{grammar_pathway_table}
-        #{render_grammar_seed_crashes_card(scoped, color_by_name, generator_name: generator_name, topo_ctx: topo_ctx)}
-        #{render_grammar_queue_pathways_card(scoped, color_by_name, generator_name: generator_name, topo_ctx: topo_ctx)}
+        #{render_grammar_seed_crashes_card(scoped, color_by_name, generator_name: generator_name, topo_ctx: topo_ctx, chunker: chunker)}
+        #{render_grammar_queue_pathways_card(scoped, color_by_name, generator_name: generator_name, topo_ctx: topo_ctx, chunker: chunker)}
       HTML
     end
 
-    def render_overview_crash_lineage(fleet_lineage, color_by_name, topo_ctx: nil)
+    def render_overview_crash_lineage(fleet_lineage, color_by_name, topo_ctx: nil, chunker: nil)
       return "" unless fleet_lineage[:total_crashes] > 0
 
       multi_pct = (fleet_lineage[:total_multi_worker_crashes] * 100.0 / fleet_lineage[:total_crashes]).round(1)
@@ -1043,7 +1145,8 @@ module PrismFuzzerReport
                   "#{Helpers.format_int(fleet_lineage[:total_corpus_crashes])} crashes from #{fleet_lineage[:unique_corpus_crash_seeds]} initial corpus seeds &bull; " \
                   "#{Helpers.format_int(fleet_lineage[:total_multi_worker_crashes])} (#{multi_pct}%) involved &ge;2 fuzzers. Click any pathway to view step-by-step testcase evolution.",
         filter_controls: true,
-        topo_ctx: topo_ctx
+        topo_ctx: topo_ctx,
+        chunker: chunker
       )
     end
   end

@@ -597,7 +597,7 @@ module PrismFuzzerReport
       HTML
     end
 
-    def render_topology_tab_html(topo, diagram_svg:)
+    def render_topology_tab_html(topo, diagram_svg:, inner_only: false)
       return "" unless topo.is_a?(Hash)
 
       name = topo["name"].to_s
@@ -641,79 +641,84 @@ module PrismFuzzerReport
       meta_bits << "Max alloc #{defaults['max_allocated_mb']} MB" if defaults["max_allocated_mb"]
       meta_bits << "Duration #{Helpers.format_duration(lc['duration_seconds'])}" if lc["duration_seconds"].to_i > 0
 
+      inner_html = <<~HTML
+        <div class="fuzzer-banner">
+          <div>
+            <h2><span class="legend-dot" style="background:#38bdf8"></span> Campaign Topology &mdash; <code>#{CGI.escapeHTML(name)}</code></h2>
+            <p class="cmd-line">#{CGI.escapeHTML(meta_bits.join(" • "))}</p>
+          </div>
+          <div class="fuzzer-meta">
+            <button type="button" class="cov-btn cov-btn-secondary" onclick="copyTopologyJson(this)">Copy JSON</button>
+            <button type="button" class="cov-btn" onclick="downloadTopologyJson(#{Helpers.topo_js_arg(name)})">Download topology.json</button>
+          </div>
+        </div>
+
+        <div class="chart-card topo-overview-card" style="margin-bottom: 20px;">
+          <div class="chart-header">
+            <div>
+              <h3>Runtime Architecture</h3>
+              <p class="chart-sub">Masters (-M), synchronized Secondaries (-S), companions, and live generator feeds. Click any node to open its page.</p>
+            </div>
+            <div class="topo-legend">
+              #{render_topology_legend_html(topo, include_json_btn: false)}
+            </div>
+          </div>
+          #{render_topology_context_html(topo)}
+          <div class="topo-svg-wrap">
+            #{diagram_svg}
+          </div>
+        </div>
+
+        <div class="table-card" style="margin-bottom: 20px;">
+          <div class="table-card-header">
+            <h3>Sources</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Source ID</th>
+                <th>Kind</th>
+                <th>Requested Ref / Dir</th>
+                <th>Resolved Commit</th>
+                <th>Patches</th>
+              </tr>
+            </thead>
+            <tbody>#{src_rows}</tbody>
+          </table>
+        </div>
+
+        <div class="table-card" style="margin-bottom: 20px;">
+          <div class="table-card-header">
+            <h3>Fuzzer Targets</h3>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Fuzzer ID</th>
+                <th>Shape</th>
+                <th>Configuration</th>
+                <th>Binary</th>
+              </tr>
+            </thead>
+            <tbody>#{fuzzer_rows}</tbody>
+          </table>
+        </div>
+
+        <div class="chart-card">
+          <div class="chart-header">
+            <div>
+              <h3>Resolved Topology Definition (JSON)</h3>
+              <p class="chart-sub">Complete static IR specification captured for this campaign.</p>
+            </div>
+          </div>
+          <pre id="topology-json-pre" class="topo-json-pre"><code>#{CGI.escapeHTML(pretty_json)}</code></pre>
+        </div>
+      HTML
+      return inner_html if inner_only
+
       <<~HTML
         <section id="tab-topology" class="tab-panel">
-          <div class="fuzzer-banner">
-            <div>
-              <h2><span class="legend-dot" style="background:#38bdf8"></span> Campaign Topology &mdash; <code>#{CGI.escapeHTML(name)}</code></h2>
-              <p class="cmd-line">#{CGI.escapeHTML(meta_bits.join(" • "))}</p>
-            </div>
-            <div class="fuzzer-meta">
-              <button type="button" class="cov-btn cov-btn-secondary" onclick="copyTopologyJson(this)">Copy JSON</button>
-              <button type="button" class="cov-btn" onclick="downloadTopologyJson(#{Helpers.topo_js_arg(name)})">Download topology.json</button>
-            </div>
-          </div>
-
-          <div class="chart-card topo-overview-card" style="margin-bottom: 20px;">
-            <div class="chart-header">
-              <div>
-                <h3>Runtime Architecture</h3>
-                <p class="chart-sub">Masters (-M), synchronized Secondaries (-S), companions, and live generator feeds. Click any node to open its page.</p>
-              </div>
-              <div class="topo-legend">
-                #{render_topology_legend_html(topo, include_json_btn: false)}
-              </div>
-            </div>
-            #{render_topology_context_html(topo)}
-            <div class="topo-svg-wrap">
-              #{diagram_svg}
-            </div>
-          </div>
-
-          <div class="table-card" style="margin-bottom: 20px;">
-            <div class="table-card-header">
-              <h3>Sources</h3>
-            </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Source ID</th>
-                  <th>Kind</th>
-                  <th>Requested Ref / Dir</th>
-                  <th>Resolved Commit</th>
-                  <th>Patches</th>
-                </tr>
-              </thead>
-              <tbody>#{src_rows}</tbody>
-            </table>
-          </div>
-
-          <div class="table-card" style="margin-bottom: 20px;">
-            <div class="table-card-header">
-              <h3>Fuzzer Targets</h3>
-            </div>
-            <table>
-              <thead>
-                <tr>
-                  <th>Fuzzer ID</th>
-                  <th>Shape</th>
-                  <th>Configuration</th>
-                  <th>Binary</th>
-                </tr>
-              </thead>
-              <tbody>#{fuzzer_rows}</tbody>
-            </table>
-          </div>
-
-          <div class="chart-card">
-            <div class="chart-header">
-              <div>
-                <h3>Resolved Topology Definition (JSON)</h3>
-                <p class="chart-sub">Complete static IR specification captured for this campaign.</p>
-              </div>
-            </div>
-            <pre id="topology-json-pre" class="topo-json-pre"><code>#{CGI.escapeHTML(pretty_json)}</code></pre>
-          </div>
+          #{inner_html}
         </section>
       HTML
     end

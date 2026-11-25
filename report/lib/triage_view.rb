@@ -89,7 +89,7 @@ module PrismFuzzerReport
       }
     end
 
-    def render_triage_tab_html(triage_view, triage_dir:, has_sankey:, format_int_fn: Helpers.method(:format_int))
+    def render_triage_tab_html(triage_view, triage_dir:, has_sankey:, format_int_fn: Helpers.method(:format_int), chunker: nil, inner_only: false)
       clusters = triage_view[:clusters] || []
       summary = triage_view[:summary] || {}
       metadata = triage_view[:metadata] || {}
@@ -248,6 +248,39 @@ module PrismFuzzerReport
                       meta_chips << "<span>Verify: <code>./campaigns/default.rb verify -- --cluster #{CGI.escapeHTML(cid)}</code></span>"
                       meta_chips << "<span>Options: <code>#{CGI.escapeHTML(opts_lbl)}</code> (#{CGI.escapeHTML(header_hex)})</span>" unless opts_lbl.empty? && header_hex.empty?
 
+                      drawer_td_html = <<~DTD.chomp
+                        <td colspan="8" style="background: rgba(15, 23, 42, 0.72); padding: 14px 18px;">
+                          <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:0.78rem;color:var(--muted);margin-bottom:10px;">
+                            #{meta_chips.join(" ")}
+                          </div>
+                          #{trace_lines.empty? ? "" : "<div class=\"muted\" style=\"margin-bottom:10px;\">Trace: <code>#{trace_lines}</code></div>"}
+                          <div class="table-card" style="background:#0b0f19;">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>Bucket</th>
+                                  <th class="num">Occ</th>
+                                  <th>Repro Binary</th>
+                                  <th class="num">Min Size</th>
+                                  <th>Options / Digest</th>
+                                  <th>Payload Preview</th>
+                                  <th>Artifacts</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                #{bucket_rows}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      DTD
+                      drawer_tr_html = if chunker
+                                         shard_id = chunker.register_html_drawer(drawer_id, drawer_td_html)
+                                         %(<tr id="#{drawer_id}" class="hunk-drawer-row" data-drawer-shard="#{CGI.escapeHTML(shard_id)}" style="display:none;"></tr>)
+                                       else
+                                         %(<tr id="#{drawer_id}" class="hunk-drawer-row" style="display:none;">\n#{drawer_td_html}\n</tr>)
+                                       end
+
                       <<~CROW
                         <tr class="clickable-row triage-cluster-row" data-drawer-id="#{drawer_id}" data-group="#{CGI.escapeHTML(group)}" data-search="#{CGI.escapeHTML(search_blob)}" onclick="toggleHunkDrawer('#{drawer_id}')">
                           <td>
@@ -268,32 +301,7 @@ module PrismFuzzerReport
                           <td class="num"><strong>#{format_int_fn.call(occ)}</strong></td>
                           <td class="num" onclick="event.stopPropagation()">#{loupe_btn}</td>
                         </tr>
-                        <tr id="#{drawer_id}" class="hunk-drawer-row" style="display:none;">
-                          <td colspan="8" style="background: rgba(15, 23, 42, 0.72); padding: 14px 18px;">
-                            <div style="display:flex;flex-wrap:wrap;gap:14px;font-size:0.78rem;color:var(--muted);margin-bottom:10px;">
-                              #{meta_chips.join(" ")}
-                            </div>
-                            #{trace_lines.empty? ? "" : "<div class=\"muted\" style=\"margin-bottom:10px;\">Trace: <code>#{trace_lines}</code></div>"}
-                            <div class="table-card" style="background:#0b0f19;">
-                              <table>
-                                <thead>
-                                  <tr>
-                                    <th>Bucket</th>
-                                    <th class="num">Occ</th>
-                                    <th>Repro Binary</th>
-                                    <th class="num">Min Size</th>
-                                    <th>Options / Digest</th>
-                                    <th>Payload Preview</th>
-                                    <th>Artifacts</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  #{bucket_rows}
-                                </tbody>
-                              </table>
-                            </div>
-                          </td>
-                        </tr>
+                        #{drawer_tr_html}
                       CROW
                     end.join("\n")
 
@@ -329,35 +337,40 @@ module PrismFuzzerReport
                     CLUSTERS_TABLE
                   end
 
+      inner_html = <<~HTML
+        <div class="fuzzer-banner">
+          <div>
+            <h2><span class="legend-dot" style="background:#fb7185"></span> Triage Clusters &amp; Reproducers</h2>
+            <p class="cmd-line">#{ver_bits.join(" &bull; ")}</p>
+          </div>
+          <div class="fuzzer-meta">
+            #{meta_links.join(" ")}
+          </div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Root-Cause Clusters</div>
+            <div class="kpi-value">#{format_int_fn.call(clusters.size)}</div>
+            <div class="kpi-sub">#{group_pills_sub}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Unique Buckets</div>
+            <div class="kpi-value">#{format_int_fn.call(total_buckets)}</div>
+            <div class="kpi-sub">deduplicated signatures</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Triaged Occurrences</div>
+            <div class="kpi-value #{total_occ > 0 ? 'text-danger' : ''}">#{format_int_fn.call(total_occ)}</div>
+            <div class="kpi-sub">across archived crashes &amp; hangs</div>
+          </div>
+        </div>
+        #{body_card}
+      HTML
+      return inner_html if inner_only
+
       <<~HTML
         <section id="tab-triage" class="tab-panel">
-          <div class="fuzzer-banner">
-            <div>
-              <h2><span class="legend-dot" style="background:#fb7185"></span> Triage Clusters &amp; Reproducers</h2>
-              <p class="cmd-line">#{ver_bits.join(" &bull; ")}</p>
-            </div>
-            <div class="fuzzer-meta">
-              #{meta_links.join(" ")}
-            </div>
-          </div>
-          <div class="kpi-grid">
-            <div class="kpi-card">
-              <div class="kpi-label">Root-Cause Clusters</div>
-              <div class="kpi-value">#{format_int_fn.call(clusters.size)}</div>
-              <div class="kpi-sub">#{group_pills_sub}</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Unique Buckets</div>
-              <div class="kpi-value">#{format_int_fn.call(total_buckets)}</div>
-              <div class="kpi-sub">deduplicated signatures</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Triaged Occurrences</div>
-              <div class="kpi-value #{total_occ > 0 ? 'text-danger' : ''}">#{format_int_fn.call(total_occ)}</div>
-              <div class="kpi-sub">across archived crashes &amp; hangs</div>
-            </div>
-          </div>
-          #{body_card}
+          #{inner_html}
         </section>
       HTML
     end

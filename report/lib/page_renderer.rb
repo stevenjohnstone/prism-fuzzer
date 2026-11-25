@@ -9,6 +9,7 @@ require_relative "lineage"
 require_relative "topology_view"
 require_relative "triage_view"
 require_relative "coverage_view"
+require_relative "chunker"
 
 module PrismFuzzerReport
   module PageRenderer
@@ -344,7 +345,7 @@ module PrismFuzzerReport
       HTML
     end
 
-    def render_generator_panel(gf, fleet:, fleet_lineage:, cov_info:, topo_ctx:)
+    def render_generator_panel(gf, fleet:, fleet_lineage:, cov_info:, topo_ctx:, chunker: nil, inner_only: false)
       name = gf[:name]
       safe_name = CGI.escapeHTML(name)
       cmd_line = gf[:stats]["command_line"] || ""
@@ -371,50 +372,55 @@ module PrismFuzzerReport
                    ""
                  end
 
+      inner_html = <<~HTML
+        <div class="fuzzer-banner">
+          <div>
+            <h2><span class="legend-dot" style="background:#{gf[:color]}"></span> #{safe_name}</h2>
+            <p class="cmd-line"><code>#{CGI.escapeHTML(cmd_line)}</code></p>
+          </div>
+          <div class="fuzzer-meta">
+            <span class="sched-pill">Role: Seed Generator (#{CGI.escapeHTML(gf[:sched])})</span>
+            <span class="sched-pill">Runtime: #{Helpers.format_duration(gf[:run_time])}</span>
+            <span class="sched-pill">Samples: #{Helpers.format_int(gf[:sample_count])}</span>
+            <span data-worker-cov-banner="#{safe_name}" style="display:contents">#{gen_cov_btn}</span>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">Files Created</div>
+            <div class="kpi-value">#{Helpers.format_int(gf[:files_created])}</div>
+            <div class="kpi-sub">#{format("%.1f%%", unique_pct)} unique of #{Helpers.format_int(gf[:attempts_done])} generated (#{Helpers.format_int(gf[:duplicates_skipped])} dup)</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">File Creation Rate</div>
+            <div class="kpi-value">#{Helpers.format_compact(gf[:files_per_sec])} files/s</div>
+            <div class="kpi-sub">avg #{Helpers.format_compact(gf[:avg_files_per_sec])} files/s over #{Helpers.format_duration(gf[:run_time])}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Valid / Invalid Split</div>
+            <div class="kpi-value">#{Helpers.format_int(gf[:files_valid])} / #{Helpers.format_int(gf[:files_invalid])}</div>
+            <div class="kpi-sub">valid vs. mutated/invalid Ruby seeds</div>
+          </div>
+          #{sync_kpi}
+        </div>
+
+        <div class="charts-grid">
+          #{gen_charts}
+        </div>
+
+        #{Lineage.render_grammar_lineage_section(fleet_lineage, fleet[:color_by_name], generator_name: name, topo_ctx: topo_ctx, chunker: chunker)}
+      HTML
+      return inner_html if inner_only
+
       <<~HTML
         <section id="tab-#{safe_name}" class="tab-panel">
-          <div class="fuzzer-banner">
-            <div>
-              <h2><span class="legend-dot" style="background:#{gf[:color]}"></span> #{safe_name}</h2>
-              <p class="cmd-line"><code>#{CGI.escapeHTML(cmd_line)}</code></p>
-            </div>
-            <div class="fuzzer-meta">
-              <span class="sched-pill">Role: Seed Generator (#{CGI.escapeHTML(gf[:sched])})</span>
-              <span class="sched-pill">Runtime: #{Helpers.format_duration(gf[:run_time])}</span>
-              <span class="sched-pill">Samples: #{Helpers.format_int(gf[:sample_count])}</span>
-              <span data-worker-cov-banner="#{safe_name}" style="display:contents">#{gen_cov_btn}</span>
-            </div>
-          </div>
-
-          <div class="kpi-grid">
-            <div class="kpi-card">
-              <div class="kpi-label">Files Created</div>
-              <div class="kpi-value">#{Helpers.format_int(gf[:files_created])}</div>
-              <div class="kpi-sub">#{format("%.1f%%", unique_pct)} unique of #{Helpers.format_int(gf[:attempts_done])} generated (#{Helpers.format_int(gf[:duplicates_skipped])} dup)</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">File Creation Rate</div>
-              <div class="kpi-value">#{Helpers.format_compact(gf[:files_per_sec])} files/s</div>
-              <div class="kpi-sub">avg #{Helpers.format_compact(gf[:avg_files_per_sec])} files/s over #{Helpers.format_duration(gf[:run_time])}</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Valid / Invalid Split</div>
-              <div class="kpi-value">#{Helpers.format_int(gf[:files_valid])} / #{Helpers.format_int(gf[:files_invalid])}</div>
-              <div class="kpi-sub">valid vs. mutated/invalid Ruby seeds</div>
-            </div>
-            #{sync_kpi}
-          </div>
-
-          <div class="charts-grid">
-            #{gen_charts}
-          </div>
-
-          #{Lineage.render_grammar_lineage_section(fleet_lineage, fleet[:color_by_name], generator_name: name, topo_ctx: topo_ctx)}
+          #{inner_html}
         </section>
       HTML
     end
 
-    def render_fuzzer_panel(f, fleet:, fleet_lineage:, cov_info:, topo_ctx:)
+    def render_fuzzer_panel(f, fleet:, fleet_lineage:, cov_info:, topo_ctx:, chunker: nil, inner_only: false)
       name = f[:name]
       safe_name = CGI.escapeHTML(name)
       cmd_line = f[:stats]["command_line"] || ""
@@ -500,71 +506,77 @@ module PrismFuzzerReport
                          id_prefix: "w-lineage-#{name.gsub(/[^a-zA-Z0-9_-]/, '_')}",
                          title: "Crash Lineage Involving <code>#{safe_name}</code> (#{Helpers.format_int(direct_cnt)} Direct Crashes &bull; #{Helpers.format_int(assist_cnt)} Forwarded to Peers)",
                          subtitle: "Pathways where #{safe_name} either discovered the crash directly or mutated/forwarded an ancestor queue item that later crashed in another worker.",
-                         topo_ctx: topo_ctx
+                         topo_ctx: topo_ctx,
+                         chunker: chunker
                        )
                      else
                        ""
                      end
 
+      inner_html = <<~HTML
+        <div class="fuzzer-banner">
+          <div>
+            <h2><span class="legend-dot" style="background:#{f[:color]}"></span> #{safe_name}</h2>
+            <p class="cmd-line"><code>#{CGI.escapeHTML(cmd_line)}</code></p>
+          </div>
+          <div class="fuzzer-meta">
+            <span class="sched-pill">Schedule: #{CGI.escapeHTML(f[:sched])}</span>
+            <span class="sched-pill">Stability: #{CGI.escapeHTML(f[:stability])}</span>
+            <span class="sched-pill">Samples: #{Helpers.format_int(f[:sample_count])}</span>
+            <span data-worker-cov-banner="#{safe_name}" style="display:contents">#{worker_cov_btn}</span>
+          </div>
+        </div>
+
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <div class="kpi-label">AFL++ Map Coverage</div>
+            <div class="kpi-value">#{format("%.2f%%", f[:bitmap_cvg])}</div>
+            <div class="kpi-sub">#{Helpers.format_int(f[:edges_found])}#{f[:total_edges] > 0 ? " / #{Helpers.format_int(f[:total_edges])}" : ""} edges</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Throughput</div>
+            <div class="kpi-value">#{Helpers.format_int(f[:execs_per_sec].round)}/s</div>
+            <div class="kpi-sub">#{Helpers.format_compact(f[:execs_done])} total execs</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Corpus Queue</div>
+            <div class="kpi-value">#{Helpers.format_int(f[:corpus_count])}</div>
+            <div class="kpi-sub">+#{Helpers.format_int(f[:corpus_found])} local, #{Helpers.format_int(f[:corpus_imported])} synced</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Pending (Fav / Total)</div>
+            <div class="kpi-value">#{Helpers.format_int(f[:pending_favs])}</div>
+            <div class="kpi-sub">of #{Helpers.format_int(f[:pending_total])} unfuzzed</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Cycles / Max Depth</div>
+            <div class="kpi-value">#{f[:cycles_done]}</div>
+            <div class="kpi-sub">max depth #{f[:max_depth]}</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-label">Crashes / Hangs</div>
+            <div class="kpi-value #{f[:saved_crashes] > 0 ? 'text-danger' : ''}">#{f[:saved_crashes]} / #{f[:saved_hangs]}</div>
+            <div class="kpi-sub"> Peak RSS: #{f[:stats]['peak_rss_mb'] || '-'} MB</div>
+          </div>
+          #{sync_kpis}
+        </div>
+
+        <div class="charts-grid">
+          #{fuzzer_charts}
+        </div>
+
+        #{lineage_html}
+      HTML
+      return inner_html if inner_only
+
       <<~HTML
         <section id="tab-#{safe_name}" class="tab-panel">
-          <div class="fuzzer-banner">
-            <div>
-              <h2><span class="legend-dot" style="background:#{f[:color]}"></span> #{safe_name}</h2>
-              <p class="cmd-line"><code>#{CGI.escapeHTML(cmd_line)}</code></p>
-            </div>
-            <div class="fuzzer-meta">
-              <span class="sched-pill">Schedule: #{CGI.escapeHTML(f[:sched])}</span>
-              <span class="sched-pill">Stability: #{CGI.escapeHTML(f[:stability])}</span>
-              <span class="sched-pill">Samples: #{Helpers.format_int(f[:sample_count])}</span>
-              <span data-worker-cov-banner="#{safe_name}" style="display:contents">#{worker_cov_btn}</span>
-            </div>
-          </div>
-
-          <div class="kpi-grid">
-            <div class="kpi-card">
-              <div class="kpi-label">AFL++ Map Coverage</div>
-              <div class="kpi-value">#{format("%.2f%%", f[:bitmap_cvg])}</div>
-              <div class="kpi-sub">#{Helpers.format_int(f[:edges_found])}#{f[:total_edges] > 0 ? " / #{Helpers.format_int(f[:total_edges])}" : ""} edges</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Throughput</div>
-              <div class="kpi-value">#{Helpers.format_int(f[:execs_per_sec].round)}/s</div>
-              <div class="kpi-sub">#{Helpers.format_compact(f[:execs_done])} total execs</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Corpus Queue</div>
-              <div class="kpi-value">#{Helpers.format_int(f[:corpus_count])}</div>
-              <div class="kpi-sub">+#{Helpers.format_int(f[:corpus_found])} local, #{Helpers.format_int(f[:corpus_imported])} synced</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Pending (Fav / Total)</div>
-              <div class="kpi-value">#{Helpers.format_int(f[:pending_favs])}</div>
-              <div class="kpi-sub">of #{Helpers.format_int(f[:pending_total])} unfuzzed</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Cycles / Max Depth</div>
-              <div class="kpi-value">#{f[:cycles_done]}</div>
-              <div class="kpi-sub">max depth #{f[:max_depth]}</div>
-            </div>
-            <div class="kpi-card">
-              <div class="kpi-label">Crashes / Hangs</div>
-              <div class="kpi-value #{f[:saved_crashes] > 0 ? 'text-danger' : ''}">#{f[:saved_crashes]} / #{f[:saved_hangs]}</div>
-              <div class="kpi-sub"> Peak RSS: #{f[:stats]['peak_rss_mb'] || '-'} MB</div>
-            </div>
-            #{sync_kpis}
-          </div>
-
-          <div class="charts-grid">
-            #{fuzzer_charts}
-          </div>
-
-          #{lineage_html}
+          #{inner_html}
         </section>
       HTML
     end
 
-    def render_page(afl_dir:, title:, triage_dir:, fleet:, fleet_lineage:, triage_view:, cov_info:, topo_ctx:)
+    def render_page(afl_dir:, title:, triage_dir:, fleet:, fleet_lineage:, triage_view:, cov_info:, topo_ctx:, chunker: nil)
       topo = topo_ctx[:topology]
       topo_colors = topo_ctx[:colors]
       sankey_sec = triage_view && triage_view[:sankey_sec]
@@ -606,42 +618,89 @@ module PrismFuzzerReport
 
       tab_panels_html = +""
       if topo
-        tab_panels_html << TopologyView.render_topology_tab_html(
+        topo_diag_svg = TopologyView.render_topology_diagram_svg(
           topo,
-          diagram_svg: TopologyView.render_topology_diagram_svg(
-            topo,
-            worker_by_name: fleet[:worker_by_name],
-            color_by_name: fleet[:color_by_name],
-            peer_sync_by_name: fleet[:peer_sync_by_name],
-            peer_import_stats: fleet[:peer_import_stats] || {},
-            id_prefix: "tab-topo",
-            topo_colors: topo_colors
-          )
+          worker_by_name: fleet[:worker_by_name],
+          color_by_name: fleet[:color_by_name],
+          peer_sync_by_name: fleet[:peer_sync_by_name],
+          peer_import_stats: fleet[:peer_import_stats] || {},
+          id_prefix: "tab-topo",
+          topo_colors: topo_colors
         )
+        if chunker
+          topo_inner = TopologyView.render_topology_tab_html(topo, diagram_svg: topo_diag_svg, inner_only: true)
+          topo_cid = chunker.register_tab("topology", topo_inner)
+          tab_panels_html << %(<section id="tab-topology" class="tab-panel" data-tab-chunk="#{CGI.escapeHTML(topo_cid)}"></section>\n)
+        else
+          tab_panels_html << TopologyView.render_topology_tab_html(topo, diagram_svg: topo_diag_svg)
+        end
       end
       if triage_view
-        tab_panels_html << TriageView.render_triage_tab_html(
-          triage_view,
-          triage_dir: triage_dir,
-          has_sankey: !sankey_sec.nil?
-        )
+        if chunker
+          tri_inner = TriageView.render_triage_tab_html(
+            triage_view,
+            triage_dir: triage_dir,
+            has_sankey: !sankey_sec.nil?,
+            chunker: chunker,
+            inner_only: true
+          )
+          tri_cid = chunker.register_tab("triage", tri_inner)
+          tab_panels_html << %(<section id="tab-triage" class="tab-panel" data-tab-chunk="#{CGI.escapeHTML(tri_cid)}"></section>\n)
+        else
+          tab_panels_html << TriageView.render_triage_tab_html(
+            triage_view,
+            triage_dir: triage_dir,
+            has_sankey: !sankey_sec.nil?
+          )
+        end
       end
-      tab_panels_html << CoverageView.render_coverage_tab_html(cov_info)
+      if chunker
+        cov_inner = CoverageView.render_coverage_tab_inner_html(cov_info)
+        cov_cid = chunker.register_tab("coverage", cov_inner)
+        tab_panels_html << %(<section id="tab-coverage" class="tab-panel" data-tab-chunk="#{CGI.escapeHTML(cov_cid)}"></section>\n)
+      else
+        tab_panels_html << CoverageView.render_coverage_tab_html(cov_info)
+      end
       if sankey_sec
-        tab_panels_html << <<~HTML
-          <section id="tab-sankey" class="tab-panel">
-            #{triage_view ? '<div style="margin-bottom:12px;"><button class="cov-btn cov-btn-secondary" type="button" onclick="selectTab(\'triage\')">&larr; View Triage Clusters &amp; Reproducers</button></div>' : ""}
-            #{sankey_sec[:html]}
-          </section>
-        HTML
+        sankey_back_btn = triage_view ? '<div style="margin-bottom:12px;"><button class="cov-btn cov-btn-secondary" type="button" onclick="selectTab(\'triage\')">&larr; View Triage Clusters &amp; Reproducers</button></div>' : ""
+        sankey_inner = <<~SK_INNER
+          #{sankey_back_btn}
+          #{sankey_sec[:html]}
+        SK_INNER
+        if chunker
+          sk_cid = chunker.register_tab(
+            "sankey",
+            sankey_inner,
+            sankey_meta: sankey_sec[:views_meta],
+            sankey_initial: sankey_sec[:initial_state]
+          )
+          tab_panels_html << %(<section id="tab-sankey" class="tab-panel" data-tab-chunk="#{CGI.escapeHTML(sk_cid)}"></section>\n)
+        else
+          tab_panels_html << <<~HTML
+            <section id="tab-sankey" class="tab-panel">
+              #{sankey_inner}
+            </section>
+          HTML
+        end
       end
 
       fleet[:fuzzers].each do |f|
-        tab_panels_html << if f[:role] == :generator
-                             render_generator_panel(f, fleet: fleet, fleet_lineage: fleet_lineage, cov_info: cov_info, topo_ctx: topo_ctx)
-                           else
-                             render_fuzzer_panel(f, fleet: fleet, fleet_lineage: fleet_lineage, cov_info: cov_info, topo_ctx: topo_ctx)
-                           end
+        if chunker
+          w_inner = if f[:role] == :generator
+                      render_generator_panel(f, fleet: fleet, fleet_lineage: fleet_lineage, cov_info: cov_info, topo_ctx: topo_ctx, chunker: chunker, inner_only: true)
+                    else
+                      render_fuzzer_panel(f, fleet: fleet, fleet_lineage: fleet_lineage, cov_info: cov_info, topo_ctx: topo_ctx, chunker: chunker, inner_only: true)
+                    end
+          w_cid = chunker.register_tab(f[:name], w_inner)
+          safe_w_name = CGI.escapeHTML(f[:name])
+          tab_panels_html << %(<section id="tab-#{safe_w_name}" class="tab-panel" data-tab-chunk="#{CGI.escapeHTML(w_cid)}"></section>\n)
+        else
+          tab_panels_html << if f[:role] == :generator
+                               render_generator_panel(f, fleet: fleet, fleet_lineage: fleet_lineage, cov_info: cov_info, topo_ctx: topo_ctx)
+                             else
+                               render_fuzzer_panel(f, fleet: fleet, fleet_lineage: fleet_lineage, cov_info: cov_info, topo_ctx: topo_ctx)
+                             end
+        end
       end
 
       cov_header_btns = if active_cov_pairs.any?
@@ -696,7 +755,22 @@ module PrismFuzzerReport
       peer_sync_card_html = render_peer_sync_card(fleet)
       summary_rows_html = render_summary_rows(fleet, cov_info)
       generator_table_html = render_generator_table(fleet, cov_info)
-      overview_crash_lineage_html = Lineage.render_overview_crash_lineage(fleet_lineage, fleet[:color_by_name], topo_ctx: topo_ctx)
+      overview_crash_lineage_html = Lineage.render_overview_crash_lineage(
+        fleet_lineage,
+        fleet[:color_by_name],
+        topo_ctx: topo_ctx,
+        chunker: chunker
+      )
+      sankey_runtime_js = if chunker && sankey_sec && defined?(FuzzSankey::SANKEY_JS)
+                            FuzzSankey::SANKEY_JS
+                          else
+                            ""
+                          end
+      script_body = if chunker
+                      "#{chunker.manifest_script_js}\n#{sankey_runtime_js}\n#{REPORT_JS}"
+                    else
+                      "#{REPORT_JS}\n#{sankey_sec ? sankey_sec[:script] : ''}"
+                    end
 
       <<~HTML
         <!DOCTYPE html>
@@ -805,8 +879,7 @@ module PrismFuzzerReport
           </main>
 
           <script>
-            #{REPORT_JS}
-            #{sankey_sec ? sankey_sec[:script] : ""}
+            #{script_body}
           </script>
         </body>
         </html>

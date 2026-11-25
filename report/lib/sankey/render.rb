@@ -416,6 +416,8 @@ module FuzzSankey
       styles: SANKEY_CSS,
       html: body_html,
       script: script,
+      views_meta: views_meta,
+      initial_state: initial_state,
       cluster_count: dataset[:clusters].size,
       bucket_total: dataset[:bucket_total],
       total_occurrences: total_occ

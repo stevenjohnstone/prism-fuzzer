@@ -158,16 +158,18 @@ class ConsumersIntegrationTest < Minitest::Test
         "--triage-dir", triage_dir
       )
       report_html = File.read(report_html_path)
+      report_chunks = load_report_chunks(report_out)
       assert_includes report_html, "rel-diff"
       assert_includes report_html, 'id="tab-triage"'
-      assert_includes report_html, "triage-clusters-tbody"
-      assert_includes report_html, "4.1.0dev (72d4cf2e9a)"
-      triage_sec = report_html[/<section id="tab-triage" class="tab-panel">.*?<\/section>/m]
-      refute_nil triage_sec, "missing tab-triage section"
+      assert_includes report_html, 'data-tab-chunk="tab:triage"'
+      triage_sec = report_chunks.dig("tab:triage", "html")
+      refute_nil triage_sec, "missing tab:triage chunk"
+      assert_includes triage_sec, "triage-clusters-tbody"
+      assert_includes triage_sec, "4.1.0dev (72d4cf2e9a)"
       assert_includes triage_sec, "<code>rel-diff</code> <strong>2</strong>"
       assert_includes triage_sec, "<code>cur-diff</code> <strong>2</strong>"
       assert_includes report_html, 'id="tab-sankey"'
-      assert_includes report_html, "sankey-root"
+      assert_includes report_chunks.dig("tab:sankey", "html").to_s, "sankey-root"
 
       FileUtils.cp(sankey_html_path, File.join(report_out, "sankey.html"))
       reports_dir = File.join(workdir, "reports")
@@ -187,6 +189,8 @@ class ConsumersIntegrationTest < Minitest::Test
       assert_equal "pr-matrix-test", topo_manifest["name"]
       assert_equal %w[main pr release], topo_manifest.fetch("sources").keys.sort
       assert_equal "report/index.html", manifest.dig("artifacts", "report")
+      assert_equal "report/chunks", manifest.dig("artifacts", "report_chunks")
+      assert Dir.exist?(File.join(reports_dir, "runs", "matrix-01", "report", "chunks"))
       assert_equal "report/triage/clusters.json", manifest.dig("artifacts", "clusters")
 
       # Regression (Bug #38): publish.rb encodes run_id path segments with %20 (ERB::Util.url_encode), not + (CGI.escape)
@@ -558,12 +562,143 @@ class ConsumersIntegrationTest < Minitest::Test
         env: { "TOPOLOGY" => topo_path }
       )
       html = File.read(report_html_path)
+      chunks = load_report_chunks(File.dirname(report_html_path))
       assert_includes html, "Seed Generator"
       assert_includes html, "gram_custom"
-      assert_includes html, "0-Crash Workers"
       assert_includes html, "w_zero"
-      assert_includes html, "feedbeef12"
-      assert_includes html, "4.1.0dev (abcdef0123)"
+      assert_includes chunks.dig("tab:sankey", "html").to_s, "0-Crash Workers"
+      assert_includes chunks.dig("tab:triage", "html").to_s, "feedbeef12"
+      assert_includes chunks.dig("tab:triage", "html").to_s, "4.1.0dev (abcdef0123)"
+    end
+  end
+
+  def test_report_chunking_deduplicates_steps_bounds_part_files_and_splits_monolithic_html
+    with_tmpdir("report-chunking-") do |ws|
+      afl_dir = File.join(ws, "afl")
+      gen_dir = File.join(afl_dir, "grammar")
+      main_dir = File.join(afl_dir, "main")
+      sec_dir = File.join(afl_dir, "sec")
+      seeds_dir = File.join(ws, "seeds")
+      triage_dir = File.join(ws, "triage")
+      FileUtils.mkdir_p([
+        gen_dir,
+        File.join(main_dir, "queue"),
+        File.join(sec_dir, "queue"),
+        File.join(sec_dir, "crashes"),
+        seeds_dir,
+        File.join(triage_dir, "ABRT", "b_chunk")
+      ])
+
+      File.write(File.join(gen_dir, "fuzzer_stats"), "fuzzer_role : generator\nfiles_created : 30\npending_files : 0\nrun_time : 20\n")
+      write_minimal_afl_worker(main_dir, saved_crashes: 0)
+      write_minimal_afl_worker(sec_dir, saved_crashes: 2)
+
+      # Shared 6-step ancestry chain in main, fanning out into >20 queue propagation pathways
+      # and crashes in sec so step deduplication, extra-toggle-row sharding, and multi-part splitting all trigger.
+      shared_seed = "\x00\x00\x03\x01#{"x = 'shared_step_payload_0123456789' # \u{1f680}\n" * 12}".b
+      File.binwrite(File.join(seeds_dir, "seed_shared0000000001"), shared_seed)
+      File.binwrite(File.join(main_dir, "queue", "id:000000,sync:seeds,src:seed_shared0000000001"), shared_seed)
+      (1..5).each do |i|
+        prev = format("%06d", i - 1)
+        cur = format("%06d", i)
+        File.binwrite(File.join(main_dir, "queue", "id:#{cur},src:#{prev},op:havoc,rep:2"), shared_seed + "# step #{i}\n".b)
+      end
+
+      22.times do |k|
+        w_dir = File.join(afl_dir, format("peer_%02d", k))
+        FileUtils.mkdir_p(File.join(w_dir, "queue"))
+        write_minimal_afl_worker(w_dir, saved_crashes: 0)
+        File.binwrite(File.join(w_dir, "queue", "id:000000,sync:main,src:000005,+cov"), shared_seed + "# peer #{k}\n".b)
+      end
+
+      File.binwrite(File.join(sec_dir, "queue", "id:000000,sync:main,src:000005"), shared_seed)
+      crash_a = File.join(sec_dir, "crashes", "id:000000,sig:06,src:000000,op:havoc")
+      File.binwrite(crash_a, shared_seed + "raise 'boom'\n".b)
+
+      File.write(File.join(triage_dir, "ABRT", "b_chunk", "occurrences.jsonl"), "#{JSON.generate("worker" => "sec", "path" => crash_a, "time_ms" => 5, "mtime" => "2026-11-24T10:00:00Z")}\n")
+      File.write(File.join(triage_dir, "metadata.json"), JSON.pretty_generate(
+        "schema_version" => 1,
+        "buckets" => [{
+          "bucket_id" => "ABRT/b_chunk",
+          "reason" => "ABRT",
+          "signature" => "b_chunk",
+          "reproducible" => true,
+          "timed_out" => false,
+          "verify_profile" => "asan_ubsan",
+          "occurrences" => { "count" => 1, "by_worker" => { "sec" => 1 } },
+          "input" => { "min_path" => "input.min", "min_size_bytes" => 12, "source_preview" => "x = 1" },
+          "symptom" => { "headline" => "INVARIANT[node_location]: kind=chunk_test" }
+        }]
+      ))
+      assert_ruby_cmd(repo_path("triage/cluster.rb"), "--metadata", File.join(triage_dir, "metadata.json"), "--output", File.join(triage_dir, "clusters.json"), "--quiet")
+
+      # 1. Tight 32 KiB max_chunk_bytes forces multi-part .partNNN.js splitting and strictly bounds every file.
+      rep_dir = File.join(ws, "report_chunked")
+      FileUtils.mkdir_p(File.join(rep_dir, "chunks"))
+      stale_chunk = File.join(rep_dir, "chunks", "stale-leftover.deadbeef.js")
+      File.write(stale_chunk, "// stale\n")
+
+      out_html = File.join(rep_dir, "index.html")
+      assert_ruby_cmd(
+        repo_path("report/report.rb"),
+        afl_dir,
+        out_html,
+        File.join(ws, "none.json"),
+        "--triage-dir", triage_dir,
+        "--max-chunk-mb", "0.03125"
+      )
+
+      refute_path_exists stale_chunk, "expected report.rb to prune stale chunk files"
+      chunk_files = Dir.glob(File.join(rep_dir, "chunks", "*.js"))
+      refute_empty chunk_files
+      assert chunk_files.any? { |p| File.basename(p).include?(".part000.") },
+             "expected 32 KiB limit to exercise multi-part .part000 chunk splitting: #{chunk_files.map { |f| [File.basename(f), File.size(f)] }.inspect}"
+      chunk_files.each do |cf|
+        assert_operator File.size(cf), :<=, 32 * 1024, "chunk #{File.basename(cf)} exceeded 32 KiB cap (#{File.size(cf)} B)"
+      end
+
+      chunks = load_report_chunks(rep_dir)
+      assert chunks.key?("tab:grammar")
+      assert chunks.key?("tab:main")
+      assert chunks.key?("tab:sec")
+      assert chunks.key?("tab:triage")
+      assert chunks.key?("tab:sankey")
+      assert chunks.keys.any? { |k| k.start_with?("steps:") }, "expected deduplicated evo-step shard(s)"
+      assert chunks.keys.any? { |k| k.start_with?("drawers:") }, "expected lazy drawer shard(s)"
+      assert chunks.keys.any? { |k| k.start_with?("rows:") }, "expected lazy overflow row shard(s) for >15 queue pathways"
+
+      all_steps = chunks.select { |k, _| k.start_with?("steps:") }.values.each_with_object({}) { |p, h| h.merge!(p.fetch("steps")) }
+      # Shared main/queue/id:000003 appears in 22+ pathways across overview + grammar + main + sec, yet is stored only once!
+      id3_matches = all_steps.values.count { |tail| tail.include?("id:000003,src:000002") }
+      assert_equal 1, id3_matches, "expected shared intermediate step id:000003 to be deduplicated to 1 entry, got #{id3_matches}"
+
+      # 2. --single-file produces monolithic HTML, and --split-existing converts it in-place into bounded chunks.
+      mono_dir = File.join(ws, "report_mono")
+      mono_html = File.join(mono_dir, "index.html")
+      assert_ruby_cmd(
+        repo_path("report/report.rb"),
+        afl_dir,
+        mono_html,
+        File.join(ws, "none.json"),
+        "--triage-dir", triage_dir,
+        "--single-file"
+      )
+      refute_path_exists File.join(mono_dir, "chunks")
+      mono_size_before = File.size(mono_html)
+
+      assert_ruby_cmd(
+        repo_path("report/report.rb"),
+        "--split-existing", mono_html,
+        "--max-chunk-mb", "0.03125"
+      )
+      assert_operator File.size(mono_html), :<, mono_size_before / 3,
+                      "expected --split-existing to shrink monolithic index.html substantially (#{mono_size_before} -> #{File.size(mono_html)})"
+      split_chunks = load_report_chunks(mono_dir)
+      assert_includes split_chunks.dig("tab:triage", "html").to_s, "chunk_test"
+      assert split_chunks.dig("tab:sankey", "sankeyMeta"), "expected --split-existing to preserve Sankey metadata"
+      Dir.glob(File.join(mono_dir, "chunks", "*.js")).each do |cf|
+        assert_operator File.size(cf), :<=, 32 * 1024, "split chunk #{File.basename(cf)} exceeded 32 KiB cap"
+      end
     end
   end
 
@@ -631,6 +766,39 @@ class ConsumersIntegrationTest < Minitest::Test
   end
 
   private
+
+  def load_report_chunks(report_dir)
+    index_html = File.read(File.join(report_dir, "index.html"), encoding: "UTF-8")
+    manifest_json = index_html[/window\.__PRISM_FUZZER_CHUNK_MANIFEST__\s*=\s*(\{.*?\});\n/m, 1]
+    assert manifest_json, "missing window.__PRISM_FUZZER_CHUNK_MANIFEST__ in #{report_dir}/index.html"
+    manifest = JSON.parse(manifest_json)
+
+    chunks = {}
+    part_buffers = {}
+    manifest.each do |chunk_id, rel_paths|
+      Array(rel_paths).each do |rel|
+        full = File.join(report_dir, rel)
+        assert_path_exists full, "missing chunk file #{full} referenced by #{chunk_id}"
+        js = File.read(full, encoding: "UTF-8")
+        if (m = js.match(/\Awindow\.__PRISM_FUZZER_ON_CHUNK__\((.+)\);\s*\z/m))
+          cid, payload = JSON.parse("[#{m[1]}]")
+          chunks[cid] = payload
+        elsif (m = js.match(/\Awindow\.__PRISM_FUZZER_ON_CHUNK_PART__\((.+)\);\s*\z/m))
+          cid, pidx, ptotal, slice = JSON.parse("[#{m[1]}]")
+          buf = (part_buffers[cid] ||= Array.new(ptotal))
+          buf[pidx] = slice
+          if buf.none?(&:nil?)
+            chunks[cid] = JSON.parse(buf.join)
+            part_buffers.delete(cid)
+          end
+        else
+          flunk "unexpected chunk JS format in #{full}: #{js[0, 120].inspect}"
+        end
+      end
+    end
+    assert_empty part_buffers, "incomplete multi-part chunk(s): #{part_buffers.keys.inspect}"
+    chunks
+  end
 
   def write_minimal_afl_worker(wdir, saved_crashes: 0)
     FileUtils.mkdir_p(wdir)

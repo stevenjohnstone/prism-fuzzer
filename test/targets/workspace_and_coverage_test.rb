@@ -58,6 +58,39 @@ class WorkspaceAndCoverageTest < Minitest::Test
     repo_path("bin", "topology.rb")
   end
 
+  def load_report_chunks(report_dir)
+    index_html = File.read(File.join(report_dir, "index.html"), encoding: "UTF-8")
+    manifest_json = index_html[/window\.__PRISM_FUZZER_CHUNK_MANIFEST__\s*=\s*(\{.*?\});\n/m, 1]
+    assert manifest_json, "missing window.__PRISM_FUZZER_CHUNK_MANIFEST__ in #{report_dir}/index.html"
+    manifest = JSON.parse(manifest_json)
+
+    chunks = {}
+    part_buffers = {}
+    manifest.each do |chunk_id, rel_paths|
+      Array(rel_paths).each do |rel|
+        full = File.join(report_dir, rel)
+        assert_path_exists full, "missing chunk file #{full} referenced by #{chunk_id}"
+        js = File.read(full, encoding: "UTF-8")
+        if (m = js.match(/\Awindow\.__PRISM_FUZZER_ON_CHUNK__\((.+)\);\s*\z/m))
+          cid, payload = JSON.parse("[#{m[1]}]")
+          chunks[cid] = payload
+        elsif (m = js.match(/\Awindow\.__PRISM_FUZZER_ON_CHUNK_PART__\((.+)\);\s*\z/m))
+          cid, pidx, ptotal, slice = JSON.parse("[#{m[1]}]")
+          buf = (part_buffers[cid] ||= Array.new(ptotal))
+          buf[pidx] = slice
+          if buf.none?(&:nil?)
+            chunks[cid] = JSON.parse(buf.join)
+            part_buffers.delete(cid)
+          end
+        else
+          flunk "unexpected chunk JS format in #{full}: #{js[0, 120].inspect}"
+        end
+      end
+    end
+    assert_empty part_buffers, "incomplete multi-part chunk(s): #{part_buffers.keys.inspect}"
+    chunks
+  end
+
   def campaign_cli
     repo_path("bin", "campaign.rb")
   end
@@ -1071,11 +1104,14 @@ class WorkspaceAndCoverageTest < Minitest::Test
       assert_match(%r{<strong>ijon-scout</strong>\s*<span[^>]*>&rarr; main \(peer\)</span>}, sync_sec)
       assert_match(%r{<strong>main</strong>\s*<span[^>]*>&rarr; ijon-scout \(peer\)</span>}, sync_sec)
 
-      asan_tab = html[%r{<section id="tab-ijon-asan" class="tab-panel">.*?</section>}m]
+      rep_chunks = load_report_chunks(File.dirname(out_html))
+      asan_tab = rep_chunks.dig("tab:ijon-asan", "html")
+      refute_nil asan_tab
       assert_includes asan_tab, "Sync to ijon-scout"
       assert_includes asan_tab, "Sync from ijon-scout"
 
-      cfg_tab = html[%r{<section id="tab-cfg_sec" class="tab-panel">.*?</section>}m]
+      cfg_tab = rep_chunks.dig("tab:cfg_sec", "html")
+      refute_nil cfg_tab
       assert_includes cfg_tab, "Sync to main"
       assert_includes cfg_tab, "Sync from main"
     end
@@ -1236,6 +1272,7 @@ class WorkspaceAndCoverageTest < Minitest::Test
         )
 
         html = File.read(report_html_path)
+        cov_rep_chunks = load_report_chunks(File.dirname(report_html_path))
         %w[prism_a__native prism_a__swar prism_b__native].each do |pid|
           assert_includes html, "coverage/pairs/#{pid}/report/index.html"
         end
@@ -1243,8 +1280,8 @@ class WorkspaceAndCoverageTest < Minitest::Test
         refute_includes html, "Gain vs. Corpus"
         refute_includes html, "Coverage by Origin"
 
-        pdiff_sec = html[%r{<section id="tab-pdiff" class="tab-panel">.*?</section>}m]
-        refute_nil pdiff_sec, "missing tab-pdiff section"
+        pdiff_sec = cov_rep_chunks.dig("tab:pdiff", "html")
+        refute_nil pdiff_sec, "missing tab:pdiff chunk"
         assert_includes pdiff_sec, "coverage/pairs/prism_a__native/report/index.html"
         assert_includes pdiff_sec, "prism_a (native)"
         assert_includes pdiff_sec, "coverage/pairs/prism_b__native/report/index.html"
@@ -1278,8 +1315,8 @@ class WorkspaceAndCoverageTest < Minitest::Test
         end
         refute_includes ov_sec, "3 Pairs)"
 
-        topo_sec = html[%r{<section id="tab-topology" class="tab-panel">.*?</section>}m]
-        refute_nil topo_sec, "missing tab-topology"
+        topo_sec = cov_rep_chunks.dig("tab:topology", "html")
+        refute_nil topo_sec, "missing tab:topology chunk"
         raw_topo_json = topo_sec[%r{<pre id="topology-json-pre"[^>]*><code>(.*?)</code></pre>}m, 1]
         refute_nil raw_topo_json, "missing topology-json-pre"
         parsed_topo = JSON.parse(CGI.unescapeHTML(raw_topo_json))
@@ -1288,7 +1325,7 @@ class WorkspaceAndCoverageTest < Minitest::Test
 
         assert_includes html, 'id="tab-triage"'
         assert_includes html, 'id="tab-sankey"'
-        assert_includes html, "sankey-root"
+        assert_includes cov_rep_chunks.dig("tab:sankey", "html").to_s, "sankey-root"
 
         # Publish manifest + all artifacts (including llvm-cov HTML and triage buckets)
         bucket_dir = File.join(real_ws, "report", "triage", "ABRT", "deadbeef")
@@ -1533,8 +1570,9 @@ class WorkspaceAndCoverageTest < Minitest::Test
       assert_equal 1, fleet[:peer_sync_by_name]["grammar-8k"][:imported_by_main]
       assert_equal "8k-main", fleet[:peer_sync_by_name]["grammar-8k"][:consumer_name]
 
-      tab_256 = html[%r{<section id="tab-grammar-256" class="tab-panel">.*?</section>}m]
-      tab_8k = html[%r{<section id="tab-grammar-8k" class="tab-panel">.*?</section>}m]
+      funnel_chunks = load_report_chunks(File.dirname(out_html))
+      tab_256 = funnel_chunks.dig("tab:grammar-256", "html")
+      tab_8k = funnel_chunks.dig("tab:grammar-8k", "html")
       refute_nil tab_256
       refute_nil tab_8k
 
