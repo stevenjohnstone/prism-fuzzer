@@ -8,7 +8,79 @@ module FuzzTriage
     include CrashParser
     extend self
 
-    def run_afl_tmin_hang(crash, minimized_input, executable)
+    def signal_pgroup_or_pid(sig, pid)
+      Process.kill(sig, -pid)
+    rescue Errno::ESRCH, Errno::EPERM
+      begin
+        Process.kill(sig, pid)
+      rescue Errno::ESRCH
+        nil
+      end
+    end
+
+    def drain_pipe_nonblock!(io, buf)
+      while (chunk = io.read_nonblock(65_536))
+        buf << chunk
+      end
+    rescue IO::WaitReadable, EOFError
+      nil
+    end
+
+    def run_bounded_pgroup(env, *cmd, max_time_sec:, stop_signal: "INT", grace_sec: 2.0)
+      r, w = IO.pipe
+      r.binmode
+      out = +"".b
+      timed_out = false
+      reaped_status = nil
+      pid = Process.spawn(env, *cmd, in: File::NULL, out: w, err: w, pgroup: true)
+      w.close
+
+      deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + max_time_sec
+      loop do
+        remain = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if remain <= 0
+          timed_out = true
+          signal_pgroup_or_pid(stop_signal, pid)
+          grace_deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + grace_sec
+          while (g_rem = grace_deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)) > 0
+            _, st = Process.waitpid2(pid, Process::WNOHANG)
+            if st
+              reaped_status = st
+              break
+            end
+            ready = IO.select([r], nil, nil, [g_rem, 0.05].min)
+            drain_pipe_nonblock!(r, out) if ready
+          end
+          signal_pgroup_or_pid("KILL", pid) unless reaped_status
+          break
+        end
+
+        ready = IO.select([r], nil, nil, [remain, 0.25].min)
+        next unless ready
+
+        begin
+          out << r.read_nonblock(65_536)
+        rescue IO::WaitReadable
+          nil
+        rescue EOFError
+          break
+        end
+      end
+
+      drain_pipe_nonblock!(r, out)
+      r.close unless r.closed?
+      status = reaped_status || begin
+        Process.waitpid2(pid).last
+      rescue Errno::ECHILD
+        nil
+      end
+      [out, status, timed_out]
+    ensure
+      w.close if w && !w.closed?
+      r.close if r && !r.closed?
+    end
+
+    def run_afl_tmin_hang(crash, minimized_input, executable, max_time_sec: env_hang_minimize_max_time_seconds)
       max_mb = env_max_allocated_mb
       hard_mb = env_hard_rss_limit_mb
       asan_opts = env_sanitizer_env(executable: executable)
@@ -21,7 +93,11 @@ module FuzzTriage
         "UBSAN_OPTIONS" => "abort_on_error=1:symbolize=0",
         "MSAN_OPTIONS" => "exit_code=86:abort_on_error=1:max_allocation_size_mb=#{max_mb}:hard_rss_limit_mb=#{hard_mb}:symbolize=0"
       }
-      Open3.capture2e(env, "afl-tmin", "-H", "-t", "500", "-i", crash, "-o", minimized_input, "--", executable)
+      run_bounded_pgroup(
+        env,
+        "afl-tmin", "-H", "-t", "500", "-i", crash, "-o", minimized_input, "--", executable,
+        max_time_sec: max_time_sec
+      )
     end
 
     def minimize_options_header(minimized_input, executable, sig_lines)

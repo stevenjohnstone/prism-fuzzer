@@ -22,6 +22,8 @@ class TriagePipelineTest < Minitest::Test
     "TRIAGE_MINIMIZE" => nil,
     "TRIAGE_THREADS" => nil,
     "HALFEMPTY_THREADS" => nil,
+    "HALFEMPTY_MAX_TIME" => nil,
+    "TRIAGE_HANG_MINIMIZE_MAX_TIME" => nil,
     "TRIAGE_EXPLAIN_BIN" => nil,
     "TRIAGE_DIGEST" => nil,
     "AFL_SHOWMAP" => nil
@@ -585,6 +587,62 @@ class TriagePipelineTest < Minitest::Test
       end
     end
     assert_includes hb_log, "[triage] still minimizing 1 bucket(s):"
+    verify_bounded_hang_minimization(workdir)
+  end
+
+  def verify_bounded_hang_minimization(workdir)
+    hang_dir = File.join(workdir, "hang_min_bound")
+    bin_dir = File.join(hang_dir, "bin")
+    FileUtils.mkdir_p(bin_dir)
+    raw_hang = File.join(hang_dir, "raw_hang.bin")
+    File.binwrite(raw_hang, ("\x00\x00\x03\x01" + ("@" * 4096)).b)
+    target_exe = write_executable(File.join(hang_dir, "dummy_target"), "#!/bin/sh\nexit 0\n")
+
+    # 1) afl-tmin catches SIGINT on timeout and flushes its best partial candidate to -o.
+    write_executable(File.join(bin_dir, "afl-tmin"), <<~'RB')
+      #!/usr/bin/env ruby
+      out_idx = ARGV.index("-o")
+      out_path = out_idx ? ARGV[out_idx + 1] : nil
+      Signal.trap("INT") do
+        File.binwrite(out_path, "\x00\x00\x03\x01@@@\n".b) if out_path
+        exit 130
+      end
+      sleep 30
+    RB
+
+    min_int = File.join(hang_dir, "min_int.bin")
+    t0 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    with_env("PATH" => "#{bin_dir}:#{ENV.fetch('PATH', '')}", "TRIAGE_HANG_MINIMIZE_MAX_TIME" => "0.15") do
+      capture_io { FuzzTriage.minimize(raw_hang, "hang", min_int, target_exe, 10) }
+    end
+    dt_int = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t0
+    assert_operator dt_int, :<, 3.0, "expected SIGINT-bounded hang minimization to finish promptly (got #{dt_int}s)"
+    assert_equal "\x00\x00\x03\x01@@@\n".b, File.binread(min_int)
+
+    # 2) Wedged afl-tmin ignoring SIGINT is SIGKILLed after grace window and falls back to raw crash bytes.
+    write_executable(File.join(bin_dir, "afl-tmin"), <<~'RB')
+      #!/usr/bin/env ruby
+      Signal.trap("INT", "IGNORE")
+      sleep 30
+    RB
+
+    min_kill = File.join(hang_dir, "min_kill.bin")
+    t1 = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+    with_env("PATH" => "#{bin_dir}:#{ENV.fetch('PATH', '')}") do
+      _, _, timed_out = FuzzTriage.run_bounded_pgroup(
+        {}, File.join(bin_dir, "afl-tmin"),
+        max_time_sec: 0.1, stop_signal: "INT", grace_sec: 0.15
+      )
+      assert timed_out, "expected wedged afl-tmin to report timed_out"
+    end
+    dt_kill = Process.clock_gettime(Process::CLOCK_MONOTONIC) - t1
+    assert_operator dt_kill, :<, 3.0, "expected SIGKILL escalation to terminate wedged afl-tmin promptly (got #{dt_kill}s)"
+
+    with_env("PATH" => "#{bin_dir}:#{ENV.fetch('PATH', '')}", "TRIAGE_HANG_MINIMIZE_MAX_TIME" => "0.1") do
+      capture_io { FuzzTriage.minimize(raw_hang, "hang", min_kill, target_exe, 10) }
+    end
+    assert_equal File.binread(raw_hang), File.binread(min_kill),
+                 "expected fallback copy of raw hang when afl-tmin exits without writing -o"
   end
 
   def test_afl_showmap_bucket_coverage_edge_df_document_ids_cache_and_recount

@@ -50,7 +50,7 @@ PrismFuzzer.campaign "ci-regression-gate" do
   fuzzer "fuzz.slow",   shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :slow, afl: :lto
   fuzzer "fuzz.msan",   shape: :prism_parse,     source: :prism_a, sanitizers: [:msan],          mode: :slow, afl: :lto
   fuzzer "fuzz.cmplog", shape: :prism_parse,     source: :prism_a, sanitizers: [],               mode: :fast, afl: :cmplog
-  fuzzer "fuzz.diff",   shape: :prism_diff_ruby, prism: :prism_a,  ruby: :ruby, sanitizers: %i[asan ubsan], afl: :pcguard, document_ids: true
+  fuzzer "fuzz.diff",   shape: :prism_diff_ruby, prism: :prism_a,  ruby: :ruby, sanitizers: [],             afl: :pcguard, document_ids: true
 
   sync_group :afl, dir: "afl", primary: true
 

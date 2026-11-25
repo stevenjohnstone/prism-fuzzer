@@ -86,7 +86,7 @@ Sanitizer reason detection parses `SUMMARY: (Memory|UndefinedBehavior|Address|Le
 
 For every **new** reproducible bucket (unless `TRIAGE_MINIMIZE=0`):
 
-1. **Payload minimization (`halfempty.sh`)**: Splits the 4-byte options header (`header.bin`) from the Ruby body (`body.bin`) and runs `halfempty --stable -T 3 --zero-char=32` (space-fill bisection) using [`halfempty_compare.sh`](halfempty_compare.sh). On each candidate, `halfempty_compare.sh` re-prepends `header.bin`, runs the classifying binary, and accepts the reduction only if `signature.sh` returns the exact original `FUZZ_SIG`. Hangs use `afl-tmin -H -t 500` instead of `halfempty`.
+1. **Payload minimization (`halfempty.sh`)**: Splits the 4-byte options header (`header.bin`) from the Ruby body (`body.bin`) and runs `halfempty --stable -T 3 --zero-char=32` (space-fill bisection) using [`halfempty_compare.sh`](halfempty_compare.sh). On each candidate, `halfempty_compare.sh` re-prepends `header.bin`, runs the classifying binary, and accepts the reduction only if `signature.sh` returns the exact original `FUZZ_SIG`. Hangs use `afl-tmin -H -t 500` instead of `halfempty`, bounded by `TRIAGE_HANG_MINIMIZE_MAX_TIME` (default `45`s; sends `SIGINT` so `afl-tmin` flushes its best candidate before escalating to `SIGKILL`).
 2. **Header minimization (`minimize_options_header`)**: Walks the 4-byte options header toward `DEFAULT_HEADER_BYTES` (`0x00, 0x00, 0x03, 0x01`: default parser flags, `ruby_version = "4.1"`, `start_line = 1`), clearing unnecessary flag/version/scope/limit bits one by one whenever the crash signature stays identical.
 3. **Drift check**: Re-runs the classifying binary on `input.min` and records `minimized_matches_signature` (`true`/`false`/`nil`) in `meta.json`.
 
@@ -214,6 +214,7 @@ When verifying by cluster (`--cluster` / `CLUSTER`) or in grouped mode (`--by-cl
 | `TRIAGE_THREADS` | `CPUs / 2` (min `1`) | Worker threads in `triage.rb`. |
 | `HALFEMPTY_THREADS` | `2` | Parallel threads per `halfempty` minimization job. |
 | `TRIAGE_MINIMIZE` | enabled (`!= "0"`) | Set to `0` to skip `halfempty`/`afl-tmin` and copy raw inputs as `input.min`. |
+| `TRIAGE_HANG_MINIMIZE_MAX_TIME` | `45` (falls back to `HALFEMPTY_MAX_TIME`) | Wall-clock timeout in seconds for `afl-tmin -H` hang minimization (`SIGINT` flush then `SIGKILL`). |
 | `TRIAGE_RECOUNT` | unset (`"1"` enables) | Backfill missing `occurrences.jsonl` / `inputs.tar.gz` entries using `.processed/<sha256>` without re-running crashes. |
 | `TRIAGE_COVERAGE_BIN` | `./tmp/fuzz/build/fuzz` | Reference instrumented binary for `afl-showmap` edge collection (defaults to `<ws>/bin/fuzz` when triaging a snapshot; empty disables coverage). |
 | `TRIAGE_COVERAGE_IDS` | `<TRIAGE_COVERAGE_BIN>.ids` | `AFL_LLVM_DOCUMENT_IDS` map file mapping edge IDs to function names. |

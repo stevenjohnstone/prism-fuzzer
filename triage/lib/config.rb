@@ -159,6 +159,12 @@ module FuzzTriage
       Integer(ENV.fetch("TRIAGE_HANG_TIMEOUT", "5"))
     end
 
+    def env_hang_minimize_max_time_seconds
+      raw = ENV["TRIAGE_HANG_MINIMIZE_MAX_TIME"].to_s.strip
+      raw = ENV["HALFEMPTY_MAX_TIME"].to_s.strip if raw.empty?
+      raw.empty? ? 45.0 : Float(raw)
+    end
+
     def env_crash_timeout_seconds
       Integer(ENV.fetch("TRIAGE_CRASH_TIMEOUT", "15"))
     end

@@ -43,7 +43,7 @@ PrismFuzzer.campaign "prism-hybrid-fleet" do
 
   fuzzer "fuzz",      shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.ijon", shape: :prism_parse,     source: :prism_a, sanitizers: [],           mode: :fast, afl: :lto, ijon: true, xallocator: true
-  fuzzer "fuzz.diff", shape: :prism_diff_ruby, prism: :prism_a,  ruby: :ruby, sanitizers: %i[asan ubsan], afl: :pcguard, document_ids: true
+  fuzzer "fuzz.diff", shape: :prism_diff_ruby, prism: :prism_a,  ruby: :ruby, sanitizers: [],           afl: :pcguard, document_ids: true
 
   sync_group :afl,         dir: "afl", primary: true
   sync_group :ijon_island, dir: "afl-ijon"

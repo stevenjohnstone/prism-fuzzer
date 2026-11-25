@@ -125,13 +125,13 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   fuzzer "fuzz.ijon.slow",  shape: :prism_parse,        source: :prism_a, sanitizers: %i[asan ubsan], mode: :slow, afl: :lto,     ijon: true, defines: ijon_stream_defs
   fuzzer "fuzz.ijon.msan",  shape: :prism_parse,        source: :prism_a, sanitizers: [:msan],        mode: :slow, afl: :lto,     ijon: true, defines: ijon_stream_defs
   fuzzer "fuzz.ijon.lsan",  shape: :prism_parse,        source: :prism_a, sanitizers: [:lsan],        mode: :slow, afl: :lto,     ijon: true, defines: ijon_stream_defs
-  fuzzer "fuzz.ijon.diff",  shape: :prism_diff_ruby,    prism: :prism_a,  ruby: :ruby, sanitizers: %i[asan ubsan], afl: :pcguard, ijon: true, document_ids: true
+  fuzzer "fuzz.ijon.diff",  shape: :prism_diff_ruby,    prism: :prism_a,  ruby: :ruby, sanitizers: [],             afl: :pcguard, ijon: true, document_ids: true
 
   fuzzer "fuzz.sand",       shape: :prism_parse,        source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :sand
   fuzzer "fuzz.cmplog",     shape: :prism_parse,        source: :prism_a, sanitizers: [],             mode: :fast, afl: :cmplog
   fuzzer "fuzz",            shape: :prism_parse,        source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto,     document_ids: true
   fuzzer "fuzz.lsan",       shape: :prism_parse,        source: :prism_a, sanitizers: [:lsan],        mode: :slow, afl: :lto
-  fuzzer "fuzz.diff",       shape: :prism_diff_ruby,    prism: :prism_a,  ruby: :ruby, sanitizers: %i[asan ubsan], afl: :pcguard, document_ids: true
+  fuzzer "fuzz.diff",       shape: :prism_diff_ruby,    prism: :prism_a,  ruby: :ruby, sanitizers: [],             afl: :pcguard, document_ids: true
 
   # IJON-enabled 32-bit ARM32 (LE) & PowerPC (BE) cross-arch AST/bignum oracles
   fuzzer "fuzz.arm32",      shape: :prism_cross_oracle, source: :prism_a, arch: :arm32, sanitizers: %i[asan ubsan], afl: :pcguard, ijon: true, mutator: "mutator_oracle64.so", repro: "fuzz.arm32.repro"

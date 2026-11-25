@@ -881,6 +881,10 @@ class LaunchAndStatusTest < Minitest::Test
     assert_includes scout_def.dig("afl_launch", "env_prefix").join(" "), "ASAN_OPTIONS="
     assert_equal 1, plan_def.dig("fuzzers", "fuzz.ijon.slow", "defines", "PRISM_FUZZ_ALLOW_STREAM_WITH_IJON")
     assert_equal 1, plan_def.dig("fuzzers", "fuzz.ijon.msan", "defines", "PRISM_FUZZ_ALLOW_STREAM_WITH_IJON")
+    assert_empty plan_def.dig("fuzzers", "fuzz.ijon.diff", "sanitizers")
+    assert_empty plan_def.dig("fuzzers", "fuzz.diff", "sanitizers")
+    diff_w_def = lp_def["workers"].find { |w| w["id"] == "ijon-diff" }
+    refute_includes diff_w_def.dig("afl_launch", "env_prefix").join(" "), "ASAN_OPTIONS="
     assert_equal ["prism_a__native"], PrismFuzzer::Topology.coverage_pairs(plan_def, fuzz_root: root_dir).map { |p| p["id"] }
 
     with_env("PRISM_B_REF" => "a1d1d96c368d49b752d06e361823a098b54f9a9d") do
@@ -929,8 +933,12 @@ class LaunchAndStatusTest < Minitest::Test
     small_scout = lp_fn["workers"].find { |w| w["id"] == "small-scout" }
     small_lsan = lp_fn["workers"].find { |w| w["id"] == "small-lsan" }
     main_8k = lp_fn["workers"].find { |w| w["id"] == "8k-main" }
+    diff_8k = lp_fn["workers"].find { |w| w["id"] == "8k-diff" }
     arm_8k = lp_fn["workers"].find { |w| w["id"] == "8k-arm32" }
     ppc_8k = lp_fn["workers"].find { |w| w["id"] == "8k-ppc" }
+    assert_empty plan_fn.dig("fuzzers", "fuzz.ijon.diff", "sanitizers")
+    assert_empty plan_fn.dig("fuzzers", "fuzz.diff", "sanitizers")
+    refute_includes diff_8k.dig("afl_launch", "env_prefix").join(" "), "ASAN_OPTIONS="
     assert_includes Shellwords.split(small_scout["cmd"]).last, "-G 260 "
     lsan_tok = small_lsan.dig("afl_launch", "env_prefix").find { |t| t.start_with?("LSAN_OPTIONS=") }
     refute_nil lsan_tok

@@ -74,7 +74,7 @@ PrismFuzzer.campaign "default-prism-fleet" do
   fuzzer "fuzz.sand",     shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan],   mode: :fast, afl: :sand
   fuzzer "fuzz.slow",     shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan],   mode: :slow, afl: :lto
   fuzzer "fuzz.cmplog",   shape: :prism_parse, source: :prism_a, sanitizers: [],               mode: :fast, afl: :cmplog
-  fuzzer "fuzz.diff",     shape: :prism_diff_ruby, prism: :prism_a, ruby: :ruby, sanitizers: %i[asan ubsan], afl: :pcguard, document_ids: true
+  fuzzer "fuzz.diff",     shape: :prism_diff_ruby, prism: :prism_a, ruby: :ruby, sanitizers: [],             afl: :pcguard, document_ids: true
   fuzzer "fuzz.arm32",    shape: :prism_cross_oracle, source: :prism_a, arch: :arm32, sanitizers: %i[asan ubsan], afl: :pcguard, mutator: "mutator_oracle64.so", repro: "fuzz.arm32.repro"
   fuzzer "fuzz.ppc",      shape: :prism_cross_oracle, source: :prism_a, arch: :ppc,   sanitizers: %i[asan ubsan], afl: :pcguard, mutator: "mutator_oracle64.so", repro: "fuzz.ppc.repro"
 
