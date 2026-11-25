@@ -603,7 +603,7 @@ module FuzzClustering
         end
       end
 
-      bucket_data[:top_prism_frame] || bucket_data[:reason].to_s
+      bucket_data[:top_prism_frame] || Array(bucket_data[:prism_trace]).first || bucket_data[:reason].to_s
     end
 
     def summarize_cluster_variants(member_feats, limit: 8)

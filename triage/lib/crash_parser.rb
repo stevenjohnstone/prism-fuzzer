@@ -64,6 +64,8 @@ module FuzzTriage
 
       summary = nil
       invariant = nil
+      invariant_line = nil
+      priority_headline = nil
       ubsan = nil
       sanitizer = nil
       assertion = nil
@@ -133,6 +135,7 @@ module FuzzTriage
         end
 
         if invariant.nil? && line =~ /\AINVARIANT\[([^\]]+)\]:\s*(.+)\z/
+          invariant_line = line
           ns = Regexp.last_match(1)
           rest = Regexp.last_match(2)
           before_detail, detail_body = rest.split(/\s*\[detail:\s*(.*?)\]\s*\z/, 2)
@@ -141,6 +144,16 @@ module FuzzTriage
             "fields" => parse_kv_pairs(before_detail),
             "detail" => detail_body ? parse_kv_pairs(detail_body) : {}
           }
+        end
+
+        if priority_headline.nil? &&
+           (line.match?(/\ACRASH\[[^\]]+\]:/) ||
+            line.match?(/\A==\d+==ERROR:\s*(?:AddressSanitizer|MemorySanitizer|LeakSanitizer|UndefinedBehaviorSanitizer):/) ||
+            line.include?("[BUG] ") ||
+            line.include?(": runtime error: ") ||
+            line.match?(/Assertion `.+?' failed\.\z/) ||
+            line.include?("Assertion failed"))
+          priority_headline = line
         end
 
         if ubsan.nil? && line =~ /\A(.+?):(\d+):(\d+): runtime error: (.+?)\z/
@@ -186,7 +199,11 @@ module FuzzTriage
         end
       end
 
-      raw_headline = preamble_lines.find { |l| !l.start_with?("====") && l != "AddressSanitizer:DEADLYSIGNAL" } || summary || preamble_lines.first
+      raw_headline = invariant_line ||
+                     priority_headline ||
+                     preamble_lines.find { |l| !l.start_with?("====") && l != "AddressSanitizer:DEADLYSIGNAL" } ||
+                     summary ||
+                     preamble_lines.first
       headline = normalize_sanitizer_headline(raw_headline, frames)
 
       {

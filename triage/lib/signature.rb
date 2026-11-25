@@ -108,7 +108,25 @@ module FuzzTriage
       return nil if line.start_with?("Reading ".b) && line.match?(/\AReading [0-9]+ bytes from /n)
       return nil if line.include?(DIFF_HANDLER) || line.include?(COMPILE_HANDLER)
       return nil if line.include?(SIGRETURN_1) || line.include?(SIGRETURN_2)
-      return nil if line.include?("rb_print_backtrace".b) && line.match?(/\(rb_print_backtrace(?:\+0x[0-9a-fA-F]+)?\)/n)
+      if line.include?("rb_".b) &&
+         line.match?(/\((?:rb_print_backtrace|rb_vm_bugreport|rb_bug_without_die_internal|rb_bug_context|rb_bug_for_fatal_signal|rb_bug)(?:\+0x[0-9a-fA-F]+)?\)/n)
+        return nil
+      end
+      return nil if line.start_with?("ruby ".b) && line.match?(/\Aruby [0-9]+\.[0-9]+.* \[[^\]]+\]\z/n)
+      if line.start_with?("-- ".b) &&
+         line.match?(/\A-- (?:Control frame|Ruby level backtrace|Threading|C level backtrace|Machine register|Other runtime) information -+\z/n)
+        return nil
+      end
+      return nil if line.start_with?("c:".b) && line.match?(/\Ac:[0-9]{4} p:/n)
+      if (line.start_with?("-e:".b) || line.start_with?("<compiled>:".b)) && line.match?(/\A(?:-e|<compiled>):[0-9]+:in /n)
+        return nil
+      end
+      if (line.start_with?("Total ractor count: ".b) || line.start_with?("Ruby thread count for this ractor: ".b)) &&
+         line.match?(/\A(?:Total ractor count|Ruby thread count for this ractor): [0-9]+\z/n)
+        return nil
+      end
+
+      line.sub!(/\A(-e|<compiled>):[0-9]+: \[BUG\] /n, '\1: [BUG] ') if line.include?(": [BUG] ".b)
 
       line.sub!(/\A(?:[^ :]+\/)?fuzz(?:\.[A-Za-z0-9_.-]+)*:/n, "fuzz_bin:")
       line.gsub!(/(?:\/?[^ ("']+\/)?(?:build|bin)\/fuzz(?:\.[A-Za-z0-9_.-]+)*/n, "fuzz_bin")

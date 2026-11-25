@@ -257,13 +257,17 @@ module FuzzClustering
   EXTERNAL_FRAME_BOILERPLATE = %w[
     rb_print_backtrace
     rb_vm_bugreport
+    rb_bug_without_die_internal
+    rb_bug_context
     rb_bug_for_fatal_signal
     rb_bug
+    rb_assert_failure
     sigsegv
     sigbus
     sigill
     sigfpe
     diff_fatal_signal_handler
+    compile_fatal_signal_handler
     __kernel_rt_sigreturn
     __pthread_kill_implementation
     raise

@@ -268,6 +268,15 @@ class TriageReproTest < Minitest::Test
       assert_equal "4.1", diff_io.dig("options", "ruby_version")
       assert_equal false, diff_io.dig("options", "stream_mode")
 
+      # Ensure INVARIANT[...] and [BUG] headlines win over preceding CRuby `-- raw disasm--------` dumps.
+      disasm_then_inv = (["-- raw disasm--------"] + Array.new(25) { |i| format("   %04d nop", i) } + [
+        "---------------------",
+        "INVARIANT[cruby_compile]: kind=internal_compile_error compiler=prism bug=stack_underflow [detail: opt=0x00 err=SyntaxError:<compiled>:1: argument stack underflow (-1)]"
+      ]).join("\n") + "\n"
+      parsed_disasm_inv = FuzzTriage.parse_crash_output(disasm_then_inv)
+      assert_includes parsed_disasm_inv.dig("symptom", "headline").to_s, "INVARIANT[cruby_compile]: kind=internal_compile_error"
+      assert_equal "stack_underflow", parsed_disasm_inv.dig("symptom", "invariant", "fields", "bug")
+
       topo_ijon_dir = File.join(workdir, "topo_ijon_profile")
       FileUtils.mkdir_p(topo_ijon_dir)
       topo_path = File.join(topo_ijon_dir, "topology.json")

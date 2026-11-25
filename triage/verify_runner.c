@@ -533,6 +533,7 @@ static const char *extract_headline(const char *output, size_t len, char *buf, s
 
     const char *prefixes[] = {
         "INVARIANT[",
+        "CRASH[",
         "SUMMARY: ",
         "ERROR: ",
     };
@@ -574,7 +575,7 @@ static const char *extract_headline(const char *output, size_t len, char *buf, s
             size_t cpy = llen < sizeof(tmp) - 1 ? llen : sizeof(tmp) - 1;
             memcpy(tmp, cur, cpy);
             tmp[cpy] = '\0';
-            if (strstr(tmp, "runtime error:") || strstr(tmp, "Assertion `") || strstr(tmp, "Assertion failed")) {
+            if (strstr(tmp, "runtime error:") || strstr(tmp, "[BUG] ") || strstr(tmp, "Assertion `") || strstr(tmp, "Assertion failed")) {
                 size_t out_cpy = cpy < buf_sz - 1 ? cpy : buf_sz - 1;
                 memcpy(buf, tmp, out_cpy);
                 buf[out_cpy] = '\0';

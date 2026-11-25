@@ -7,11 +7,17 @@ export LC_ALL=C
 sed -E \
   -e '/^Reading [0-9]+ bytes from /d' \
   -e '/^Execution successful\.$/d' \
-  -e '/\(rb_print_backtrace(\+0x[0-9a-fA-F]+)?\)/d' \
+  -e '/\((rb_print_backtrace|rb_vm_bugreport|rb_bug_without_die_internal|rb_bug_context|rb_bug_for_fatal_signal|rb_bug)(\+0x[0-9a-fA-F]+)?\)/d' \
+  -e '/^ruby [0-9]+\.[0-9]+.* \[[^]]+\]$/d' \
+  -e '/^-- (Control frame|Ruby level backtrace|Threading|C level backtrace|Machine register|Other runtime) information -+$/d' \
+  -e '/^c:[0-9]{4} p:/d' \
+  -e '/^(-e|<compiled>):[0-9]+:in /d' \
+  -e '/^(Total ractor count|Ruby thread count for this ractor): [0-9]+$/d' \
   -e '/diff_fatal_signal_handler/d' \
   -e '/compile_fatal_signal_handler/d' \
   -e '/__kernel_rt_sigreturn/d' \
   -e '/__restore_rt/d' \
+  -e 's/^(-e|<compiled>):[0-9]+: \[BUG\] /\1: [BUG] /' \
   -e 's#^([^ :]+/)?fuzz(\.[A-Za-z0-9_.-]+)*:#fuzz_bin:#g' \
   -e 's#(/?[^ ("'\'']+/)?(build|bin)/fuzz(\.[A-Za-z0-9_.-]+)*#fuzz_bin#g' \
   -e 's#(/?[^ ("'\'']+/)?build/[A-Za-z0-9_.-]+#fuzz_bin#g' \

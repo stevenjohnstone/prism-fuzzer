@@ -304,6 +304,43 @@ class TriageSignatureTest < Minitest::Test
       refute_equal sl1, sl4, "INVARIANT[node_sub_location] collided across distinct violation kinds"
       refute_equal sl1, n3, "INVARIANT[node_sub_location] collided with INVARIANT[node_location]"
 
+      # CRuby rb_bug / RUBY_ASSERT dump normalization: strips Ruby VM control-frame ASLR hex (E:0018d0),
+      # Ruby script line numbers before `: [BUG] `, and bugreport boilerplate so C frames determine the bucket.
+      rb_bug_a = <<~BUG
+        <compiled>:42: [BUG] Don't have a literal value for node type PM_X_STRING_NODE
+        ruby 4.1.0dev (2026-11-25T14:01:41Z HEAD 9d4d6c3c14) [aarch64-linux]
+
+        -- Control frame information -----------------------------------------------
+        c:0002 p:---- s:0006 e:000005 l:y b:0001 r:(nil) CFUNC  :compile_prism
+        c:0001 p:0000 s:0003 E:0018d0 l:y b:---- r:(nil) DUMMY  [FINISH]
+
+        -- Ruby level backtrace information ----------------------------------------
+        <compiled>:42:in 'compile_prism'
+
+        -- Threading information ---------------------------------------------------
+        Total ractor count: 1
+        Ruby thread count for this ractor: 1
+
+        -- C level backtrace information -------------------------------------------
+        /prism-fuzzer/tmp/fuzz-compile/bin/fuzz.ijon.compile(rb_print_backtrace+0x14) [0xaaaaafba5da8] /opt/ruby/vm_dump.c:1108
+        /prism-fuzzer/tmp/fuzz-compile/bin/fuzz.ijon.compile(rb_vm_bugreport) /opt/ruby/vm_dump.c:1474
+        /prism-fuzzer/tmp/fuzz-compile/bin/fuzz.ijon.compile(rb_bug_without_die_internal+0xdc) [0xaaaaaf94649c] /opt/ruby/error.c:1134
+        /prism-fuzzer/tmp/fuzz-compile/bin/fuzz.ijon.compile(rb_bug) /opt/ruby/error.c:1152
+        /prism-fuzzer/tmp/fuzz-compile/bin/fuzz.ijon.compile(pm_static_literal_value+0xfe4) [0xaaaaafe94ba0] /opt/ruby/prism_compile.c:925
+        /prism-fuzzer/tmp/fuzz-compile/bin/fuzz.ijon.compile(pm_compile_array_node+0x8f0) [0xaaaaafe86df8] /opt/ruby/prism_compile.c:7305
+      BUG
+      rb_bug_b = rb_bug_a
+        .gsub("<compiled>:42:", "<compiled>:1:")
+        .sub("E:0018d0", "E:000820")
+        .gsub("0xaaaa", "0xbbbb")
+      rb_bug_diff_caller = rb_bug_b.sub("pm_compile_array_node+0x8f0) [0xbbbbafe86df8] /opt/ruby/prism_compile.c:7305",
+                                        "pm_compile_scope_node+0x178c) [0xbbbbafe9594c] /opt/ruby/prism_compile.c:6656")
+
+      assert_equal run_signature(rb_bug_a, siglines: 15), run_signature(rb_bug_b, siglines: 15),
+                   "CRuby [BUG] signatures varied across E:%06x ASLR pointer or Ruby script line numbers"
+      refute_equal run_signature(rb_bug_a, siglines: 15), run_signature(rb_bug_diff_caller, siglines: 15),
+                   "CRuby [BUG] signature failed to reach C backtrace frames within SIGLINES=15"
+
       # Empty stderr / fully-stripped preamble produces a stable deterministic signature without failing.
       empty_sig = run_signature("", siglines: 10)
       stripped_sig = run_signature("Reading 12 bytes from /tmp/c\nExecution successful.\n", siglines: 10)
