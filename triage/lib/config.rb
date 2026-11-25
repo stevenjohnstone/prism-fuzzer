@@ -129,7 +129,8 @@ module FuzzTriage
                         !detect_leaks
                       elsif executable
                         FuzzVerifyProfile.diff_bucket?(executable: executable, triage_dir: triage_dir) ||
-                          FuzzVerifyProfile.cruby_compile_bucket?(executable: executable, triage_dir: triage_dir)
+                          FuzzVerifyProfile.cruby_compile_bucket?(executable: executable, triage_dir: triage_dir) ||
+                          FuzzVerifyProfile.cruby_pipeline_bucket?(executable: executable, triage_dir: triage_dir)
                       else
                         false
                       end
@@ -624,19 +625,34 @@ module FuzzTriage
 
     def verify_script(reason:, executable: "", crash_output: "", triage_dir: TESTCASES_DIR)
       profile = bucket_verify_profile(reason: reason, executable: executable, crash_output: crash_output, triage_dir: triage_dir)
-      <<~SH
-        #!/usr/bin/env bash
-        set -euo pipefail
+      if %w[cruby_compile cruby_pipeline].include?(profile)
+        <<~SH
+          #!/usr/bin/env bash
+          set -euo pipefail
 
-        #{repo_root_lookup_bash}
+          #{fuzz_root_lookup_bash}
 
-        exec "$FUZZ_ROOT/triage/verify_bucket.sh" \\
-          --repo-root "$REPO_ROOT" \\
-          --fuzz-root "$FUZZ_ROOT" \\
-          --bucket-dir "$SCRIPT_DIR" \\
-          --profile "#{profile}" \\
-          "$@"
-      SH
+          exec "$FUZZ_ROOT/triage/verify_bucket.sh" \\
+            --fuzz-root "$FUZZ_ROOT" \\
+            --bucket-dir "$SCRIPT_DIR" \\
+            --profile "#{profile}" \\
+            "$@"
+        SH
+      else
+        <<~SH
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          #{repo_root_lookup_bash}
+
+          exec "$FUZZ_ROOT/triage/verify_bucket.sh" \\
+            --repo-root "$REPO_ROOT" \\
+            --fuzz-root "$FUZZ_ROOT" \\
+            --bucket-dir "$SCRIPT_DIR" \\
+            --profile "#{profile}" \\
+            "$@"
+        SH
+      end
     end
 
     def ensure_bucket_verify_script(bucket_dir, reason:, executable:, crash_output: "", triage_dir: TESTCASES_DIR)

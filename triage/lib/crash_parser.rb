@@ -249,7 +249,7 @@ module FuzzTriage
 
     def differential_invariant_present?(raw_output)
       b = raw_output.to_s.b
-      b.include?("INVARIANT[".b) && b.match?(/^INVARIANT\[(?:diff_parse_y|diff_prism|cruby_compile|oracle_[A-Za-z0-9_]+)\]:/n)
+      b.include?("INVARIANT[".b) && b.match?(/^INVARIANT\[(?:diff_parse_y|diff_prism|cruby_compile|cruby_pipeline|oracle_[A-Za-z0-9_]+)\]:/n)
     end
 
     def with_testcase_timeout(seconds)
@@ -387,8 +387,8 @@ module FuzzTriage
                      executable
                    end
 
-      is_diff_or_oracle = executable.end_with?("diff", "prism_diff", "compile", "arm32", "arm32.repro", "ppc", "ppc.repro") ||
-                          (fspec && %w[prism_diff_ruby prism_diff_prism cruby_compile prism_cross_oracle].include?(fspec["shape"]))
+      is_diff_or_oracle = executable.end_with?("diff", "prism_diff", "compile", "pipeline", "arm32", "arm32.repro", "ppc", "ppc.repro") ||
+                          (fspec && %w[prism_diff_ruby prism_diff_prism cruby_compile cruby_pipeline_diff prism_cross_oracle].include?(fspec["shape"]))
 
       if reason == "hang"
         executable = replay_exe

@@ -494,6 +494,9 @@
         },
         {
           "$ref": "#/$defs/fuzzer_cruby_compile"
+        },
+        {
+          "$ref": "#/$defs/fuzzer_cruby_pipeline_diff"
         }
       ]
     },
@@ -774,6 +777,67 @@
         "shape": {
           "type": "string",
           "const": "cruby_compile"
+        },
+        "ruby": {
+          "$ref": "#/$defs/identifier"
+        },
+        "prism": {
+          "$ref": "#/$defs/identifier"
+        },
+        "sanitizers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/sanitizer"
+          },
+          "uniqueItems": true
+        },
+        "afl": {
+          "$ref": "#/$defs/afl_mode"
+        },
+        "ijon": {
+          "type": "boolean"
+        },
+        "document_ids": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verify_profile": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cflags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "defines": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "integer",
+              "boolean"
+            ]
+          }
+        }
+      }
+    },
+    "fuzzer_cruby_pipeline_diff": {
+      "type": "object",
+      "required": [
+        "shape",
+        "ruby"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "shape": {
+          "type": "string",
+          "const": "cruby_pipeline_diff"
         },
         "ruby": {
           "$ref": "#/$defs/identifier"

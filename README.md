@@ -70,7 +70,7 @@ Built on **AFL++ v5.03c** and **LLVM 20**, `prism-fuzzer` combines modern greybo
 - **Live grammar synthesis with [`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz) ([`runtime/grammar.rb`](runtime/grammar.rb))**: Derives Ruby programs directly from CRuby's `parse.y` LALR(1) grammar, evolves them against Prism's C extension (`fuzz-ruby-ext`), and feeds expanded AST, regexp, encoding, comment, and heredoc seeds into AFL++ via foreign sync (`-F`).
 - **Multi-oracle differential fuzzing**:
   - **Prism vs. CRuby `parse.y` oracle (`fuzz.diff`)**: Compares Prism against CRuby's `parse.y` oracle across syntax validity, AST structure, scope locals, and bytecode/eval behavior.
-  - **CRuby dual-compiler fuzzing (`fuzz.compile`, [`campaigns/compile.rb`](campaigns/compile.rb))**: Gates inputs on Prism + `parse.y` parser agreement and compiles valid Ruby through both `prism_compile.c` (`parser: :prism`) and `compile.c` (`parser: :parse_y`) with PCGUARD instrumentation, trapping UBSan, and ABI-safe `RUBY_ASSERT_ALWAYS`.
+  - **CRuby dual-compiler & full-pipeline differential fuzzing (`fuzz.compile` in [`campaigns/compile.rb`](campaigns/compile.rb), `fuzz.pipeline` in [`campaigns/pipeline.rb`](campaigns/pipeline.rb))**: `fuzz.compile` gates inputs on Prism + `parse.y` parser agreement to focus purely on `compile.o` + `iseq.o` crashes and internal bytecode-verifier `COMPILE_ERROR`s; `fuzz.pipeline` (`shape: :cruby_pipeline_diff`) instruments `prism.o` + `parse.o` + `compile.o` + `iseq.o` and runs `(prism_parse && prism_compile)` vs. `(parsey_parse && parsey_compile)` independently—catching `syntax_mismatch`, `compile_mismatch` (while ignoring phase-split rejections), `internal_compile_error`, and faults across both parsers and both compilers.
   - **Prism A vs. Prism B (`fuzz.prism_diff`)**: Links two arbitrary Prism commits into one binary with `objcopy --redefine-syms` symbol isolation and per-side PCGUARD domain coverage IDs (`AFL_LLVM_DOCUMENT_IDS`).
   - **32-bit cross-arch endianness & alignment (`fuzz.arm32`, `fuzz.ppc`)**: Executes 32-bit ARM and PowerPC harnesses under QEMU user-mode emulation, comparing 32-bit vs. 64-bit serialized AST parity via custom mutator `mutator_oracle64.so` alongside [`0001-arena-32bit-alignment.patch`](patches/prism/0001-arena-32bit-alignment.patch).
   - **Deep parser invariants & SIMD checks**: Exercises `fuzz.slow` (`pm_serialize`, `pm_serialize_parse_stream`, `pm_errors_format`), post-parse AST/sub-location/span/stream-vs-buffer invariants (`fuzz_invariants.h`), and SIMD-vs-SWAR scanner differential fuzzing (`test/test_accel.sh`).
@@ -222,9 +222,11 @@ Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`
 │   ├── publish.rb                  packages report, coverage HTML, and triage artifacts into the gh-pages worktree (`reports/`)
 │   └── topology.rb                 CLI for validating, syncing, building, and planning topologies
 ├── campaigns
+│   ├── compile.rb                  CRuby dual-compiler crash & bytecode-verifier campaign (`tmp/fuzz-compile`)
 │   ├── default.rb                  default executable multi-fuzzer campaign script
 │   ├── ijon.rb                     IJON-centric fleet campaign (sanitized, slow, MSan, and parse.y IJON hub)
-│   └── ijon-small.rb               256-byte IJON-centric fleet variant (`tmp/fuzz-ijon-small`, `-G 260`)
+│   ├── ijon-small.rb               256-byte IJON-centric fleet variant (`tmp/fuzz-ijon-small`, `-G 260`)
+│   └── pipeline.rb                 4-stage full-pipeline Prism vs. parse.y + dual-compiler campaign (`tmp/fuzz-pipeline`)
 ├── dict
 │   └── prism.dict                  AFL++ / libFuzzer Ruby syntax & keyword dictionary
 ├── docker

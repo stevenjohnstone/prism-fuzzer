@@ -170,7 +170,7 @@ define RUN_TEST_STAGE
 	$(Q) rm -f $@ && $(TEST_STAGE_ENV) $(1) && touch $@
 endef
 
-TARGETS_COMMON_DEPS := $(TEST_RUNNER_DEPS) bin/topology.rb bin/campaign.rb bin/publish.rb lib/prism_fuzzer.rb lib/ruby_fuzz.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/common.rb runtime/fuzz_header.rb runtime/campaign_dsl.rb runtime/progress.rb runtime/json_schema.rb runtime/provenance.rb runtime/run.sh runtime/kill.sh runtime/status.rb topology.schema.json campaigns/default.rb $(wildcard patches/prism/*.patch) $(REPORT_LIB_DEPS) report/coverage.sh triage/triage.rb triage/cluster.rb triage/inspect.rb triage/explain.rb triage/target_worktree.sh harnesses/prism/coverage.c harnesses/prism/build_diff.sh harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb harnesses/prism/gen_serialize_walk.rb
+TARGETS_COMMON_DEPS := $(TEST_RUNNER_DEPS) bin/topology.rb bin/campaign.rb bin/publish.rb lib/prism_fuzzer.rb lib/ruby_fuzz.rb $(RUNTIME_TOPOLOGY_DEPS) $(RUNTIME_CAMPAIGN_DEPS) runtime/common.rb runtime/fuzz_header.rb runtime/campaign_dsl.rb runtime/progress.rb runtime/json_schema.rb runtime/provenance.rb runtime/run.sh runtime/kill.sh runtime/status.rb topology.schema.json campaigns/default.rb campaigns/compile.rb campaigns/pipeline.rb $(wildcard patches/prism/*.patch) $(REPORT_LIB_DEPS) report/coverage.sh triage/triage.rb triage/cluster.rb triage/inspect.rb triage/explain.rb triage/target_worktree.sh harnesses/prism/coverage.c harnesses/prism/build_diff.sh harnesses/prism/build_cruby_compile.sh harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb harnesses/prism/gen_serialize_walk.rb
 
 $(TEST_STAMPS_DIR)/targets_sync_and_patches.stamp: test/targets/sync_and_patches_test.rb $(TARGETS_COMMON_DEPS)
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/targets/sync_and_patches_test.rb)
@@ -237,7 +237,7 @@ $(TEST_STAMPS_DIR)/triage_bisect.stamp: test/triage/bisect_test.rb $(TEST_RUNNER
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/bisect_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_diff_parse_y.stamp: test/triage/diff_parse_y_test.rb $(TEST_RUNNER_DEPS) $(FUZZ_DIFF_DEPS) triage/verify_runner.c harnesses/prism/include/fuzz_options.h $(TRIAGE_COMMON_DEPS) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) $(FUZZ_DOCKER_STAMP)
-	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) DIFF_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/diff" DIFF_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/diff-oracle" COMPILE_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/compile" COMPILE_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/compile-oracle" ruby test/run.rb test/triage/diff_parse_y_test.rb)
+	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) DIFF_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/diff" DIFF_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/diff-oracle" COMPILE_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/compile" COMPILE_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/compile-oracle" PIPELINE_VERIFY_BUILD_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/verify/pipeline" PIPELINE_TC_ORACLE_DIR="$(CURDIR)/$(TEST_BUILD_DIR)/pipeline-oracle" ruby test/run.rb test/triage/diff_parse_y_test.rb)
 
 $(TEST_STAMPS_DIR)/triage_provenance.stamp: test/triage/provenance_test.rb $(TEST_RUNNER_DEPS) $(FUZZ_AFL_STAMP) $(TRIAGE_COMMON_DEPS) $(REPORT_LIB_DEPS) $(RUNTIME_CAMPAIGN_DEPS) lib/prism_fuzzer.rb runtime/campaign_dsl.rb runtime/progress.rb campaigns/default.rb Makefile test/tests.mk
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/triage/provenance_test.rb)

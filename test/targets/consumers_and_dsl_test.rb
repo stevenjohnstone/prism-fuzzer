@@ -921,23 +921,50 @@ class CampaignDslAndSchemaTest < Minitest::Test
     assert_includes dry_out, "AFL_LLVM_IJON=1 build_cruby_compile.sh --mode fuzz"
     assert_includes dry_out, "--cflag -DPRISM_FUZZ_IJON"
 
-    # Minimal ruby-only cruby_compile campaign (without a :prism source) must also validate cleanly.
+    # Minimal ruby-only cruby_compile & cruby_pipeline_diff campaign (without a :prism source) must also validate cleanly.
     with_tmpdir("dsl-ruby-only-") do |dir|
       camp_rb = File.join(dir, "ruby_only.rb")
       File.write(camp_rb, <<~RB)
         PrismFuzzer.campaign "ruby-only-compile" do
           workspace "tmp/test-ruby-only"
           ruby :ruby, dir: "/opt/ruby"
-          fuzzer "fuzz.compile", shape: :cruby_compile, ruby: :ruby
+          fuzzer "fuzz.compile",  shape: :cruby_compile,       ruby: :ruby
+          fuzzer "fuzz.pipeline", shape: :cruby_pipeline_diff, ruby: :ruby
           sync_group :afl, dir: "afl", primary: true
-          worker :main, fuzzer: "fuzz.compile", sync_group: :afl, afl_role: :main
+          worker :main, fuzzer: "fuzz.compile",  sync_group: :afl, afl_role: :main
+          worker :pipe, fuzzer: "fuzz.pipeline", sync_group: :afl, afl_role: :secondary
         end
       RB
       ruby_only_ir = PrismFuzzer::CampaignDSL.compile_file(camp_rb, fuzz_root: root_dir)
       PrismFuzzer::Topology.validate_ir!(ruby_only_ir, fuzz_root: root_dir)
       ruby_only_plan = PrismFuzzer::Topology.compile_plan(ruby_only_ir, fuzz_root: root_dir)
       assert_empty ruby_only_plan.dig("fuzzers", "fuzz.compile", "coverage_sources")
+      assert_empty ruby_only_plan.dig("fuzzers", "fuzz.pipeline", "coverage_sources")
+      assert_equal "cruby_pipeline", ruby_only_plan.dig("fuzzers", "fuzz.pipeline", "verify_profile")
     end
+
+    # Validate full-pipeline campaign (campaigns/pipeline.rb)
+    pval_out, = assert_cmd(repo_path("campaigns/pipeline.rb"), "validate", "--json")
+    pv = JSON.parse(pval_out)
+    assert_equal true, pv["valid"]
+    assert_equal 2, pv["schema_version"]
+    assert_equal 10, pv.fetch("workers").size
+
+    pcomp_out, = assert_cmd(repo_path("campaigns/pipeline.rb"), "compile")
+    pir = JSON.parse(pcomp_out)
+    PrismFuzzer::JsonSchema.validate!(schema, pir)
+    assert_equal "cruby_pipeline_diff", pir.dig("fuzzers", "fuzz.pipeline", "shape")
+    assert_equal "cruby_pipeline_diff", pir.dig("fuzzers", "fuzz.ijon.pipeline", "shape")
+    assert_equal "fuzz.pipeline", pir.dig("coverage", "diff_fuzzer")
+
+    pplan = PrismFuzzer::Topology.compile_plan(pir, fuzz_root: root_dir)
+    assert_equal "cruby_pipeline", pplan.dig("fuzzers", "fuzz.pipeline", "verify_profile")
+    assert_equal ["prism_a"], pplan.dig("fuzzers", "fuzz.pipeline", "coverage_sources")
+
+    pdry_out, = assert_cmd(repo_path("campaigns/pipeline.rb"), "build", "--dry-run", env: dry_env)
+    assert_includes pdry_out, "build_cruby_compile.sh --mode fuzz --pipeline-diff --oracle-dir"
+    assert_includes pdry_out, "AFL_LLVM_IJON=1 build_cruby_compile.sh --mode fuzz --pipeline-diff"
+    assert_includes pdry_out, "--cflag -DPRISM_FUZZ_IJON"
   end
 
   def test_lifecycle_schema_timer_and_post_steps

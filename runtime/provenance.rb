@@ -24,6 +24,7 @@ module FuzzProvenance
     fuzz.sand
     fuzz.diff
     fuzz.compile
+    fuzz.pipeline
     fuzz.prism_diff
     fuzz.arm32
     fuzz.arm32.repro
@@ -31,7 +32,7 @@ module FuzzProvenance
     fuzz.ppc.repro
   ].freeze
 
-  AUX_FILES = %w[fuzz.ids fuzz.diff.ids fuzz.compile.ids fuzz.prism_diff.ids mutator_oracle64.so fuzz.explain fuzz.explain.b].freeze
+  AUX_FILES = %w[fuzz.ids fuzz.diff.ids fuzz.compile.ids fuzz.pipeline.ids fuzz.prism_diff.ids mutator_oracle64.so fuzz.explain fuzz.explain.b].freeze
   REPRO_DIR_ENTRIES = %w[fuzz-ruby-ext prism_lib].freeze
   SNAPSHOT_PATHS = %w[
     bin

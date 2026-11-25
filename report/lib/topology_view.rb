@@ -27,6 +27,8 @@ module PrismFuzzerReport
         badges << "diff(#{fspec['prism']} vs #{fspec['ruby']})"
       when "cruby_compile"
         badges << "compile(#{fspec['ruby']})"
+      when "cruby_pipeline_diff"
+        badges << "pipeline(#{fspec['ruby']})"
       when "prism_diff_prism"
         badges << "diff(#{fspec['prism_a']} vs #{fspec['prism_b']})"
       when "prism_cross_oracle"

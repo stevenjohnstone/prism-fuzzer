@@ -213,7 +213,7 @@ module FuzzSankey
     if inv.is_a?(Hash) && !inv["namespace"].to_s.empty?
       ns = inv["namespace"].to_s
       kind = inv.dig("fields", "kind").to_s
-      return (ns == "diff_parse_y" && !kind.empty?) ? "#{ns}: #{kind}" : ns
+      return (%w[diff_parse_y cruby_pipeline cruby_compile].include?(ns) && !kind.empty?) ? "#{ns}: #{kind}" : ns
     end
 
     reason = bucket_meta["reason"].to_s

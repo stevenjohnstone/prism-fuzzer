@@ -55,7 +55,9 @@ module FuzzTriage
     def input_and_options_metadata(minimized_input, reason:, crash_output:, raw_size_bytes: nil, raw_sha256: nil, minimized_matches_signature: nil, executable: "")
       raw_min = File.binread(minimized_input)
       h = decode_fuzz_header(raw_min)
-      is_diff = diff_bucket?(executable: executable, crash_output: crash_output)
+      is_diff = diff_bucket?(executable: executable, crash_output: crash_output) ||
+                FuzzVerifyProfile.cruby_compile_bucket?(executable: executable, crash_output: crash_output) ||
+                FuzzVerifyProfile.cruby_pipeline_bucket?(executable: executable, crash_output: crash_output)
       loupe_url = is_diff ? build_diff_loupe_url(h[:source]) : build_prism_loupe_url(h[:padded_raw], sanitize: sanitizer_loupe_crash?(reason, crash_output))
       min_sha256 = Digest::SHA256.hexdigest(raw_min)
       payload_sha256 = Digest::SHA256.hexdigest(h[:source])
@@ -233,7 +235,9 @@ module FuzzTriage
         minimized_matches_signature: minimized_matches_signature,
         executable: executable
       )
-      is_diff = diff_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir)
+      is_diff = diff_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir) ||
+                FuzzVerifyProfile.cruby_compile_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir) ||
+                FuzzVerifyProfile.cruby_pipeline_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir)
       versions_meta = resolve_versions_metadata(
         executable: executable,
         worker_executable: worker_executable,
@@ -647,6 +651,7 @@ module FuzzTriage
         cov_bin_cand, = resolve_coverage_target(triage_dir: triage_dir)
         candidates = []
         candidates << File.join(bdir, "fuzz.prism_diff") if verify_text.include?("diff_prism")
+        candidates << File.join(bdir, "fuzz.pipeline") if verify_text.include?("cruby_pipeline")
         candidates << File.join(bdir, "fuzz.compile") if verify_text.include?("cruby_compile")
         candidates << File.join(bdir, "fuzz.diff") if verify_text.include?("diff_parse_y")
         candidates << File.join(bdir, "fuzz.arm32.repro") if verify_text.include?("arm32_oracle") || build_text.include?("arm-linux-gnueabihf")
@@ -740,7 +745,9 @@ module FuzzTriage
           dirty_dirs.add(bucket_dir)
         end
         if !meta["versions"].is_a?(Hash) || meta["versions"].empty?
-          is_diff_meta = diff_bucket?(executable: meta["reproduced_by"].to_s, crash_output: meta.dig("symptom", "headline").to_s, triage_dir: triage_dir)
+          is_diff_meta = diff_bucket?(executable: meta["reproduced_by"].to_s, crash_output: meta.dig("symptom", "headline").to_s, triage_dir: triage_dir) ||
+                         FuzzVerifyProfile.cruby_compile_bucket?(executable: meta["reproduced_by"].to_s, crash_output: meta.dig("symptom", "headline").to_s, triage_dir: triage_dir) ||
+                         FuzzVerifyProfile.cruby_pipeline_bucket?(executable: meta["reproduced_by"].to_s, crash_output: meta.dig("symptom", "headline").to_s, triage_dir: triage_dir)
           repro_name = File.basename(meta["reproduced_by"].to_s)
           snap_bin_cand = triage_ws_roots(triage_dir).map { |r| File.join(r, "bin", repro_name) }.find { |p| !repro_name.empty? && File.file?(p) }
           repro_exec = snap_bin_cand || meta["reproduced_by"].to_s

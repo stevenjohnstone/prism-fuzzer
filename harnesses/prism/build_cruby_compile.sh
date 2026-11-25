@@ -9,12 +9,14 @@ OUTPUT=""
 AFL_PATH_ARG=""
 CC_BIN="${CC:-clang}"
 MAX_INPUT_SIZE="${FUZZ_MAX_INPUT_SIZE:-1024}"
+PIPELINE_DIFF=0
 EXTRA_CFLAGS=()
 
 usage() {
   cat <<'EOF'
 Usage: build_cruby_compile.sh --mode {fuzz|verify} --output FILE [OPTIONS]
   --mode MODE             fuzz (AFL PCGUARD) or verify (verify_runner)
+  --pipeline-diff         Instrument parse.o + prism.o + compile.o + iseq.o and enable 4-stage pipeline diff
   --fuzz-root DIR         Fuzz harness repository root
   --ruby-dir DIR          Built CRuby static source tree (default: /opt/ruby)
   --oracle-dir DIR        Cache directory for libcruby_compile.a and objects
@@ -30,6 +32,8 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --mode)
       MODE="${2:-}"; shift 2 ;;
+    --pipeline-diff)
+      PIPELINE_DIFF=1; shift ;;
     --fuzz-root)
       FUZZ_ROOT="${2:-}"; shift 2 ;;
     --ruby-dir)
@@ -68,7 +72,11 @@ if [ -z "$FUZZ_ROOT" ]; then
 fi
 
 if [ -z "$ORACLE_DIR" ]; then
-  ORACLE_DIR="$(dirname "$OUTPUT")/compile-oracle"
+  if [ "$PIPELINE_DIFF" -eq 1 ]; then
+    ORACLE_DIR="$(dirname "$OUTPUT")/pipeline-oracle"
+  else
+    ORACLE_DIR="$(dirname "$OUTPUT")/compile-oracle"
+  fi
 fi
 
 if [ ! -f "$RUBY_DIR/libruby-static.a" ] || [ ! -f "$RUBY_DIR/compile.c" ] || [ ! -f "$RUBY_DIR/iseq.c" ]; then
@@ -76,8 +84,18 @@ if [ ! -f "$RUBY_DIR/libruby-static.a" ] || [ ! -f "$RUBY_DIR/compile.c" ] || [ 
   exit 2
 fi
 
-for req_member in compile.o iseq.o; do
-  if ! ar t "$RUBY_DIR/libruby-static.a" | grep -qx "$req_member"; then
+if [ "$PIPELINE_DIFF" -eq 1 ] && { [ ! -f "$RUBY_DIR/parse.c" ] || [ ! -f "$RUBY_DIR/prism/prism.c" ]; }; then
+  echo "build_cruby_compile.sh: CRuby static tree under '$RUBY_DIR' missing parse.c or prism/prism.c for --pipeline-diff" >&2
+  exit 2
+fi
+
+req_members=(compile.o iseq.o)
+if [ "$PIPELINE_DIFF" -eq 1 ]; then
+  req_members+=(parse.o prism.o)
+fi
+archive_members="$(ar t "$RUBY_DIR/libruby-static.a")"
+for req_member in "${req_members[@]}"; do
+  if ! printf '%s\n' "$archive_members" | grep -qx "$req_member"; then
     echo "build_cruby_compile.sh: $req_member member not found in '$RUBY_DIR/libruby-static.a'" >&2
     exit 2
   fi
@@ -151,6 +169,34 @@ mapfile -t COMPILE_CPP_FLAGS < <(ruby -rshellwords -e '
   out.uniq.each { |t| puts t }
 ' "$RUBY_DIR")
 RUBY_COMPILE_FLAGS="${COMPILE_CPP_FLAGS[*]}"
+
+PRISM_CPP_FLAGS=()
+RUBY_PRISM_FLAGS=""
+if [ "$PIPELINE_DIFF" -eq 1 ]; then
+  mapfile -t PRISM_CPP_FLAGS < <(ruby -rshellwords -e '
+    ruby_dir = ARGV[0]
+    make_out = IO.popen(["make", "-C", ruby_dir, "-n", "-W", "prism/prism.c", "prism/prism.o"], err: [:child, :out], &:read)
+    compile_line = make_out.lines.reverse.find { |l| l.include?(" -c ") && l.include?("prism.c") }
+    out = []
+    if compile_line
+      Shellwords.split(compile_line).each do |tok|
+        if tok.start_with?("-I")
+          path = tok[2..]
+          full = path.start_with?("/") ? path : File.expand_path(path, ruby_dir)
+          out << "-I#{full}"
+        elsif tok.start_with?("-D", "-U")
+          out << tok
+        end
+      end
+    end
+    [File.join(ruby_dir, "prism", "include"), File.join(ruby_dir, "prism")].each do |inc|
+      out << "-I#{inc}" if File.directory?(inc) && !out.include?("-I#{inc}")
+    end
+    out << "-DPRISM_XALLOCATOR" unless out.any? { |t| t.start_with?("-DPRISM_XALLOCATOR") }
+    out.uniq.each { |t| puts t }
+  ' "$RUBY_DIR")
+  RUBY_PRISM_FLAGS="${PRISM_CPP_FLAGS[*]}"
+fi
 
 RUBY_EMBED_INC=(
   "-I$RUBY_DIR/.ext/include/$RUBY_ARCH"
@@ -328,9 +374,23 @@ if [ "${AFL_USE_ASAN:-0}" = "1" ] && [ "${#ASAN_UAR_FLAGS[@]}" -gt 0 ]; then
 fi
 
 ORACLE_STAMP_FILE="$ORACLE_DIR/.oracle.stamp"
-ORACLE_ARCHIVE="$ORACLE_DIR/libcruby_compile.a"
+ORACLE_PREFIX="libcruby_compile"
+if [ "$PIPELINE_DIFF" -eq 1 ]; then
+  ORACLE_PREFIX="libcruby_pipeline"
+fi
+ORACLE_ARCHIVE="$ORACLE_DIR/$ORACLE_PREFIX.a"
 
 prism_compile_dep="$RUBY_DIR/prism_compile.c"
+oracle_fp_deps=(
+  "$RUBY_DIR/libruby-static.a"
+  "$RUBY_DIR/compile.c"
+  "$prism_compile_dep"
+  "$RUBY_DIR/iseq.c"
+  "$ORACLE_DEP"
+)
+if [ "$PIPELINE_DIFF" -eq 1 ]; then
+  oracle_fp_deps+=("$RUBY_DIR/parse.c" "$RUBY_DIR/prism/prism.c")
+fi
 oracle_fp="$(ruby -rdigest -e '
   files = ARGV[2..]
   d = Digest::SHA256.new
@@ -344,17 +404,17 @@ oracle_fp="$(ruby -rdigest -e '
     end
   end
   puts d.hexdigest
-' "$ORACLE_MODE" "$ENABLE_RUBY_ASSERT|$RUBY_COMPILE_FLAGS|${COMPILE_HARDEN_FLAGS[*]+"${COMPILE_HARDEN_FLAGS[*]}"}" \
-  "$RUBY_DIR/libruby-static.a" "$RUBY_DIR/compile.c" "$prism_compile_dep" "$RUBY_DIR/iseq.c" "$ORACLE_DEP")"
+' "$ORACLE_MODE" "$PIPELINE_DIFF|$ENABLE_RUBY_ASSERT|$RUBY_COMPILE_FLAGS|$RUBY_PRISM_FLAGS|${COMPILE_HARDEN_FLAGS[*]+"${COMPILE_HARDEN_FLAGS[*]}"}" \
+  "${oracle_fp_deps[@]}")"
 
-KEYED_ORACLE_ARCHIVE="$ORACLE_DIR/libcruby_compile.${oracle_fp:0:16}.a"
+KEYED_ORACLE_ARCHIVE="$ORACLE_DIR/$ORACLE_PREFIX.${oracle_fp:0:16}.a"
 
 setup_cc_runner() {
   CC_RUNNER=("${TARGET_CC[@]}")
   if [ "${FUZZ_CCACHE:-1}" != "0" ] && command -v ccache >/dev/null 2>&1; then
     local cdir=""
     if cdir="$(resolve_writable_ccache_dir)"; then
-      local ns="cruby_compile|mode=$MODE|img=${FUZZ_IMAGE_ID:-}|dep=$ORACLE_DEP|ijon=${AFL_LLVM_IJON:-0}|asan=${AFL_USE_ASAN:-0}|ubsan=${AFL_USE_UBSAN:-0}"
+      local ns="cruby_compile|pipe=$PIPELINE_DIFF|mode=$MODE|img=${FUZZ_IMAGE_ID:-}|dep=$ORACLE_DEP|ijon=${AFL_LLVM_IJON:-0}|asan=${AFL_USE_ASAN:-0}|ubsan=${AFL_USE_UBSAN:-0}"
       if [ "${TARGET_CC[0]}" = "env" ]; then
         CC_RUNNER=("env" "CCACHE_DIR=$cdir" "CCACHE_NOHASHDIR=1" "CCACHE_NAMESPACE=$ns" "${TARGET_CC[@]:1:2}" "ccache" "${TARGET_CC[@]:3}")
       else
@@ -368,13 +428,15 @@ ensure_oracle_archive() {
   if [ ! -f "$KEYED_ORACLE_ARCHIVE" ]; then
     local tmp_compile_o="$COMPILE_TMP_WORK/compile.o"
     local tmp_iseq_o="$COMPILE_TMP_WORK/iseq.o"
+    local tmp_parse_o="$COMPILE_TMP_WORK/parse.o"
+    local tmp_prism_o="$COMPILE_TMP_WORK/prism.o"
     local tmp_assert_h="$COMPILE_TMP_WORK/force_ruby_assert.h"
-    local tmp_archive="$COMPILE_TMP_WORK/libcruby_compile.a"
-    rm -f "$tmp_compile_o" "$tmp_iseq_o" "$tmp_assert_h" "$tmp_archive"
+    local tmp_archive="$COMPILE_TMP_WORK/$ORACLE_PREFIX.a"
+    rm -f "$tmp_compile_o" "$tmp_iseq_o" "$tmp_parse_o" "$tmp_prism_o" "$tmp_assert_h" "$tmp_archive"
 
     local assert_flags=()
     if [ "$ENABLE_RUBY_ASSERT" -eq 1 ]; then
-      # Enable RUBY_ASSERT across compile.c, prism_compile.c, and iseq.c without
+      # Enable RUBY_ASSERT across parse.c, compile.c, prism_compile.c, and iseq.c without
       # defining RUBY_DEBUG=1 or VM_CHECK_MODE=1 (which alter VM/Ractor struct layouts).
       cat <<'EOF' > "$tmp_assert_h"
 #include "ruby/internal/config.h"
@@ -386,13 +448,16 @@ EOF
     fi
 
     setup_cc_runner
+    local pids=()
+    local archive_objs=(compile.o iseq.o)
+
     "${CC_RUNNER[@]}" \
       -O2 -ggdb3 -gdwarf-4 -fno-strict-overflow -fvisibility=hidden -fPIE -w \
       "${COMPILE_CPP_FLAGS[@]}" \
       ${assert_flags[@]+"${assert_flags[@]}"} \
       ${COMPILE_HARDEN_FLAGS[@]+"${COMPILE_HARDEN_FLAGS[@]}"} \
       -c "$RUBY_DIR/compile.c" -o "$tmp_compile_o" &
-    local pid_compile=$!
+    pids+=("$!")
 
     "${CC_RUNNER[@]}" \
       -O2 -ggdb3 -gdwarf-4 -fno-strict-overflow -fvisibility=hidden -fPIE -w \
@@ -400,13 +465,40 @@ EOF
       ${assert_flags[@]+"${assert_flags[@]}"} \
       ${COMPILE_HARDEN_FLAGS[@]+"${COMPILE_HARDEN_FLAGS[@]}"} \
       -c "$RUBY_DIR/iseq.c" -o "$tmp_iseq_o" &
-    local pid_iseq=$!
+    pids+=("$!")
 
-    wait "$pid_compile"
-    wait "$pid_iseq"
+    if [ "$PIPELINE_DIFF" -eq 1 ]; then
+      local prism_assert_flags=()
+      if [ "$ENABLE_RUBY_ASSERT" -eq 1 ]; then
+        prism_assert_flags=(-UNDEBUG)
+      fi
+
+      "${CC_RUNNER[@]}" \
+        -O2 -ggdb3 -gdwarf-4 -fno-strict-overflow -fvisibility=hidden -fPIE -w \
+        "${COMPILE_CPP_FLAGS[@]}" \
+        ${assert_flags[@]+"${assert_flags[@]}"} \
+        ${COMPILE_HARDEN_FLAGS[@]+"${COMPILE_HARDEN_FLAGS[@]}"} \
+        -c "$RUBY_DIR/parse.c" -o "$tmp_parse_o" &
+      pids+=("$!")
+
+      "${CC_RUNNER[@]}" \
+        -O2 -ggdb3 -gdwarf-4 -fno-strict-overflow -fvisibility=hidden -fPIE -w \
+        "${PRISM_CPP_FLAGS[@]}" \
+        ${prism_assert_flags[@]+"${prism_assert_flags[@]}"} \
+        ${COMPILE_HARDEN_FLAGS[@]+"${COMPILE_HARDEN_FLAGS[@]}"} \
+        -c "$RUBY_DIR/prism/prism.c" -o "$tmp_prism_o" &
+      pids+=("$!")
+
+      archive_objs=(parse.o prism.o compile.o iseq.o)
+    fi
+
+    local pid
+    for pid in "${pids[@]}"; do
+      wait "$pid"
+    done
 
     cp "$RUBY_DIR/libruby-static.a" "$tmp_archive"
-    (cd "$COMPILE_TMP_WORK" && ar r "$tmp_archive" compile.o iseq.o && rm -f compile.o iseq.o)
+    (cd "$COMPILE_TMP_WORK" && ar r "$tmp_archive" "${archive_objs[@]}" && rm -f "${archive_objs[@]}")
     ranlib "$tmp_archive"
 
     local staged="$KEYED_ORACLE_ARCHIVE.tmp.$$"
@@ -471,6 +563,9 @@ if [ "$MODE" = "fuzz" ]; then
     "${RUBY_EMBED_INC[@]}"
   )
   extra_cflags_defines_macro FUZZ_MAX_INPUT_SIZE || HARNESS_CFLAGS+=("-DFUZZ_MAX_INPUT_SIZE=$MAX_INPUT_SIZE")
+  if [ "$PIPELINE_DIFF" -eq 1 ]; then
+    HARNESS_CFLAGS+=(-DFUZZ_CRUBY_PIPELINE_DIFF)
+  fi
   HARNESS_CFLAGS+=(${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"})
   "${CC_RUNNER[@]}" "${HARNESS_CFLAGS[@]}" -c "$HARNESS_SRC" -o "$HARNESS_OBJ"
 
@@ -516,6 +611,9 @@ elif [ "$MODE" = "verify" ]; then
     "${RUBY_EMBED_INC[@]}"
   )
   extra_cflags_defines_macro FUZZ_MAX_INPUT_SIZE || VERIFY_CFLAGS+=("-DFUZZ_MAX_INPUT_SIZE=$MAX_INPUT_SIZE")
+  if [ "$PIPELINE_DIFF" -eq 1 ]; then
+    VERIFY_CFLAGS+=(-DFUZZ_CRUBY_PIPELINE_DIFF)
+  fi
   VERIFY_CFLAGS+=(${EXTRA_CFLAGS[@]+"${EXTRA_CFLAGS[@]}"})
   "${CC_RUNNER[@]}" "${VERIFY_CFLAGS[@]}" -c "$HARNESS_SRC" -o "$HARNESS_OBJ"
 

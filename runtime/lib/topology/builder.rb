@@ -603,7 +603,7 @@ module PrismFuzzer
       record_stamp(stamp_file, bkey, out_path)
     end
 
-    def build_cruby_compile!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, dry_run: false, pool: nil, sub_jobs: nil)
+    def build_cruby_compile!(id, fspec, plan:, fuzz_root:, build_dir:, afl_path:, afl_stamp:, pipeline_diff: false, dry_run: false, pool: nil, sub_jobs: nil)
       ruby_src = plan.fetch("sources").fetch(fspec.fetch("ruby"))
       out_path = File.expand_path(fspec.fetch("binary"), fuzz_root)
       stamps_dir = File.join(build_dir, ".stamps")
@@ -612,6 +612,9 @@ module PrismFuzzer
       ijon_enabled = !!fspec["ijon"]
       sans = Array(fspec["sanitizers"]).map(&:to_s)
       override_flags, user_flags, = fuzzer_override_flags(fspec)
+      oracle_subdir = pipeline_diff ? "pipeline-oracle" : "compile-oracle"
+      pipe_arg = pipeline_diff ? " --pipeline-diff" : ""
+      shape_name = pipeline_diff ? "cruby_pipeline_diff" : "cruby_compile"
 
       extra_cflags = []
       extra_cflags << "-DPRISM_FUZZ_IJON" if ijon_enabled
@@ -632,7 +635,7 @@ module PrismFuzzer
         env_str = env_tokens.empty? ? "" : "#{format_dry_run_tokens(env_tokens)} "
         cflag_tokens = extra_cflags.flat_map { |f| ["--cflag", f] }
         cflag_str = cflag_tokens.empty? ? "" : " #{format_dry_run_tokens(cflag_tokens)}"
-        puts "#{env_str}build_cruby_compile.sh --mode fuzz --oracle-dir #{Shellwords.escape(File.join(build_dir, 'compile-oracle'))}#{cflag_str} --output #{Shellwords.escape(fspec.fetch('binary'))}"
+        puts "#{env_str}build_cruby_compile.sh --mode fuzz#{pipe_arg} --oracle-dir #{Shellwords.escape(File.join(build_dir, oracle_subdir))}#{cflag_str} --output #{Shellwords.escape(fspec.fetch('binary'))}"
         return
       end
 
@@ -649,7 +652,7 @@ module PrismFuzzer
       env["FUZZ_GIT_COMMIT"] = git_state && git_state["git_commit"] ? git_state["git_commit"] : "unknown"
       env["FUZZ_GIT_DIRTY"] = git_state && !git_state["git_dirty"].nil? ? (git_state["git_dirty"] ? "1" : "0") : "unknown"
       bkey = build_key_digest({
-        shape: "cruby_compile",
+        shape: shape_name,
         id: id,
         afl: afl_mode,
         ijon: ijon_enabled,
@@ -661,17 +664,21 @@ module PrismFuzzer
       })
       return if stamp_up_to_date?(stamp_file, out_path, bkey, deps) && (!fspec["document_ids"] || File.file?("#{out_path}.ids"))
 
-      log_progress "building CRuby compiler fuzz binary #{id} (#{fspec['ruby']}#{sans.empty? ? '' : ", #{sans.join('+')}"}#{ijon_enabled ? ', ijon' : ''})"
+      label = pipeline_diff ? "CRuby pipeline diff" : "CRuby compiler fuzz"
+      log_progress "building #{label} binary #{id} (#{fspec['ruby']}#{sans.empty? ? '' : ", #{sans.join('+')}"}#{ijon_enabled ? ', ijon' : ''})"
       FileUtils.rm_f("#{out_path}.ids")
       cmd = [
         build_compile_sh,
-        "--mode", "fuzz",
+        "--mode", "fuzz"
+      ]
+      cmd << "--pipeline-diff" if pipeline_diff
+      cmd.push(
         "--fuzz-root", fuzz_root,
-        "--oracle-dir", File.join(build_dir, "compile-oracle"),
+        "--oracle-dir", File.join(build_dir, oracle_subdir),
         "--afl-path", afl_path,
         "--max-input-size", max_in,
         "--output", out_path
-      ]
+      )
       if ruby_src["oracle_dir"] && !ruby_src["oracle_dir"].empty?
         cmd.push("--ruby-dir", ruby_src["oracle_dir"])
       end
@@ -1143,7 +1150,7 @@ module PrismFuzzer
 
       fuzzers = plan.fetch("fuzzers")
       fuzzers.each do |_id, fspec|
-        unless %w[prism_parse prism_diff_ruby prism_diff_prism prism_cross_oracle cruby_compile].include?(fspec.fetch("shape"))
+        unless %w[prism_parse prism_diff_ruby prism_diff_prism prism_cross_oracle cruby_compile cruby_pipeline_diff].include?(fspec.fetch("shape"))
           raise TopologyError, "No builder registered for shape '#{fspec['shape']}'"
         end
       end
@@ -1157,6 +1164,8 @@ module PrismFuzzer
             build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
           when "cruby_compile"
             build_cruby_compile!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
+          when "cruby_pipeline_diff"
+            build_cruby_compile!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pipeline_diff: true, dry_run: true)
           when "prism_diff_prism"
             build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, dry_run: true)
           when "prism_cross_oracle"
@@ -1173,7 +1182,7 @@ module PrismFuzzer
       end
 
       pool = BuildPool.new(default_build_jobs(jobs))
-      script_count = fuzzers.values.count { |fs| %w[prism_diff_ruby prism_diff_prism cruby_compile].include?(fs["shape"]) } + Array(plan["grammar_ext_sources"]).size
+      script_count = fuzzers.values.count { |fs| %w[prism_diff_ruby prism_diff_prism cruby_compile cruby_pipeline_diff].include?(fs["shape"]) } + Array(plan["grammar_ext_sources"]).size
       sub_jobs = [[pool.jobs / [script_count, 1].max, 2].max, 8].min
 
       tasks = []
@@ -1186,6 +1195,8 @@ module PrismFuzzer
             build_prism_diff_ruby!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
           when "cruby_compile"
             build_cruby_compile!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
+          when "cruby_pipeline_diff"
+            build_cruby_compile!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pipeline_diff: true, pool: pool, sub_jobs: sub_jobs)
           when "prism_diff_prism"
             build_prism_diff_prism!(id, fspec, plan: plan, fuzz_root: fuzz_root, build_dir: build_dir, afl_path: afl_path, afl_stamp: afl_stamp, pool: pool, sub_jobs: sub_jobs)
           when "prism_cross_oracle"

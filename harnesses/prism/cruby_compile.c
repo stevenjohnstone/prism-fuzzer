@@ -34,6 +34,14 @@
 #define FUZZ_COMPILE_PERSISTENT_ITERS 1000
 #endif
 
+#ifdef FUZZ_CRUBY_PIPELINE_DIFF
+#define FUZZ_COMPILE_NAMESPACE "cruby_pipeline"
+#define FUZZ_COMPILE_BIN_LABEL "fuzz.pipeline"
+#else
+#define FUZZ_COMPILE_NAMESPACE "cruby_compile"
+#define FUZZ_COMPILE_BIN_LABEL "fuzz.compile"
+#endif
+
 #define FUZZ_STR_HELPER(x) #x
 #define FUZZ_STR(x) FUZZ_STR_HELPER(x)
 
@@ -113,12 +121,16 @@ static volatile sig_atomic_t g_print_backtrace_enabled = 1;
 
 static VALUE g_rb_mAST = Qnil;
 static VALUE g_rb_cISeq = Qnil;
+#ifdef FUZZ_CRUBY_PIPELINE_DIFF
+static VALUE g_rb_mPrism = Qnil;
+static ID g_id_parse_success_p = 0;
+#endif
 static VALUE g_compiled_label = Qnil;
 static ID g_id_parse = 0;
-static ID g_id_compile = 0;
+static ID g_id_compile_prism = 0;
+static ID g_id_compile_parsey = 0;
 static ID g_id_message = 0;
-static VALUE g_prism_opts[COMPILE_OPT_COMBOS];
-static VALUE g_parse_y_opts[COMPILE_OPT_COMBOS];
+static VALUE g_compile_opts[COMPILE_OPT_COMBOS];
 
 static VALUE compile_warning_warn(int argc, VALUE *argv, VALUE self) {
     (void) argc;
@@ -127,9 +139,8 @@ static VALUE compile_warning_warn(int argc, VALUE *argv, VALUE self) {
     return Qnil;
 }
 
-static VALUE compile_build_opt_hash(VALUE parser_sym, unsigned int mask) {
+static VALUE compile_build_opt_hash(unsigned int mask) {
     VALUE h = rb_hash_new();
-    rb_hash_aset(h, ID2SYM(rb_intern("parser")), parser_sym);
     rb_hash_aset(h, ID2SYM(rb_intern("peephole_optimization")), (mask & 0x01u) ? Qfalse : Qtrue);
     rb_hash_aset(h, ID2SYM(rb_intern("tailcall_optimization")), (mask & 0x02u) ? Qtrue : Qfalse);
     rb_hash_aset(h, ID2SYM(rb_intern("specialized_instruction")), (mask & 0x04u) ? Qfalse : Qtrue);
@@ -153,18 +164,27 @@ static void compile_core_ids_init(void) {
 
     g_rb_cISeq = rb_const_get(rb_cRubyVM, rb_intern("InstructionSequence"));
     rb_gc_register_mark_object(g_rb_cISeq);
-    g_id_compile = rb_intern("compile");
+    g_id_compile_prism = rb_intern("compile_prism");
+    g_id_compile_parsey = rb_intern("compile_parsey");
     g_id_message = rb_intern("message");
+
+#ifdef FUZZ_CRUBY_PIPELINE_DIFF
+    /* Load CRuby's statically registered built-in Prism extension in-memory
+     * (registered by Init_Prism() during ruby_setup) without needing ruby/prism.rb. */
+    VALUE rb_mRuby = rb_define_module("Ruby");
+    g_rb_mPrism = rb_define_module_under(rb_mRuby, "Prism");
+    rb_define_class_under(g_rb_mPrism, "CurrentVersionError", rb_eArgError);
+    rb_require("ruby/prism/prism.so");
+    rb_gc_register_mark_object(g_rb_mPrism);
+    g_id_parse_success_p = rb_intern("parse_success?");
+#endif
 
     g_compiled_label = rb_utf8_str_new_lit("<compiled>");
     RB_OBJ_FREEZE(g_compiled_label);
     rb_gc_register_mark_object(g_compiled_label);
 
-    VALUE sym_prism = ID2SYM(rb_intern("prism"));
-    VALUE sym_parse_y = ID2SYM(rb_intern("parse.y"));
     for (unsigned int mask = 0; mask < COMPILE_OPT_COMBOS; mask++) {
-        g_prism_opts[mask] = compile_build_opt_hash(sym_prism, mask);
-        g_parse_y_opts[mask] = compile_build_opt_hash(sym_parse_y, mask);
+        g_compile_opts[mask] = compile_build_opt_hash(mask);
     }
 }
 
@@ -198,13 +218,13 @@ static void compile_write_stderr_str(const char *s, size_t len) {
 }
 
 static void compile_fatal_signal_handler(int sig) {
-    const char *msg = "CRASH[cruby_compile]: signal=SIGNAL\n";
+    const char *msg = "CRASH[" FUZZ_COMPILE_NAMESPACE "]: signal=SIGNAL\n";
     switch (sig) {
-        case SIGSEGV: msg = "CRASH[cruby_compile]: signal=SIGSEGV (11)\n"; break;
-        case SIGBUS:  msg = "CRASH[cruby_compile]: signal=SIGBUS (7)\n"; break;
-        case SIGILL:  msg = "CRASH[cruby_compile]: signal=SIGILL (4)\n"; break;
-        case SIGTRAP: msg = "CRASH[cruby_compile]: signal=SIGTRAP (5)\n"; break;
-        case SIGFPE:  msg = "CRASH[cruby_compile]: signal=SIGFPE (8)\n"; break;
+        case SIGSEGV: msg = "CRASH[" FUZZ_COMPILE_NAMESPACE "]: signal=SIGSEGV (11)\n"; break;
+        case SIGBUS:  msg = "CRASH[" FUZZ_COMPILE_NAMESPACE "]: signal=SIGBUS (7)\n"; break;
+        case SIGILL:  msg = "CRASH[" FUZZ_COMPILE_NAMESPACE "]: signal=SIGILL (4)\n"; break;
+        case SIGTRAP: msg = "CRASH[" FUZZ_COMPILE_NAMESPACE "]: signal=SIGTRAP (5)\n"; break;
+        case SIGFPE:  msg = "CRASH[" FUZZ_COMPILE_NAMESPACE "]: signal=SIGFPE (8)\n"; break;
         default:      break;
     }
     size_t msg_len = 0;
@@ -281,7 +301,7 @@ static void compile_oracle_init_with_stack(void *stack_top) {
         RUBY_INIT_STACK;
     }
     if (ruby_setup() != 0) {
-        fprintf(stderr, "fuzz.compile: ruby_setup() failed\n");
+        fprintf(stderr, FUZZ_COMPILE_BIN_LABEL ": ruby_setup() failed\n");
         abort();
     }
 
@@ -312,6 +332,7 @@ static void compile_oracle_init_with_stack(void *stack_top) {
 }
 
 typedef struct {
+    ID method_id;
     VALUE src_str;
     VALUE opt_hash;
 } compile_call_arg_t;
@@ -319,6 +340,22 @@ typedef struct {
 static VALUE compile_ast_parse_cb(VALUE src_str) {
     return rb_funcall(g_rb_mAST, g_id_parse, 1, src_str);
 }
+
+#ifdef FUZZ_CRUBY_PIPELINE_DIFF
+static VALUE compile_prism_parse_cb(VALUE src_str) {
+    return rb_funcall(g_rb_mPrism, g_id_parse_success_p, 1, src_str);
+}
+
+static bool compile_prism_accepts(VALUE src_str) {
+    int state = 0;
+    volatile VALUE res = rb_protect(compile_prism_parse_cb, src_str, &state);
+    if (state != 0) {
+        rb_set_errinfo(Qnil);
+        return false;
+    }
+    return RTEST(res);
+}
+#endif
 
 static VALUE compile_iseq_cb(VALUE raw_arg) {
     const compile_call_arg_t *arg = (const compile_call_arg_t *) raw_arg;
@@ -329,10 +366,156 @@ static VALUE compile_iseq_cb(VALUE raw_arg) {
         INT2FIX(1),
         arg->opt_hash
     };
-    return rb_funcallv(g_rb_cISeq, g_id_compile, 5, argv);
+    return rb_funcallv(g_rb_cISeq, arg->method_id, 5, argv);
 }
 
-static bool compile_parse_y_accepts(VALUE src_str) {
+/* Detects internal CRuby compiler / bytecode verifier COMPILE_ERRORs in
+ * fix_sp_depth / iseq_set_sequence / compile.c / prism_compile.c that CRuby
+ * surfaces as SyntaxError exceptions instead of rb_bug(). */
+static const char *compile_detect_internal_verifier_bug(const char *msg) {
+    if (msg == NULL || msg[0] == '\0') {
+        return NULL;
+    }
+    static const struct {
+        const char *needle;
+        const char *tag;
+    } checks[] = {
+        { "argument stack underflow (",                   "stack_underflow" },
+        { "operand size miss! (",                         "operand_size_miss" },
+        { "unknown label: ",                              "unknown_label" },
+        { "iseq_set_sequence: adjust bug",                "adjust_bug" },
+        { "unknown list type: ",                          "unknown_list_type" },
+        { "iseq_set_sequence: ic_index overflow:",        "ic_index_overflow" },
+        { ": unknown node (",                             "unexpected_node" },
+        { "unexpected node",                              "unexpected_node" },
+        { "NODE_DASGN: unknown id",                       "unexpected_node" },
+        { "unknown scope: ",                              "unreachable_scope" },
+        { "should not be reached",                        "unreachable_scope" },
+        { "local_self! called but 'self' not found",      "missing_local_self" },
+        { "can't find builtin function:",                 "builtin_mismatch" },
+        { "argc is not match for builtin function:",      "builtin_mismatch" }
+    };
+    for (size_t i = 0; i < sizeof(checks) / sizeof(checks[0]); i++) {
+        if (strstr(msg, checks[i].needle) != NULL) {
+            return checks[i].tag;
+        }
+    }
+    return NULL;
+}
+
+static void compile_classify_exc_tag(const char *cls, const char *msg, char *tag_buf, size_t tag_cap) {
+    if (tag_cap == 0) return;
+    static const struct {
+        const char *needle;
+        const char *tag;
+    } tags[] = {
+        { "Invalid break",                                "invalid_break" },
+        { "Can't escape from eval with break",            "invalid_break" },
+        { "Invalid next",                                 "invalid_next" },
+        { "Can't escape from eval with next",             "invalid_next" },
+        { "Invalid redo",                                 "invalid_redo" },
+        { "Can't escape from eval with redo",             "invalid_redo" },
+        { "Invalid retry",                                "invalid_retry" },
+        { "Invalid yield",                                "invalid_yield" },
+        { "can not yield from isolated Proc",             "isolated_proc_yield" },
+        { "can not access variable",                      "isolated_proc_var" },
+        { "too many keyword parameters",                  "too_many_kw_params" },
+        { "too many keyword arguments",                   "too_many_kw_args" },
+        { "illegal variable in alternative pattern",      "alt_pattern_var" },
+        { "dynamic constant assignment",                  "dynamic_constant_assign" },
+        { "duplicated argument name",                     "duplicate_arg_name" },
+        { "circular argument reference",                  "circular_arg_ref" },
+        { "numbered parameter",                           "numbered_param" },
+        { "ordinary parameter is defined",                "ordinary_param_conflict" },
+        { "invalid multibyte char",                       "invalid_multibyte" },
+        { "unknown encoding name",                        "unknown_encoding" },
+        { "string literal encodings differ",              "string_encodings_differ" }
+    };
+    for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
+        if (strstr(msg, tags[i].needle) != NULL) {
+            snprintf(tag_buf, tag_cap, "%s", tags[i].tag);
+            return;
+        }
+    }
+    const char *unexp = strstr(msg, "syntax error, unexpected ");
+    if (unexp != NULL) {
+        const char *p = unexp + sizeof("syntax error, unexpected ") - 1;
+        char tok[32];
+        size_t len = 0;
+        bool has_alnum = false;
+        while (*p != '\0' && *p != ',' && *p != ';' && *p != '\n' && len + 1 < sizeof(tok)) {
+            unsigned char ch = (unsigned char) *p++;
+            if (ch >= 'A' && ch <= 'Z') {
+                tok[len++] = (char) (ch + ('a' - 'A'));
+                has_alnum = true;
+            } else if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+                tok[len++] = (char) ch;
+                has_alnum = true;
+            } else if ((ch == ' ' || ch == '-' || ch == '_') && len > 0 && tok[len - 1] != '_') {
+                tok[len++] = '_';
+            }
+        }
+        while (len > 0 && tok[len - 1] == '_') {
+            len--;
+        }
+        tok[len] = '\0';
+        snprintf(tag_buf, tag_cap, "unexpected_%s", has_alnum ? tok : "punct");
+        return;
+    }
+    snprintf(tag_buf, tag_cap, "%s_other", (cls && cls[0] != '\0') ? cls : "Exception");
+}
+
+/* Extracts up to 220 sanitized bytes of exception text (handling multi-line
+ * Prism and CRuby diagnostics where the specific message follows `> 1 | ...`)
+ * and returns any internal bytecode-verifier bug tag. */
+static const char *compile_extract_exception(
+    VALUE err,
+    char *tag_buf,
+    size_t tag_cap,
+    char *msg_buf,
+    size_t msg_cap
+) {
+    if (NIL_P(err)) {
+        if (tag_cap > 0) snprintf(tag_buf, tag_cap, "nil");
+        if (msg_cap > 0) snprintf(msg_buf, msg_cap, "nil");
+        return NULL;
+    }
+    const char *cls = rb_obj_classname(err);
+    volatile VALUE msg = rb_funcall(err, g_id_message, 0);
+    const char *mptr = (RB_TYPE_P(msg, T_STRING) && RSTRING_LEN(msg) > 0) ? RSTRING_PTR(msg) : "";
+    long mlen = RB_TYPE_P(msg, T_STRING) ? RSTRING_LEN(msg) : 0;
+
+    char flat[256];
+    size_t n = 0;
+    for (long i = 0; i < mlen && n + 1 < sizeof(flat); i++) {
+        char c = mptr[i];
+        if (c == '\n' || c == '\r' || c == '\t') {
+            if (n > 0 && flat[n - 1] != ' ') flat[n++] = ' ';
+        } else if (c != '\0' && c != ']') {
+            flat[n++] = c;
+        }
+    }
+    flat[n] = '\0';
+    RB_GC_GUARD(msg);
+
+    const char *bug_tag = compile_detect_internal_verifier_bug(flat);
+    if (tag_cap > 0) {
+        compile_classify_exc_tag(cls, flat, tag_buf, tag_cap);
+    }
+    if (msg_cap > 0) {
+        size_t clip = n > 110 ? 110 : n;
+        snprintf(msg_buf, msg_cap, "%s:%.*s", cls ? cls : "Exception", (int) clip, flat);
+    }
+    return bug_tag;
+}
+
+static bool compile_parse_y_accepts(
+    VALUE src_str,
+    char *tag_buf,
+    size_t tag_cap,
+    char *msg_buf,
+    size_t msg_cap
+) {
     int state = 0;
     volatile VALUE ast = rb_protect(compile_ast_parse_cb, src_str, &state);
     if (state != 0) {
@@ -341,40 +524,32 @@ static bool compile_parse_y_accepts(VALUE src_str) {
         /* RubyVM::AbstractSyntaxTree.parse (ast.c) raises RuntimeError on valid
          * parse.y NODE_ITER(NODE_DASGN) after parse.y already succeeded. */
         if (!NIL_P(err) && !RTEST(rb_obj_is_kind_of(err, rb_eSyntaxError))) {
+            if (tag_cap > 0) snprintf(tag_buf, tag_cap, "ok");
+            if (msg_cap > 0) snprintf(msg_buf, msg_cap, "ok");
             return true;
         }
+        (void) compile_extract_exception(err, tag_buf, tag_cap, msg_buf, msg_cap);
         return false;
     }
+    if (tag_cap > 0) snprintf(tag_buf, tag_cap, "ok");
+    if (msg_cap > 0) snprintf(msg_buf, msg_cap, "ok");
     RB_GC_GUARD(ast);
     return true;
 }
 
-#ifdef FUZZ_COMPILE_CHECK_PARITY
-static void compile_extract_exc_summary(VALUE err, char *out, size_t cap) {
-    if (cap == 0) return;
-    if (NIL_P(err)) {
-        snprintf(out, cap, "nil");
-        return;
-    }
-    const char *cls = rb_obj_classname(err);
-    volatile VALUE msg = rb_funcall(err, g_id_message, 0);
-    const char *mptr = (RB_TYPE_P(msg, T_STRING) && RSTRING_LEN(msg) > 0) ? RSTRING_PTR(msg) : "";
-    long mlen = RB_TYPE_P(msg, T_STRING) ? RSTRING_LEN(msg) : 0;
-    char line[96];
-    size_t n = 0;
-    for (long i = 0; i < mlen && n + 1 < sizeof(line); i++) {
-        char c = mptr[i];
-        if (c == '\n' || c == '\r') break;
-        line[n++] = (c != '\0' && c != ']') ? c : ' ';
-    }
-    line[n] = '\0';
-    snprintf(out, cap, "%s:%s", cls ? cls : "Exception", line);
-    RB_GC_GUARD(msg);
-}
-#endif
-
-static bool compile_run_iseq(VALUE src_str, VALUE opt_hash, char *err_buf, size_t err_cap) {
+static bool compile_run_iseq(
+    const char *compiler_name,
+    ID method_id,
+    unsigned int opt_mask,
+    VALUE src_str,
+    VALUE opt_hash,
+    char *tag_buf,
+    size_t tag_cap,
+    char *msg_buf,
+    size_t msg_cap
+) {
     compile_call_arg_t arg = {
+        .method_id = method_id,
         .src_str = src_str,
         .opt_hash = opt_hash
     };
@@ -383,15 +558,26 @@ static bool compile_run_iseq(VALUE src_str, VALUE opt_hash, char *err_buf, size_
     if (state != 0) {
         VALUE err = rb_errinfo();
         rb_set_errinfo(Qnil);
-#ifdef FUZZ_COMPILE_CHECK_PARITY
-        compile_extract_exc_summary(err, err_buf, err_cap);
-#else
-        (void) err;
-        if (err_cap > 0) err_buf[0] = '\0';
-#endif
+        char local_msg[160];
+        char *eff_msg = (msg_buf != NULL && msg_cap > 0) ? msg_buf : local_msg;
+        size_t eff_cap = (msg_buf != NULL && msg_cap > 0) ? msg_cap : sizeof(local_msg);
+        const char *bug_tag = compile_extract_exception(err, tag_buf, tag_cap, eff_msg, eff_cap);
+        if (bug_tag != NULL) {
+            fprintf(
+                stderr,
+                "INVARIANT[" FUZZ_COMPILE_NAMESPACE "]: kind=internal_compile_error compiler=%s bug=%s [detail: opt=0x%02x err=%s]\n",
+                compiler_name,
+                bug_tag,
+                opt_mask,
+                eff_msg
+            );
+            fflush(stderr);
+            abort();
+        }
         return false;
     }
-    if (err_cap > 0) snprintf(err_buf, err_cap, "ok");
+    if (tag_cap > 0) snprintf(tag_buf, tag_cap, "ok");
+    if (msg_cap > 0) snprintf(msg_buf, msg_cap, "ok");
     RB_GC_GUARD(iseq);
     return true;
 }
@@ -417,23 +603,95 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0;
     }
 
+    unsigned int opt_mask = (unsigned int) (data[0] & 0x3fu);
+
+#ifdef FUZZ_CRUBY_PIPELINE_DIFF
+    volatile VALUE src_str = rb_utf8_str_new((const char *) source, (long) source_size);
+    char prism_tag[64] = "parse_err";
+    char prism_msg[160] = "SyntaxError:prism_parse";
+    char parse_y_tag[64] = "parse_err";
+    char parse_y_msg[160] = "SyntaxError:parse_y_parse";
+
+    bool prism_parsed = compile_prism_accepts(src_str);
+    bool prism_compiled = false;
+    if (prism_parsed) {
+        prism_compiled = compile_run_iseq(
+            "prism", g_id_compile_prism, opt_mask, src_str, g_compile_opts[opt_mask],
+            prism_tag, sizeof(prism_tag), prism_msg, sizeof(prism_msg)
+        );
+    }
+
+    bool parse_y_parsed = compile_parse_y_accepts(
+        src_str, parse_y_tag, sizeof(parse_y_tag), parse_y_msg, sizeof(parse_y_msg)
+    );
+    bool parse_y_compiled = false;
+    if (parse_y_parsed) {
+        parse_y_compiled = compile_run_iseq(
+            "parse_y", g_id_compile_parsey, opt_mask, src_str, g_compile_opts[opt_mask],
+            parse_y_tag, sizeof(parse_y_tag), parse_y_msg, sizeof(parse_y_msg)
+        );
+    }
+
+#ifdef PRISM_FUZZ_IJON
+    uint32_t state_bits = (opt_mask << 4u) |
+                          ((prism_parsed ? 1u : 0u) << 3u) |
+                          ((prism_compiled ? 1u : 0u) << 2u) |
+                          ((parse_y_parsed ? 1u : 0u) << 1u) |
+                          (parse_y_compiled ? 1u : 0u);
+    compile_ijon_record(2u, state_bits);
+#endif
+
+    if (prism_compiled != parse_y_compiled) {
+        if (prism_parsed && parse_y_parsed) {
+            const char *sub = prism_compiled ? "prism_ok_parse_y_err" : "prism_err_parse_y_ok";
+            const char *err_tag = prism_compiled ? parse_y_tag : prism_tag;
+            fprintf(
+                stderr,
+                "INVARIANT[cruby_pipeline]: kind=compile_mismatch sub=%s tag=%s [detail: opt=0x%02x prism=%s parse_y=%s]\n",
+                sub,
+                err_tag,
+                opt_mask,
+                prism_msg,
+                parse_y_msg
+            );
+            fflush(stderr);
+            abort();
+        } else {
+            const char *sub = prism_compiled ? "prism_ok_parse_y_err" : "prism_err_parse_y_ok";
+            const char *err_tag = prism_compiled ? parse_y_tag : prism_tag;
+            fprintf(
+                stderr,
+                "INVARIANT[cruby_pipeline]: kind=syntax_mismatch sub=%s tag=%s [detail: opt=0x%02x prism=%s parse_y=%s]\n",
+                sub,
+                err_tag,
+                opt_mask,
+                prism_msg,
+                parse_y_msg
+            );
+            fflush(stderr);
+            abort();
+        }
+    }
+
+    RB_GC_GUARD(src_str);
+    return 0;
+#else
     /* Fast C-level Prism syntax gate: skip invalid Ruby before allocating VM objects. */
     if (!pm_serialize_parse_success_p(source, source_size, NULL)) {
         return 0;
     }
 
     volatile VALUE src_str = rb_utf8_str_new((const char *) source, (long) source_size);
-    if (!compile_parse_y_accepts(src_str)) {
+    if (!compile_parse_y_accepts(src_str, NULL, 0, NULL, 0)) {
         RB_GC_GUARD(src_str);
         return 0;
     }
 
     /* Both Prism and parse.y accepted the input as valid syntax; compile with both. */
-    unsigned int opt_mask = (unsigned int) (data[0] & 0x3fu);
-    char prism_err[128];
-    char parse_y_err[128];
-    bool prism_ok = compile_run_iseq(src_str, g_prism_opts[opt_mask], prism_err, sizeof(prism_err));
-    bool parse_y_ok = compile_run_iseq(src_str, g_parse_y_opts[opt_mask], parse_y_err, sizeof(parse_y_err));
+    char prism_msg[160];
+    char parse_y_msg[160];
+    bool prism_ok = compile_run_iseq("prism", g_id_compile_prism, opt_mask, src_str, g_compile_opts[opt_mask], NULL, 0, prism_msg, sizeof(prism_msg));
+    bool parse_y_ok = compile_run_iseq("parse_y", g_id_compile_parsey, opt_mask, src_str, g_compile_opts[opt_mask], NULL, 0, parse_y_msg, sizeof(parse_y_msg));
 
 #ifdef PRISM_FUZZ_IJON
     compile_ijon_record(1u, (opt_mask << 2u) | ((prism_ok ? 1u : 0u) << 1u) | (parse_y_ok ? 1u : 0u));
@@ -447,8 +705,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
             "INVARIANT[cruby_compile]: kind=compile_status_mismatch sub=%s [detail: opt=0x%02x prism=%s parse_y=%s]\n",
             sub,
             opt_mask,
-            prism_err,
-            parse_y_err
+            prism_msg,
+            parse_y_msg
         );
         fflush(stderr);
         abort();
@@ -460,6 +718,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
     RB_GC_GUARD(src_str);
     return 0;
+#endif
 }
 
 #ifndef PRISM_DIFF_NO_MAIN
@@ -470,7 +729,7 @@ __AFL_FUZZ_INIT();
 static int compile_run_file(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (fp == NULL) {
-        fprintf(stderr, "fuzz.compile: failed to open '%s': %s\n", path, strerror(errno));
+        fprintf(stderr, FUZZ_COMPILE_BIN_LABEL ": failed to open '%s': %s\n", path, strerror(errno));
         return 1;
     }
 

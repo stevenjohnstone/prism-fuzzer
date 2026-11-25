@@ -72,7 +72,18 @@ module FuzzVerifyProfile
     fspec && fspec["shape"].to_s == "prism_diff_prism"
   end
 
+  def cruby_pipeline_bucket?(executable: "", crash_output: "", triage_dir: nil)
+    co = utf8_safe(crash_output)
+    return true if co.include?("INVARIANT[cruby_pipeline]") || co.include?("CRASH[cruby_pipeline]")
+    return true if executable.to_s.end_with?("pipeline")
+
+    fspec = resolve_topology_fuzzer(executable: executable, triage_dir: triage_dir)
+    fspec && fspec["shape"].to_s == "cruby_pipeline_diff"
+  end
+
   def cruby_compile_bucket?(executable: "", crash_output: "", triage_dir: nil)
+    return false if cruby_pipeline_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir)
+
     co = utf8_safe(crash_output)
     return true if co.include?("INVARIANT[cruby_compile]") || co.include?("CRASH[cruby_compile]")
     return true if executable.to_s.end_with?("compile")
@@ -83,6 +94,7 @@ module FuzzVerifyProfile
 
   def diff_bucket?(executable: "", crash_output: "", triage_dir: nil)
     return false if prism_diff_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir)
+    return false if cruby_pipeline_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir)
     return false if cruby_compile_bucket?(executable: executable, crash_output: crash_output, triage_dir: triage_dir)
 
     co = utf8_safe(crash_output)
@@ -116,6 +128,8 @@ module FuzzVerifyProfile
     exe = executable.to_s
     if prism_diff_bucket?(executable: exe, crash_output: crash_output, triage_dir: triage_dir)
       "diff_prism"
+    elsif cruby_pipeline_bucket?(executable: exe, crash_output: crash_output, triage_dir: triage_dir)
+      "cruby_pipeline"
     elsif cruby_compile_bucket?(executable: exe, crash_output: crash_output, triage_dir: triage_dir)
       "cruby_compile"
     elsif diff_bucket?(executable: exe, crash_output: crash_output, triage_dir: triage_dir)
@@ -165,6 +179,7 @@ module FuzzVerifyProfile
     reason = meta_hash&.dig("reason") || (bucket_dir && !bucket_dir.to_s.empty? ? File.basename(File.dirname(bucket_dir)) : "")
     reproduced_by = meta_hash&.dig("reproduced_by").to_s
     return "diff_prism" if reproduced_by.end_with?("prism_diff")
+    return "cruby_pipeline" if reproduced_by.end_with?("pipeline")
     return "cruby_compile" if reproduced_by.end_with?("compile")
     return "diff_parse_y" if reproduced_by.end_with?("diff")
     return "#{Regexp.last_match(1)}_oracle" if reproduced_by =~ /(arm32|ppc)(?:\.repro)?\z/
@@ -178,6 +193,7 @@ module FuzzVerifyProfile
       fspec = resolve_topology_fuzzer(executable: reproduced_by, triage_dir: tdir)
       if fspec
         return "diff_prism" if fspec["shape"].to_s == "prism_diff_prism"
+        return "cruby_pipeline" if fspec["shape"].to_s == "cruby_pipeline_diff"
         return "cruby_compile" if fspec["shape"].to_s == "cruby_compile"
         return "diff_parse_y" if fspec["shape"].to_s == "prism_diff_ruby"
         return "#{fspec['arch']}_oracle" if fspec["shape"].to_s == "prism_cross_oracle" && CROSS_ORACLE_TARGETS.key?(fspec["arch"].to_s)
@@ -196,6 +212,7 @@ module FuzzVerifyProfile
       if File.file?(testcase_c)
         text = File.read(testcase_c)
         return "diff_prism" if text.match?(/(INVARIANT|CRASH)\[diff_prism\]/)
+        return "cruby_pipeline" if text.match?(/(INVARIANT|CRASH)\[cruby_pipeline\]/)
         return "cruby_compile" if text.match?(/(INVARIANT|CRASH)\[cruby_compile\]/)
         return "diff_parse_y" if text.match?(/(INVARIANT|CRASH)\[diff_parse_y\]|#include <ruby\.h>/)
       end
@@ -207,6 +224,7 @@ module FuzzVerifyProfile
         return "ppc_oracle" if text.include?("powerpc-linux-gnu")
         return "msan_slow" if text.include?("-fsanitize=memory")
         return "lsan_slow" if text.include?("-fsanitize=leak")
+        return "cruby_pipeline" if text.include?("build_cruby_compile.sh") && text.include?("--pipeline-diff")
         return "cruby_compile" if text.include?("build_cruby_compile.sh")
         return "diff_parse_y" if text.include?("build_diff.sh")
         return "asan_ubsan_slow" if text.include?("-DSLOW")
@@ -231,6 +249,7 @@ module FuzzVerifyProfile
       # when built so we avoid redundant normalization while keeping the same replay chain.
       return File.join(bdir, "fuzz.native") if profile == "xallocator" && reproduced_by.end_with?("ijon") && File.executable?(File.join(bdir, "fuzz.native"))
       return File.join(bdir, "fuzz.prism_diff") if reproduced_by.end_with?("prism_diff")
+      return File.join(bdir, "fuzz.pipeline") if reproduced_by.end_with?("pipeline")
       return File.join(bdir, "fuzz.compile") if reproduced_by.end_with?("compile")
       return File.join(bdir, "fuzz.diff") if reproduced_by.end_with?("diff")
       if reproduced_by =~ /(arm32|ppc)(?:\.repro)?\z/
@@ -251,6 +270,8 @@ module FuzzVerifyProfile
       File.executable?(File.join(bdir, "fuzz.native")) ? File.join(bdir, "fuzz.native") : File.join(bdir, "fuzz")
     when "diff_prism"
       File.join(bdir, "fuzz.prism_diff")
+    when "cruby_pipeline"
+      File.join(bdir, "fuzz.pipeline")
     when "cruby_compile"
       File.join(bdir, "fuzz.compile")
     when "diff_parse_y"

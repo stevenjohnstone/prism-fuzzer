@@ -12,7 +12,10 @@ module FuzzTriage
 
       ns = meta.dig("symptom", "invariant", "namespace").to_s
       headline = meta.dig("symptom", "headline").to_s
-      ns == "diff_parse_y" || headline.start_with?("INVARIANT[diff_parse_y]:")
+      ns == "diff_parse_y" || headline.start_with?("INVARIANT[diff_parse_y]:") ||
+        ((ns == "cruby_pipeline" || headline.start_with?("INVARIANT[cruby_pipeline]:")) &&
+          meta.dig("symptom", "invariant", "fields", "kind").to_s != "internal_compile_error" &&
+          !headline.include?("kind=internal_compile_error"))
     end
 
     def summarize_first_disasm_diff(diff_text)

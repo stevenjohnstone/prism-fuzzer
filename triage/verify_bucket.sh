@@ -26,7 +26,7 @@ usage() {
 Usage: verify_bucket.sh [--repo-root DIR] [--fuzz-root DIR] [--bucket-dir DIR] [OPTIONS]
   --repo-root DIR           Target Prism source directory (alias: --target DIR; default: PRISM_A_DIR or build/targets/prism_a)
   --fuzz-root DIR           prism-fuzzer root containing harnesses/prism (default: script repo)
-  --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_parse_y_asan | cruby_compile | cruby_compile_asan | diff_prism | arm32_oracle | ppc_oracle
+  --profile NAME            asan_ubsan | asan_ubsan_slow | msan_slow | lsan_slow | xallocator | diff_parse_y | diff_parse_y_asan | cruby_compile | cruby_compile_asan | cruby_pipeline | cruby_pipeline_asan | diff_prism | arm32_oracle | ppc_oracle
   --runner PATH             Use a precompiled verify_runner binary
   --build-only              Build (if stale) and print the runner binary path
   --rebuild-verifiers       Force recompilation of verify_runner (bypasses source fingerprint cache)
@@ -158,7 +158,7 @@ if [ -z "$PROFILE" ]; then
   fi
 fi
 
-if [ "$PROFILE" != "cruby_compile" ] && [ "$PROFILE" != "cruby_compile_asan" ]; then
+if [ "$PROFILE" != "cruby_compile" ] && [ "$PROFILE" != "cruby_compile_asan" ] && [ "$PROFILE" != "cruby_pipeline" ] && [ "$PROFILE" != "cruby_pipeline_asan" ]; then
   if [ -z "$REPO_ROOT" ]; then
     echo "verify_bucket.sh: --repo-root is required (or set PRISM_A_DIR / run make targets-sync)" >&2
     usage >&2
@@ -411,6 +411,8 @@ build_verify_runner() {
     profile="diff_parse_y_asan"
   elif [ "$profile" = "cruby_compile" ] && diff_bucket_needs_asan "${BUCKET_DIR:-}"; then
     profile="cruby_compile_asan"
+  elif [ "$profile" = "cruby_pipeline" ] && diff_bucket_needs_asan "${BUCKET_DIR:-}"; then
+    profile="cruby_pipeline_asan"
   fi
   local cache_dir="${VERIFY_BUILD_DIR:-$ws_build_dir/verify}"
   if ! mkdir -p "$cache_dir" 2>/dev/null || [ ! -w "$cache_dir" ]; then
@@ -459,7 +461,7 @@ build_verify_runner() {
 
   local flags=()
   local probe_arr=()
-  if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ] || [ "$profile" = "cruby_compile" ] || [ "$profile" = "cruby_compile_asan" ]; then
+  if [ "$profile" = "diff_parse_y" ] || [ "$profile" = "diff_parse_y_asan" ] || [ "$profile" = "cruby_compile" ] || [ "$profile" = "cruby_compile_asan" ] || [ "$profile" = "cruby_pipeline" ] || [ "$profile" = "cruby_pipeline_asan" ]; then
     flags=("$profile" "$max_input")
   elif [ "$profile" = "diff_prism" ]; then
     flags=("diff_prism" "$max_input" "$prism_b")
@@ -614,6 +616,24 @@ build_verify_runner() {
           --cc "$cc" \
           --max-input-size "$max_input" \
           ${compile_extra_args[@]+"${compile_extra_args[@]}"} \
+          --output "$tmp_bin"; then
+        rm -f "$tmp_bin"
+        echo "verify_bucket.sh: failed to compile verify_runner ($profile)" >&2
+        exit 125
+      fi
+    elif [ "$profile" = "cruby_pipeline" ] || [ "$profile" = "cruby_pipeline_asan" ]; then
+      local pipeline_extra_args=()
+      if [ "$profile" = "cruby_pipeline_asan" ]; then
+        pipeline_extra_args=(--cflag -fsanitize=address)
+      fi
+      if ! "$FUZZ_ROOT/harnesses/prism/build_cruby_compile.sh" \
+          --mode verify \
+          --pipeline-diff \
+          --fuzz-root "$FUZZ_ROOT" \
+          --oracle-dir "$cache_dir/pipeline-oracle" \
+          --cc "$cc" \
+          --max-input-size "$max_input" \
+          ${pipeline_extra_args[@]+"${pipeline_extra_args[@]}"} \
           --output "$tmp_bin"; then
         rm -f "$tmp_bin"
         echo "verify_bucket.sh: failed to compile verify_runner ($profile)" >&2
@@ -851,7 +871,7 @@ if [ "$SYMBOLIZE" != "1" ]; then
   sym_flag=":symbolize=0"
 fi
 leak_flag=""
-if [ "$PROFILE" = "diff_parse_y" ] || [ "$PROFILE" = "diff_parse_y_asan" ] || [ "$PROFILE" = "cruby_compile" ] || [ "$PROFILE" = "cruby_compile_asan" ]; then
+if [ "$PROFILE" = "diff_parse_y" ] || [ "$PROFILE" = "diff_parse_y_asan" ] || [ "$PROFILE" = "cruby_compile" ] || [ "$PROFILE" = "cruby_compile_asan" ] || [ "$PROFILE" = "cruby_pipeline" ] || [ "$PROFILE" = "cruby_pipeline_asan" ]; then
   leak_flag=":detect_leaks=0:detect_stack_use_after_return=0"
 fi
 export ASAN_OPTIONS="${ASAN_OPTIONS:-abort_on_error=1:handle_abort=1:handle_segv=2:use_sigaltstack=1${leak_flag}:max_allocation_size_mb=${max_alloc}:hard_rss_limit_mb=${hard_rss}${sym_flag}}"

@@ -103,6 +103,16 @@ module PrismFuzzer
         coverage_source: ->(spec) { spec["prism"] },
         coverage_sources: ->(spec) { spec["prism"] ? [spec["prism"]] : [] },
         explain_sources: ->(spec) { spec["prism"] ? [spec["prism"]] : [] }
+      },
+      "cruby_pipeline_diff" => {
+        source_roles: { "ruby" => :ruby },
+        optional_source_roles: { "prism" => :prism },
+        default_afl: "pcguard",
+        supported_afl_modes: %w[pcguard],
+        verify_profile: ->(_spec) { "cruby_pipeline" },
+        coverage_source: ->(spec) { spec["prism"] },
+        coverage_sources: ->(spec) { spec["prism"] ? [spec["prism"]] : [] },
+        explain_sources: ->(spec) { spec["prism"] ? [spec["prism"]] : [] }
       }
     }.freeze
 

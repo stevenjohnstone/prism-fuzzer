@@ -156,7 +156,7 @@ module FuzzClustering
         if has_domains
           if dom == "prism"
             prism_idf[edge_id] = w
-          elsif dom == "parse_y"
+          elsif dom == "parse_y" || dom == "cruby_compile"
             parse_y_idf[edge_id] = w
           end
         else
@@ -388,8 +388,12 @@ module FuzzClustering
         Regexp.last_match(1)
       elsif ns == "stream_diff" || headline.start_with?("INVARIANT[stream_diff]:")
         "stream_diff"
-      elsif %w[diff_parse_y cruby_compile].include?(bucket["verify_profile"].to_s) ||
-            headline.start_with?("CRASH[diff_parse_y]:", "CRASH[cruby_compile]:", "INVARIANT[cruby_compile]:")
+      elsif (ns == "cruby_pipeline" || headline.start_with?("INVARIANT[cruby_pipeline]:")) &&
+            bucket.dig("symptom", "invariant", "fields", "kind").to_s != "internal_compile_error" &&
+            !headline.include?("kind=internal_compile_error")
+        "diff_parse_y"
+      elsif %w[diff_parse_y cruby_compile cruby_pipeline].include?(bucket["verify_profile"].to_s) ||
+            headline.start_with?("CRASH[diff_parse_y]:", "CRASH[cruby_compile]:", "CRASH[cruby_pipeline]:", "INVARIANT[cruby_compile]:", "INVARIANT[cruby_pipeline]:")
         has_prism = Array(bucket["frames"]).any? { |f| prism_frame?(f) } || prism_symptom?(bucket)
         has_prism ? "crash_or_inv" : "cruby_crash"
       else
@@ -399,10 +403,12 @@ module FuzzClustering
 
     def extract_diff_fields(bucket)
       inv = bucket.dig("symptom", "invariant")
-      return nil unless inv.is_a?(Hash) && inv["namespace"] == "diff_parse_y"
+      return nil unless inv.is_a?(Hash) && %w[diff_parse_y cruby_pipeline].include?(inv["namespace"])
 
       fields = inv["fields"]
-      fields.is_a?(Hash) ? fields : nil
+      return nil unless fields.is_a?(Hash) && fields["kind"].to_s != "internal_compile_error"
+
+      fields
     end
 
     def parse_afl_time_ms(name_or_path)

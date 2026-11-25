@@ -678,8 +678,14 @@ class TriageDiffParseYTest < Minitest::Test
         valid_path = File.join(workdir, "valid_default.bin")
         batch = FuzzTriage.collect_showmap_batch({ "valid" => valid_path }, fuzz_compile, showmap_bin)
         assert_equal true, batch[:ok]
-        hit_domains = batch.dig(:maps, "valid").keys.filter_map { |eid| ids_info[:edge_domains][eid] }.uniq
+        hit_eids = batch.dig(:maps, "valid").keys
+        hit_domains = hit_eids.filter_map { |eid| ids_info[:edge_domains][eid] }.uniq
         assert_includes hit_domains, "cruby_compile", "expected afl-showmap hits in cruby_compile domain: #{hit_domains.inspect}"
+        hit_funcs = hit_eids.filter_map { |eid| ids_info[:edge_functions][eid] }.uniq
+        assert hit_funcs.any? { |fn| fn.start_with?("pm_compile_", "pm_iseq_") },
+               "expected Prism compiler functions hit in afl-showmap: #{hit_funcs.take(20).inspect}"
+        assert hit_funcs.any? { |fn| fn.start_with?("iseq_compile_", "rb_iseq_compile_") },
+               "expected parse.y compiler functions hit in afl-showmap: #{hit_funcs.take(20).inspect}"
       end
 
       # Dual-valid Ruby input (accepted by both Prism and parse.y) triggering CRuby 4.1 compile_keyword_arg SEGV
@@ -738,6 +744,172 @@ class TriageDiffParseYTest < Minitest::Test
         assert_equal 2, v_rep["failed"], "expected both input.min and archived raw input to fail: #{v_rep.inspect}"
         assert_includes v_rep.dig("failures", 0, "headline").to_s, "CRASH[cruby_compile]: signal=SIGSEGV"
       end
+    end
+  end
+
+  def test_cruby_pipeline_diff_fuzz_triage_and_verify
+    require_ruby_oracle!
+    afl_so = repo_path("build/afl/SanitizerCoveragePCGUARD.so")
+    skip "missing #{afl_so} (run inside Docker)" unless File.file?(afl_so)
+    showmap_bin = find_executable("afl-showmap")
+    skip "missing afl-showmap in PATH" unless showmap_bin
+
+    with_tmpdir("cruby-pipeline-test-") do |workdir|
+      oracle_dir = resolve_env_or_tmp_dir("PIPELINE_TC_ORACLE_DIR", File.join(workdir, "pipeline-oracle"))
+      verify_build_dir = resolve_env_or_tmp_dir("PIPELINE_VERIFY_BUILD_DIR", File.join(workdir, "verify"))
+      fuzz_pipeline = File.join(workdir, "build", "fuzz.pipeline")
+
+      assert_cmd(
+        repo_path("harnesses/prism/build_cruby_compile.sh"),
+        "--mode", "fuzz",
+        "--pipeline-diff",
+        "--fuzz-root", root_dir,
+        "--oracle-dir", oracle_dir,
+        "--afl-path", repo_path("build/afl"),
+        "--output", fuzz_pipeline
+      )
+      assert File.executable?(fuzz_pipeline), "expected executable #{fuzz_pipeline}"
+
+      # Valid Ruby, invalid Ruby, NUL-containing Ruby, and phase-split rejections
+      # (where one side rejects during parse and the other rejects during compile)
+      # must all exit 0 cleanly without false-positive invariants.
+      [
+        ["valid.bin", "def greet(x, y: 1)\n  x + y\nend\ngreet(2, y: 3)\n"],
+        ["invalid.bin", "def (\n"],
+        ["nul.bin", "a = 1\0b = 2\n"],
+        ["phase_retry.bin", "begin; retry; ensure; end\n"],
+        ["phase_dyn_const.bin", "def f; X = 1; end\n"],
+        ["phase_bad_re.bin", "/[z-a]/\n"]
+      ].each do |fname, code|
+        fpath = File.join(workdir, fname)
+        File.binwrite(fpath, seed_bytes(code))
+        assert_cmd(fuzz_pipeline, fpath)
+      end
+
+      if File.file?("#{fuzz_pipeline}.ids")
+        ids_info = FuzzTriage.load_coverage_ids("#{fuzz_pipeline}.ids")
+        assert_equal true, ids_info[:available]
+        domains = ids_info[:edge_domains].values.uniq
+        %w[prism parse_y cruby_compile harness].each do |dom|
+          assert_includes domains, dom, "expected #{dom} domain in #{fuzz_pipeline}.ids: #{domains.inspect}"
+        end
+
+        batch = FuzzTriage.collect_showmap_batch({ "valid" => File.join(workdir, "valid.bin") }, fuzz_pipeline, showmap_bin)
+        assert_equal true, batch[:ok]
+        hit_eids = batch.dig(:maps, "valid").keys
+        hit_domains = hit_eids.filter_map { |eid| ids_info[:edge_domains][eid] }.uniq
+        %w[prism parse_y cruby_compile].each do |dom|
+          assert_includes hit_domains, dom, "expected afl-showmap hits in #{dom} domain: #{hit_domains.inspect}"
+        end
+        hit_funcs = hit_eids.filter_map { |eid| ids_info[:edge_functions][eid] }.uniq
+        assert hit_funcs.any? { |fn| fn.start_with?("pm_compile_", "pm_iseq_") },
+               "expected Prism compiler functions hit in afl-showmap: #{hit_funcs.take(20).inspect}"
+        assert hit_funcs.any? { |fn| fn.start_with?("iseq_compile_", "rb_iseq_compile_") },
+               "expected parse.y compiler functions hit in afl-showmap: #{hit_funcs.take(20).inspect}"
+      end
+
+      # Exercise all 3 invariant outcomes (internal_compile_error, compile_mismatch,
+      # syntax_mismatch) against a lightweight mock harness reusing the cached libcruby_pipeline.a!
+      mock_fuzz_root = prepare_mock_pipeline_fuzz(workdir)
+      mock_pipeline = File.join(workdir, "build_mock", "fuzz.pipeline")
+      assert_cmd(
+        File.join(mock_fuzz_root, "harnesses/prism/build_cruby_compile.sh"),
+        "--mode", "fuzz",
+        "--pipeline-diff",
+        "--fuzz-root", mock_fuzz_root,
+        "--oracle-dir", oracle_dir,
+        "--afl-path", repo_path("build/afl"),
+        "--output", mock_pipeline
+      )
+
+      afl_crashes = File.join(workdir, "afl", "pipeline-main", "crashes")
+      triage_dir = File.join(workdir, "triage")
+      corpus_dir = File.join(workdir, "corpus")
+      FileUtils.mkdir_p([afl_crashes, triage_dir, corpus_dir])
+      File.binwrite(File.join(corpus_dir, "seed0.bin"), seed_bytes("1 + 2\n"))
+      File.write(File.join(File.dirname(afl_crashes), "cmdline"), "#{mock_pipeline}\n")
+
+      cases = {
+        "id:000000,sig:06" => ["MOCK_PIPE_INTERNAL\n", "INVARIANT[cruby_pipeline]: kind=internal_compile_error compiler=prism bug=adjust_bug"],
+        "id:000001,sig:06" => ["MOCK_PIPE_CMISMATCH\n", "INVARIANT[cruby_pipeline]: kind=compile_mismatch sub=prism_ok_parse_y_err tag=invalid_break"],
+        "id:000002,sig:06" => ["MOCK_PIPE_SMISMATCH\n", "INVARIANT[cruby_pipeline]: kind=syntax_mismatch sub=prism_err_parse_y_ok tag=parse_err"]
+      }
+      cases.each do |cid, (src_code, expected_hdr)|
+        raw_bytes = seed_bytes(src_code)
+        cpath = File.join(afl_crashes, cid)
+        File.binwrite(cpath, raw_bytes)
+        _o, cerr, cst = run_cmd(mock_pipeline, cpath)
+        refute cst.success?, "expected #{src_code.inspect} to abort"
+        assert_includes cerr, expected_hdr
+      end
+
+      with_env("TRIAGE_MINIMIZE" => "0", "TRIAGE_DIGEST" => "0", "FUZZ_DIR" => workdir, "FUZZ_BUILD_DIR" => File.join(workdir, "build_mock")) do
+        capture_io do
+          FuzzTriage.run_triage_pipeline(
+            output_dirs: [File.join(workdir, "afl")],
+            testcases_dir: triage_dir,
+            coverage_bin: "",
+            diff_coverage_bin: mock_pipeline,
+            corpus_dir: corpus_dir,
+            threads: 1
+          )
+        end
+      end
+
+      abrt_buckets = Dir.glob(File.join(triage_dir, "ABRT", "*")).select { |d| File.directory?(d) }
+      assert_equal 3, abrt_buckets.size, "expected 3 distinct ABRT buckets under #{triage_dir}"
+
+      by_kind = {}
+      abrt_buckets.each do |bdir|
+        meta = JSON.parse(File.read(File.join(bdir, "meta.json")))
+        assert_equal "cruby_pipeline", meta["verify_profile"]
+        kind = meta.dig("symptom", "invariant", "fields", "kind")
+        by_kind[kind] = [bdir, meta]
+      end
+
+      assert_equal %w[compile_mismatch internal_compile_error syntax_mismatch], by_kind.keys.sort
+      assert_equal "cruby_crash", FuzzClustering.oracle_family(by_kind["internal_compile_error"].last)
+      assert_equal "diff_parse_y", FuzzClustering.oracle_family(by_kind["compile_mismatch"].last)
+      assert_equal "diff_parse_y", FuzzClustering.oracle_family(by_kind["syntax_mismatch"].last)
+      assert_equal true, by_kind["compile_mismatch"].last.dig("diff_coverage", "available")
+      assert_equal true, by_kind["syntax_mismatch"].last.dig("diff_coverage", "available")
+
+      # Verify standalone verify_bucket.sh reproduces cruby_pipeline buckets WITHOUT --repo-root!
+      mock_verify_dir = File.join(workdir, "verify_mock")
+      by_kind.each do |kind, (bdir, _meta)|
+        v_out, _v_err, v_st = run_cmd(
+          File.join(mock_fuzz_root, "triage/verify_bucket.sh"),
+          "--fuzz-root", mock_fuzz_root,
+          "--bucket-dir", bdir,
+          "--json",
+          env: {
+            "VERIFY_BUILD_DIR" => mock_verify_dir,
+            "PRISM_A_DIR" => nil,
+            "PRISM_DIR" => nil,
+            "PRISM_ROOT" => nil,
+            "FUZZ_BUILD_DIR" => File.join(workdir, "build_mock")
+          }
+        )
+        assert_equal 1, v_st.exitstatus, "expected verify_bucket.sh to reproduce #{kind}: #{v_out}"
+        v_rep = JSON.parse(v_out)
+        assert_equal 2, v_rep["failed"], "expected both input.min and archived raw input to fail for #{kind}"
+      end
+
+      # Also verify real unmodified verify_bucket.sh --profile cruby_pipeline --build-only succeeds cleanly
+      vb_out, vb_err, vb_st = run_cmd(
+        repo_path("triage/verify_bucket.sh"),
+        "--fuzz-root", root_dir,
+        "--profile", "cruby_pipeline",
+        "--build-only",
+        env: {
+          "VERIFY_BUILD_DIR" => verify_build_dir,
+          "PRISM_A_DIR" => nil,
+          "PRISM_DIR" => nil,
+          "PRISM_ROOT" => nil
+        }
+      )
+      assert vb_st.success?, "verify_bucket.sh --profile cruby_pipeline --build-only failed: #{vb_err}"
+      assert File.executable?(vb_out.strip), "expected executable verify_runner.cruby_pipeline at #{vb_out.strip.inspect}"
     end
   end
 
@@ -876,6 +1048,42 @@ class TriageDiffParseYTest < Minitest::Test
       src[(brace_idx + 2)..]
     File.write(cruby_vm_path, patched)
     mock_diff_fuzz
+  end
+
+  def prepare_mock_pipeline_fuzz(workdir)
+    mock_fuzz = File.join(workdir, "mock_pipeline_fuzz")
+    FileUtils.mkdir_p(mock_fuzz)
+    %w[harnesses triage runtime].each do |sub|
+      FileUtils.cp_r(repo_path(sub), File.join(mock_fuzz, sub))
+    end
+
+    cc_path = File.join(mock_fuzz, "harnesses/prism/cruby_compile.c")
+    src = File.read(cc_path)
+
+    prism_cb = "static VALUE compile_prism_parse_cb(VALUE src_str) {\n"
+    p_idx = src.index(prism_cb)
+    refute_nil p_idx, "compile_prism_parse_cb not found in #{cc_path}"
+    src = src.sub(
+      prism_cb,
+      prism_cb + "    if (RSTRING_LEN(src_str) >= 19 && memcmp(RSTRING_PTR(src_str), \"MOCK_PIPE_SMISMATCH\", 19) == 0) { return Qfalse; }\n"
+    )
+
+    iseq_cb = "static VALUE compile_iseq_cb(VALUE raw_arg) {\n    const compile_call_arg_t *arg = (const compile_call_arg_t *) raw_arg;\n"
+    i_idx = src.index(iseq_cb)
+    refute_nil i_idx, "compile_iseq_cb not found in #{cc_path}"
+    src = src.sub(
+      iseq_cb,
+      iseq_cb +
+      "    if (RSTRING_LEN(arg->src_str) >= 18 && memcmp(RSTRING_PTR(arg->src_str), \"MOCK_PIPE_INTERNAL\", 18) == 0) {\n" \
+      "        rb_raise(rb_eSyntaxError, \"<compiled>:1: iseq_set_sequence: adjust bug 0 < 1\");\n" \
+      "    }\n" \
+      "    if (RSTRING_LEN(arg->src_str) >= 19 && memcmp(RSTRING_PTR(arg->src_str), \"MOCK_PIPE_CMISMATCH\", 19) == 0 && arg->method_id == g_id_compile_parsey) {\n" \
+      "        rb_raise(rb_eSyntaxError, \"<compiled>:1: Invalid break\");\n" \
+      "    }\n"
+    )
+
+    File.write(cc_path, src)
+    mock_fuzz
   end
 
   def write_tar_gz(path, entries)
