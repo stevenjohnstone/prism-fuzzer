@@ -67,8 +67,11 @@ end
 Built on **AFL++ v5.03c** and **LLVM 20**, `prism-fuzzer` combines modern greybox, grammar, and differential techniques across [`harnesses/prism/`](harnesses/prism/) and [`patches/afl/`](patches/afl/):
 
 - **Sanitizer-free coverage instrumentation ([`aflplusplus.patch`](patches/afl/aflplusplus.patch))**: Strips compiler-inserted ASan/UBSan/MSan checks and `assert()` traps from AFL++'s coverage CFG, eliminating 40–130% bitmap inflation without disabling runtime sanitizer detection.
-- **LTO, CmpLog (Redqueen), IJON & Sand**: Combines collision-free link-time coverage, input-to-state comparison solving (CmpLog), state-guided exploration (IJON) paired with strict allocation tracking (`PM_XALLOCATOR`), decoupled sanitizer execution (AFL++ Sand), and diverse power schedules.
-- **Live grammar synthesis ([`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz), [`runtime/grammar.rb`](runtime/grammar.rb))**: Evolves structurally valid and near-valid Ruby programs directly from CRuby's `parse.y` grammar with parser feedback, continuously feeding deep syntax, regexp, encoding, comment, and heredoc seeds into the AFL++ fleet.
+- **LTO, CmpLog (Redqueen), Patchless IJON & Sand**: Combines collision-free link-time coverage, input-to-state comparison solving (CmpLog), patchless post-parse IJON state guidance ([`prism_ijon.h`](harnesses/prism/include/prism_ijon.h) — AST 2-paths, node flags, diagnostics, encodings, arena & constant-pool metrics over an 8 KiB / 128-slot IJON map, also enabled on OSS-Fuzz AFL builds), strict allocation tracking (`PM_XALLOCATOR`), decoupled sanitizer execution (AFL++ Sand), and diverse power schedules.
+- **Dual grammar synthesis (`lrama-fuzz` + `Grammar-Mutator`)**:
+  - **Live `parse.y` synthesis ([`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz), [`runtime/grammar.rb`](runtime/grammar.rb))**: Evolves structurally valid and near-valid Ruby programs directly from CRuby's `parse.y` grammar with parser feedback, continuously feeding deep syntax, regexp, encoding, comment, and heredoc seeds into the AFL++ fleet.
+  - **Hybrid Grammar-Mutator ([`grammar/ruby.json`](grammar/ruby.json), [`patches/grammar-mutator/`](patches/grammar-mutator/README.md))**: Runs AFL++'s Grammar-Mutator in `mutator_mixed` mode (`NO_ANTLR=1`, tmpfs `.tree` storage) on differential and compiler workers—evolving Ruby parse trees alongside AFL++ havoc with zero reverse-parsing overhead on havoc/synced inputs.
+  - **Feature-matrix benchmarking ([`runtime/fuzzer_bench.rb`](runtime/fuzzer_bench.rb), `make fuzzer-bench`)**: Compares shapes, IJON, grammar modes (`none` / `mutator` / `mutator_mixed` / `lrama`), CmpLog, and Sand on identical corpora using normalized CFG edges, AST 2-paths (`2Paths` / `Val2P`), valid-syntax %, and unique crash signatures.
 - **Multi-oracle differential fuzzing**:
   - **Prism vs. CRuby `parse.y` ([`diff.c`](harnesses/prism/diff.c))**: Compares syntax acceptance, AST structure, lexical scope locals, and bytecode/eval behavior against CRuby's legacy parser.
   - **CRuby dual-compiler & full-pipeline differential ([`compile.rb`](campaigns/compile.rb), [`pipeline.rb`](campaigns/pipeline.rb))**: Compiles inputs through both Prism and `parse.y` backends—either gated on parser agreement to concentrate coverage on bytecode compilation and verification, or end-to-end across all four parse/compile stages to catch cross-pipeline syntax and compilation divergences.
@@ -244,6 +247,8 @@ make update
 │   ├── fuzz_triage_cheatsheet.md   quick reference for inspect, explain, verify, match, and bisect
 │   └── report_demo.gif             interactive HTML report tour GIF
 ├── examples                        curated example campaign topologies (01_ab_pr_diff.rb .. 06_imperative_orchestrator.rb)
+├── grammar
+│   └── ruby.json                   custom Ruby fuzzing grammar for AFL++ Grammar-Mutator (`mutator_mixed` workers)
 ├── harnesses
 │   └── prism
 │       ├── accel.c                 SIMD vs. SWAR scanner differential test harness
@@ -262,6 +267,7 @@ make update
 ├── oss-fuzz                        OSS-Fuzz integration (Dockerfile, build.sh, project.yaml, *.options)
 ├── patches
 │   ├── afl                         SanitizerCoverage patches removing sanitizer edge inflation & PPC fixes
+│   ├── grammar-mutator             `NO_ANTLR=1`, UTF-8 escaping, tmpfs `.tree`, and trim-preservation patches
 │   └── prism                       minimal fuzzing patches applied to synced Prism checkouts
 ├── report
 │   ├── coverage.sh                 collects deduplicated corpus llvm-cov HTML, JSON, and LCOV data
@@ -272,6 +278,7 @@ make update
 │   ├── campaign.rb                 lifecycle timer, Docker container runner, and Campaign::Instance API
 │   ├── campaign_dsl.rb             Ruby topology & campaign DSL compiler frontend
 │   ├── corpus.rb                   seed corpus extractor and generator from Prism fixtures
+│   ├── fuzzer_bench.rb             feature-matrix fuzzer benchmark (IJON, Grammar-Mutator vs lrama, CmpLog, Sand)
 │   ├── grammar.rb                  lrama-fuzz parse.y seed synthesizer, mutators, and supervisor
 │   ├── grammar_bench.rb            quantitative benchmark suite for grammar seed synthesis
 │   ├── lib                         campaign/ and topology/ compiler, builder, and launch planner modules

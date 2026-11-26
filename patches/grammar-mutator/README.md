@@ -1,48 +1,50 @@
-# Grammar-Mutator Patch (`grammar-mutator.patch`)
+# Grammar-Mutator Integration & Patch (`grammar-mutator.patch`)
 
-[`grammar-mutator.patch`](grammar-mutator.patch) patches AFL++'s [Grammar-Mutator](https://github.com/AFLplusplus/Grammar-Mutator) for use with our Ruby grammar ([`test/fuzz/grammar/ruby.json`](../grammar/ruby.json)).
+[`grammar-mutator.patch`](grammar-mutator.patch) patches AFL++'s [Grammar-Mutator](https://github.com/AFLplusplus/Grammar-Mutator) (pinned to `stable` commit `f5daa1db93b9865000f282f5a261babf55d2eba7` in [`docker/Dockerfile`](../../docker/Dockerfile)) for use with our custom Ruby grammar ([`grammar/ruby.json`](../../grammar/ruby.json)).
 
-## Summary of Changes
+## How It Runs (`mutator_mixed` Mode)
+
+Campaign workers declare `mutator "libgrammarmutator-ruby.so"` (e.g. `small-diff-gm` in `campaigns/ijon-funnel.rb`, `ijon-diff-gm` in `campaigns/ijon-small.rb`, `diff-gm` in `campaigns/default.rb`, `small-compile-gm` in `campaigns/compile.rb`, and `small-pipeline-gm` in `campaigns/pipeline.rb`).
+
+- **Build (`runtime/lib/topology/builder.rb`)**: Compiles `libgrammarmutator-ruby.so` and `grammar_generator-ruby` on demand into `<ws>/build/` with `NO_ANTLR=1` (zero Java/ANTLR4 dependency, ~4s build), stamped against `grammar/ruby.json` and `grammar-mutator.patch`.
+- **Launch (`launch_planner.rb` + `launch_stager.rb`)**:
+  - Sets `AFL_CUSTOM_MUTATOR_LIBRARY=<bin_dir>/libgrammarmutator-ruby.so` **without** `AFL_CUSTOM_MUTATOR_ONLY`, and sets `GRAMMAR_MUTATOR_TREE_DIR=/tmp/afl-tmpdir/<worker_id>/trees` (on in-memory `tmpfs`).
+  - Generates 200 initial grammar seeds and companion `.tree` files via `grammar_generator-ruby` alongside the worker's regular corpus seeds.
+- **Mixed structural + byte-level pipeline**:
+  - Entries with a `.tree` file (initial generator seeds + Grammar-Mutator outputs) are mutated by **both** Grammar-Mutator (subtree splicing via `chunk_store`, tree mutation, tree trimming) **and** AFL++ havoc.
+  - Havoc-mutated or synced entries without a `.tree` file skip Grammar-Mutator in O(1) (since runtime ANTLR4 reverse-parsing is disabled) and run through normal AFL++ havoc at full speed—so bidirectional sync with other workers incurs zero parsing overhead.
+
+## Summary of Patch Changes
 
 ### 1. UTF-8 Multi-Byte Terminal Escaping (`grammars/f1_c_gen.py`)
 
-Upstream `f1_c_gen.py` iterates over Python `str` codepoints (`[self.esc_char(c) for c in token]`) and passes `len(esc_token_chars)` (the number of Unicode characters, or worse, the number of escaped C string characters) as the byte length to `node_create_with_val`. For multi-byte UTF-8 terminals in `ruby.json`, that produces invalid C character escapes or truncated byte lengths.
+Upstream `f1_c_gen.py` iterates over Python `str` codepoints and passes character/escape counts as byte lengths to `node_create_with_val`. For multi-byte UTF-8 terminals in `grammar/ruby.json`, that produces invalid C escapes or truncated byte lengths. The patch encodes each terminal as UTF-8 bytes and emits exact C byte strings and byte lengths.
 
-The patch encodes each terminal token as UTF-8 bytes (`token_bytes = token.encode('utf-8')`), formats it via `bytes_to_c_str(token_bytes)`, and passes `len(token_bytes)` as the exact byte length.
+### 2. Zero-ANTLR Build & Skipping Runtime Reverse-Parsing (`src/Makefile`, `src/tree.c`, `src/grammar_mutator.c`)
 
-### 2. Storing Serialized Parse Trees in `tmpfs` (`src/grammar_mutator.c`)
+When Grammar-Mutator sees a queue entry without a companion `.tree` file, upstream calls `load_tree_from_test_case_ex()` to invoke an ANTLR4 C++ parser at runtime. On arbitrary byte-mutated Ruby inputs, reverse-parsing is slow and fails on non-grammar tokens.
 
-Grammar-Mutator represents each test case as a derivation tree (`tree_t`) and serializes a companion `.tree` file alongside every queue entry so it can perform structural tree mutations and splicing without re-parsing raw bytes.
+With `NO_ANTLR=1`:
+- `src/grammar_mutator.c` skips `load_tree_from_test_case_ex()` and returns `NULL` immediately when no `.tree` file exists.
+- `src/tree.c` stubs `tree_parse()` under `-DGRAMMAR_MUTATOR_NO_ANTLR`.
+- `src/Makefile` omits `libantlr4_shim.a` and `libantlr4-runtime.a`, allowing a pure C + Python build with no Java or `antlr4.jar` requirement.
 
-By default, Grammar-Mutator derives the `.tree` directory path by replacing `/queue` with `/trees` inside the fuzzer's output directory (`tmp/fuzz/afl/grammar/trees`). When running inside Docker with `tmp/fuzz/afl` bind-mounted from the host (especially on macOS or Windows), reading and writing thousands of `.tree` files over the bind mount becomes a major I/O bottleneck.
+### 3. Per-Worker `tmpfs` `.tree` Directory (`src/grammar_mutator.c`)
 
-The patch redirects `.tree` reads and writes to `/tmp/afl-tmpdir/grammar/trees`, which lives on the container's in-memory `tmpfs` mount (`/tmp`). When the fuzzing session exits cleanly, [`test/fuzz/runtime/run.sh`](../runtime/run.sh) copies `/tmp/afl-tmpdir/grammar/trees` to `tmp/fuzz/afl/.grammar-trees` on disk (and restores it on startup) so `AFL_AUTORESUME=1` works across runs.
-
-### 3. Skipping Runtime ANTLR4 Reverse-Parsing (`src/grammar_mutator.c`)
-
-When Grammar-Mutator encounters a queue file that does not already have a serialized `.tree` file on disk, upstream `afl_custom_queue_get` and `afl_custom_queue_new_entry` call `load_tree_from_test_case(fn)`, which invokes an ANTLR4 C++ parser at runtime to reverse-parse the raw input bytes back into a grammar tree.
-
-In our setup:
-
-- Initial seeds for the `grammar` worker are generated by `./build/grammar_generator-ruby`, which writes both the seed file and its pre-built `.tree` file before `afl-fuzz` starts.
-- The `grammar` worker runs with `AFL_NO_SYNC=1` (one-way sync: `grammar` shares its findings with `main`, but does not import raw byte-mutated inputs from other workers).
-- Every input produced by `grammar` itself already has its `tree_t` in memory (`data->mutated_tree` or `data->trimmed_tree`).
-
-Calling ANTLR4 at runtime is therefore unnecessary and very slow (especially on inputs with arbitrary byte headers or large nested expressions). The patch skips `load_tree_from_test_case` when no `.tree` file exists.
+Upstream writes `.tree` files next to `queue/` inside the bind-mounted AFL++ output directory, creating heavy host bind-mount I/O on macOS/Docker. The patch reads `GRAMMAR_MUTATOR_TREE_DIR` (falling back to `/tmp/afl-tmpdir/grammar/trees`) so every worker stores its `.tree` files on in-memory `tmpfs` without colliding with other workers or parallel benchmark runs.
 
 ### 4. Preserving `data->trimmed_tree` Across `afl_custom_post_trim(data, 0)` (`src/grammar_mutator.c`)
 
-During custom trimming (`trim_case_custom`), AFL++ calls `afl_custom_trim` to produce a candidate smaller tree (`data->trimmed_tree`), executes the target, and checks whether the coverage trace checksum matches the original queue entry:
+When trimming uncovers a new coverage edge, AFL++ 5.03c calls `afl_custom_post_trim(data, 0)` and then immediately calls `save_if_interesting()` → `afl_custom_queue_new_entry()`. Upstream frees `data->trimmed_tree` in `afl_custom_post_trim(data, 0)`, losing the tree before `afl_custom_queue_new_entry()` can save it. The patch keeps `data->trimmed_tree` alive across `post_trim(data, 0)` so `afl_custom_queue_new_entry()` can consume it, write its `.tree` file, and add its subtrees to `chunk_store`; unused trimmed trees are freed at the start of the next `init_trim`, `trim`, or `fuzz_count`.
 
-- If the checksum matches, AFL++ calls `afl_custom_post_trim(data, 1)`, which swaps `data->trimmed_tree` into `data->tree_cur`.
-- If the checksum **differs** (because trimming removed a branch and accidentally uncovered a *new* coverage edge), AFL++ 5.03c first calls `afl_custom_post_trim(data, 0)` and **then** calls `save_if_interesting()`, which invokes `afl_custom_queue_new_entry()` to save the newly discovered path to the queue.
+### 5. `$ORIGIN` RPATH (`src/Makefile`)
 
-Upstream `afl_custom_post_trim(data, 0)` immediately frees `data->trimmed_tree` and sets it to `NULL`. When `save_if_interesting()` subsequently calls `afl_custom_queue_new_entry()`, `data->mutated_tree` is `NULL` and `data->trimmed_tree` has already been freed—forcing upstream to fall back to `load_tree_from_test_case()` (or losing the tree altogether).
+Links `grammar_generator-ruby` with `-Wl,-rpath,'$ORIGIN'` so it resolves `libgrammarmutator-ruby.so` from the same `<ws>/build/` or `<ws>/bin/` snapshot directory.
 
-The patch keeps `data->trimmed_tree` alive across `afl_custom_post_trim(data, 0)` so that if `save_if_interesting()` immediately calls `afl_custom_queue_new_entry()`, it can consume `data->trimmed_tree`, write its `.tree` file to `/tmp/afl-tmpdir/grammar/trees`, and add its subtrees to `chunk_store`. If the trim step was not interesting, `data->trimmed_tree` is freed at the start of the next `afl_custom_trim`, `afl_custom_init_trim`, `afl_custom_fuzz_count`, or `afl_custom_queue_get` call.
+## Benchmarking Against `lrama-fuzz`
 
-### 5. Build Dependency Tracking and `$ORIGIN` RPATH (`GNUmakefile`, `src/Makefile`)
+Use [`runtime/fuzzer_bench.rb`](../../runtime/fuzzer_bench.rb) (`make fuzzer-bench`) to compare plain AFL++, Grammar-Mutator (`mutator`, `mutator_mixed`), and `lrama-fuzz` (`lrama`) on identical seeds and time budgets:
 
-- Adds `$(GRAMMAR_FILE)` (`test/fuzz/grammar/ruby.json`) as a prerequisite of the code-generation targets in `GNUmakefile` so editing `ruby.json` triggers a rebuild of `src/f1_c_fuzz.c`.
-- Links `grammar_generator-ruby` with `-Wl,-rpath,'$ORIGIN'` so `./build/grammar_generator-ruby` can find `./build/libgrammarmutator-ruby.so` after both binaries are copied into `./build/`.
-
+```bash
+FUZZER_BENCH_ARGS="--shapes prism_diff_ruby --ijon on --grammar none,mutator,mutator_mixed,lrama --duration 60" make fuzzer-bench
+```
