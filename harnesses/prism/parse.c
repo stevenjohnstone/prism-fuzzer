@@ -1568,10 +1568,6 @@ __attribute__((noinline)) void harness_parse(const uint8_t *input, size_t size, 
 #else
         parser = pm_parser_new(arena, source_buf, size, options);
 #endif
-#ifdef PRISM_FUZZ_IJON
-        fuzz_ijon_state_t ijon_state;
-        fuzz_ijon_attach(parser, &ijon_state, 0U);
-#endif
         node = pm_parse(parser);
 #ifdef PRISM_FUZZ_IJON
         fuzz_ijon_post_parse(arena, parser, node, 0U);

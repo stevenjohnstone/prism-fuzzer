@@ -512,11 +512,10 @@ __attribute__((noinline)) void harness(const uint8_t *input, size_t size) {
         }
     } else {
         parser = pm_parser_new(arena, source_buf, src_len, options);
-#ifdef PRISM_FUZZ_IJON
-        fuzz_ijon_state_t ijon_state;
-        fuzz_ijon_attach(parser, &ijon_state, 0U);
-#endif
         node = pm_parse(parser);
+#ifdef PRISM_FUZZ_IJON
+        fuzz_ijon_post_parse(arena, parser, node, 0U);
+#endif
     }
 
     pm_buffer_t *ast_buf = pm_buffer_new();

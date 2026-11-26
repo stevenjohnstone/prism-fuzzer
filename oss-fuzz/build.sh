@@ -92,6 +92,14 @@ COMMON_DEFINES=(
   -Wno-switch
 )
 
+if [ "${FUZZING_ENGINE:-}" = "afl" ] && [ "${AFL_LLVM_CMPLOG:-}" != "1" ]; then
+  export AFL_LLVM_IJON=1
+  COMMON_DEFINES+=(
+    -DPRISM_FUZZ_IJON
+    "-I$HARNESS_DIR/include"
+  )
+fi
+
 if [ "${AFL_LLVM_CMPLOG:-}" = "1" ]; then
   # Match test/fuzz/Makefile CmpLog builds so AFL++ Redqueen hooks libc strncasecmp.
   CMPLOG_SRCS=()

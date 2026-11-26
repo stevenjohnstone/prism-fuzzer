@@ -190,10 +190,6 @@ static void diff_run_prism(
 
     pm_arena_t *arena = pm_arena_new();
     pm_parser_t *parser = pm_parser_new(arena, source_buf, size, options);
-#ifdef PRISM_FUZZ_IJON
-    fuzz_ijon_state_t ijon_state;
-    fuzz_ijon_attach(parser, &ijon_state, 0U);
-#endif
     pm_node_t *root = pm_parse(parser);
 #ifdef PRISM_FUZZ_IJON
     fuzz_ijon_post_parse(arena, parser, root, 0U);

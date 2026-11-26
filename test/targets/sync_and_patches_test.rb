@@ -32,7 +32,7 @@ class TargetsSyncAndPatchesTest < Minitest::Test
       assert_equal upstream[:v1], a["commit"]
 
       applied = Array(a.dig("resolved", "applied_patches"))
-      assert_equal 5, applied.size, "expected all 5 patches applied, got #{applied.inspect}"
+      assert_equal 4, applied.size, "expected all 4 patches applied, got #{applied.inspect}"
       assert_empty Array(a.dig("resolved", "skipped_patches"))
       assert a.dig("resolved", "templates_generated"), "expected templates_generated=true"
 
@@ -102,8 +102,8 @@ class TargetsSyncAndPatchesTest < Minitest::Test
 
       applied = Array(b.dig("resolved", "applied_patches"))
       skipped = Array(b.dig("resolved", "skipped_patches"))
-      assert_equal 4, applied.size,
-                   "expected 4 applied patches, got applied=#{applied.inspect} skipped=#{skipped.inspect}"
+      assert_equal 3, applied.size,
+                   "expected 3 applied patches, got applied=#{applied.inspect} skipped=#{skipped.inspect}"
       assert_equal 1, skipped.size,
                    "expected 1 skipped patch, got applied=#{applied.inspect} skipped=#{skipped.inspect}"
       assert_includes skipped[0]["patch"], "0002"
@@ -394,12 +394,11 @@ class TargetsSyncAndPatchesTest < Minitest::Test
 
       # Checkout v1 in synthetic upstream and:
       # 1. Tweak outer context in include/prism/internal/arena.h so 0001 exercises `-C1 --index`.
-      # 2. Tweak immediate 1-line context in include/prism/compiler/inline.h (whose v1 blob
-      #    matches 0004's exact preimage SHA in the cached mirror) so 0004 MUST fall back to
-      #    `git apply --3way` via GIT_ALTERNATE_OBJECT_DIRECTORIES *after* 0003 has already
-      #    modified src/integer.c (which 0004 also patches).
+      # 2. Tweak immediate 1-line context in src/integer.c (whose v1 blob matches 0003's
+      #    exact preimage SHA in the cached mirror) so 0003 MUST fall back to
+      #    `git apply --3way` via GIT_ALTERNATE_OBJECT_DIRECTORIES.
       arena_h = File.join(repo, "include/prism/internal/arena.h")
-      inline_h = File.join(repo, "include/prism/compiler/inline.h")
+      integer_c = File.join(repo, "src/integer.c")
       run_cmd("git", "-C", repo, "checkout", "-q", ws[:upstream][:v1])
       File.write(
         arena_h,
@@ -409,14 +408,14 @@ class TargetsSyncAndPatchesTest < Minitest::Test
         )
       )
       File.write(
-        inline_h,
-        File.read(inline_h).sub(
-          "#   define PRISM_INLINE inline\n#endif\n",
-          "#   define PRISM_INLINE inline\n#endif /* _MSC_VER */\n"
+        integer_c,
+        File.read(integer_c).sub(
+          " * vs an O(n^2) algorithm.\n */",
+          " * vs an O(n^2) algorithm (upstream tweak forcing 3-way on 0003).\n */"
         )
       )
-      run_cmd("git", "-C", repo, "add", "include/prism/internal/arena.h", "include/prism/compiler/inline.h")
-      run_cmd("git", "-C", repo, "commit", "-q", "-m", "Upstream context tweaks requiring -C1 and chained 3-way")
+      run_cmd("git", "-C", repo, "add", "include/prism/internal/arena.h", "src/integer.c")
+      run_cmd("git", "-C", repo, "commit", "-q", "-m", "Upstream context tweaks requiring -C1 and 3-way")
       v4_sha, = run_cmd("git", "-C", repo, "rev-parse", "HEAD")
       v4_sha = v4_sha.strip
 
@@ -432,16 +431,13 @@ class TargetsSyncAndPatchesTest < Minitest::Test
       b = d.dig("sources", "prism_b")
       refute_nil b
       assert_equal v4_sha, b["commit"]
-      assert_equal 5, Array(b.dig("resolved", "applied_patches")).size
+      assert_equal 4, Array(b.dig("resolved", "applied_patches")).size
       merged_arena = File.read(File.join(b["path"], "include/prism/internal/arena.h"))
       assert_includes merged_arena, "pm_arena_align_t"
       assert_includes merged_arena, "upstream doc tweak shifting 0001 context"
-      merged_inline = File.read(File.join(b["path"], "include/prism/compiler/inline.h"))
-      assert_includes merged_inline, "#endif /* _MSC_VER */"
-      assert_includes merged_inline, "#include \"prism/internal/ijon.h\""
       merged_integer = File.read(File.join(b["path"], "src/integer.c"))
       assert_includes merged_integer, "#ifndef PM_INTEGER_DIVIDE_THRESHOLD"
-      assert_includes merged_integer, "PM_IJON_MAX(0x601u, level);"
+      assert_includes merged_integer, "upstream tweak forcing 3-way on 0003"
     end
   end
 

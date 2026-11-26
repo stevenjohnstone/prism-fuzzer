@@ -223,10 +223,6 @@ module PrismFuzzerTest
       File.write(File.join(dir, "src/integer.c"), integer_lines.join("\n"))
       populate_patch_preimage!(
         dir,
-        File.join(root_dir, "patches/prism/0004-ijon-source-guidance.patch")
-      )
-      populate_patch_preimage!(
-        dir,
         File.join(root_dir, "patches/prism/0005-inline-span-assertions.patch")
       )
 
