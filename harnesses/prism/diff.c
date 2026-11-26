@@ -195,6 +195,9 @@ static void diff_run_prism(
     fuzz_ijon_attach(parser, &ijon_state, 0U);
 #endif
     pm_node_t *root = pm_parse(parser);
+#ifdef PRISM_FUZZ_IJON
+    fuzz_ijon_post_parse(arena, parser, root, 0U);
+#endif
     diff_copy_enc_token(pm_parser_encoding_name(parser), out_enc, out_enc_cap);
     const pm_location_t *dloc = pm_parser_data_loc(parser);
     if (dloc != NULL && dloc->length > 0) {

@@ -132,6 +132,9 @@ void fuzz_prism_side_run(const uint8_t *input, size_t size, fuzz_prism_side_resu
         fuzz_ijon_attach(parser, &ijon_state, FUZZ_IJON_SIDE_SALT);
 #endif
         node = pm_parse(parser);
+#ifdef PRISM_FUZZ_IJON
+        fuzz_ijon_post_parse(arena, parser, node, FUZZ_IJON_SIDE_SALT);
+#endif
         const uint8_t *pstart = pm_parser_start(parser);
         const uint8_t *pend = pm_parser_end(parser);
         parsed_size = (pend != NULL && pstart != NULL && pend >= pstart) ? (size_t) (pend - pstart) : body_len;

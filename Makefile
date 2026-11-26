@@ -313,6 +313,10 @@ bench: docker-build targets-sync
 	$(Q) $(MAKEDIRS) $(FUZZ_DIR)
 	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ruby ./runtime/grammar_bench.rb --json $(_WS_DIR_REL)/grammar-bench.json $(GRAMMAR_BENCH_ARGS)
 
+fuzzer-bench: docker-build
+	$(ECHO) "benchmarking fuzzer feature matrix"
+	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ruby ./runtime/fuzzer_bench.rb --json tmp/fuzzer-bench/fuzzer-bench.json $(FUZZER_BENCH_ARGS)
+
 accel: docker-build targets-sync
 	$(ECHO) "running SIMD vs SWAR differential accel fuzzer"
 	$(Q) $(MAKEDIRS) $(FUZZ_DIR)

@@ -59,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ensures `ruby --parser=prism` and `ruby -rprism` in the container match the
 # upstream Prism target under test.
 # Targets at other refs can also be built incrementally into build/targets/ruby/.
-ARG RUBY_GIT_REF=17eecca74a586156acebb8b06417f4df17cdedfc
+ARG RUBY_GIT_REF=11121e7878cd87f02f6b4f5eb4a03db681d37ad4
 ARG PRISM_GIT_REF=a5e01d818fa45f2cea9232754251a6855f82ab98
 ENV RUBY_ORACLE_DIR=/opt/ruby
 COPY docker/sync_prism_into_ruby.rb /tmp/sync_prism_into_ruby.rb
@@ -88,6 +88,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends ccache \
 ENV CCACHE_DIR=/ccache
 ENV CCACHE_MAXSIZE=5G
 ENV CCACHE_NOHASHDIR=1
+
+# Shrink AFL++'s IJON map (default 64 KiB + 512 u64 slots = 68 KiB) so
+# trace_bits stays L1d-friendly on Prism's 15-26 KiB CFG maps.
+ARG IJON_MAP_SIZE=8192
+ARG IJON_MAX_ENTRIES=128
+RUN grep -qF '#define MAP_SIZE_IJON_MAP 65536' /AFLplusplus/include/config.h \
+    && grep -qF '#define MAP_SIZE_IJON_ENTRIES 512' /AFLplusplus/include/config.h \
+    && sed -i "s/^#define MAP_SIZE_IJON_MAP 65536/#define MAP_SIZE_IJON_MAP ${IJON_MAP_SIZE}/" /AFLplusplus/include/config.h \
+    && sed -i "s/^#define MAP_SIZE_IJON_ENTRIES 512/#define MAP_SIZE_IJON_ENTRIES ${IJON_MAX_ENTRIES}/" /AFLplusplus/include/config.h \
+    && make -C /AFLplusplus clean && make -C /AFLplusplus source-only && make -C /AFLplusplus install
 
 WORKDIR /prism-fuzzer
 USER $USERNAME

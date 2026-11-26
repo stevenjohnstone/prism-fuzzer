@@ -1573,6 +1573,9 @@ __attribute__((noinline)) void harness_parse(const uint8_t *input, size_t size, 
         fuzz_ijon_attach(parser, &ijon_state, 0U);
 #endif
         node = pm_parse(parser);
+#ifdef PRISM_FUZZ_IJON
+        fuzz_ijon_post_parse(arena, parser, node, 0U);
+#endif
     }
 
     // Line offsets must start at 0, be strictly monotonically increasing, and not exceed parsed_size.
