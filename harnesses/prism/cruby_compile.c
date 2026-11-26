@@ -205,6 +205,21 @@ static void compile_core_ids_init(void) {
 
 #if defined(__SANITIZE_ADDRESS__) || (defined(__has_feature) && __has_feature(address_sanitizer))
 #define COMPILE_ASAN_ACTIVE 1
+/* libruby-static.a's gc.c is built without ASan, so Ruby GC object slots are
+ * never poisoned by GC. Provide weak no-op shims for ASan-instrumented iseq.c
+ * calls to rb_asan_*_object; if libruby-static.a is ever built with ASan, its
+ * strong definitions in gc.c take precedence. */
+__attribute__((weak)) void rb_asan_poison_object(VALUE obj) {
+    (void) obj;
+}
+__attribute__((weak)) void *rb_asan_poisoned_object_p(VALUE obj) {
+    (void) obj;
+    return NULL;
+}
+__attribute__((weak)) void rb_asan_unpoison_object(VALUE obj, bool newobj_p) {
+    (void) obj;
+    (void) newobj_p;
+}
 #else
 #define COMPILE_ASAN_ACTIVE 0
 #endif
@@ -343,6 +358,10 @@ static void compile_oracle_init_with_stack(void *stack_top) {
 
     compile_core_ids_init();
     rb_thread_stop_timer_thread();
+    const char *disable_gc = getenv("FUZZ_DISABLE_GC");
+    if (disable_gc != NULL && disable_gc[0] != '\0' && strcmp(disable_gc, "0") != 0) {
+        (void) rb_gc_disable();
+    }
     g_compile_initialized = 1;
 }
 

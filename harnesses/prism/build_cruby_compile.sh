@@ -349,8 +349,8 @@ else
 
   ASAN_UAR_FLAGS=()
   if [ "$WANT_ASAN_UAR" -eq 1 ]; then
-    if probe_cc_supports -fsanitize=address -fsanitize-address-use-after-return=never; then
-      ASAN_UAR_FLAGS=(-fsanitize-address-use-after-return=never)
+    if probe_cc_supports -fsanitize=address -fsanitize-address-use-after-return=runtime; then
+      ASAN_UAR_FLAGS=(-fsanitize-address-use-after-return=runtime)
     fi
   fi
 

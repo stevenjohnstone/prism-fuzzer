@@ -86,6 +86,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   fuzzer "fuzz",              shape: :prism_parse,   source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.compile",      shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [], afl: :pcguard, document_ids: true
   fuzzer "fuzz.ijon.compile", shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [], afl: :pcguard, ijon: true, document_ids: true
+  fuzzer "fuzz.compile.asan", shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [:asan], afl: :pcguard, document_ids: true
 
   sync_group "afl-8k",    dir: "afl-8k",    primary: true
   sync_group "afl-small", dir: "afl-small"
@@ -104,16 +105,17 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   end
 
   [
-    { id: "small-compile-fast",    fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0],       color: "#fb923c" },
-    { id: "small-compile-exploit", fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],             color: "#f59e0b" },
+    { id: "small-compile-fast",    fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0], color: "#fb923c" },
+    { id: "small-compile-exploit", fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],       color: "#f59e0b" },
     { id: "small-compile-gm",      fuzzer: "fuzz.ijon.compile", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], color: "#fbbf24" },
-    { id: "small-compile-text",    fuzzer: "fuzz.compile",      schedule: "lin",     afl_flags: %w[-Z -a text], color: "#fdba74" }
+    { id: "small-compile-asan",    fuzzer: "fuzz.compile.asan", schedule: "fast",    afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#ef4444" }
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-small", afl_role: :secondary, max_input_size: small_max_input do
       mutator spec[:mutator] if spec[:mutator]
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
-      loopcount 1000
+      loopcount(spec[:loopcount] || 1000)
+      env(**spec[:env]) if spec[:env]
       mem_limit :none
       color spec[:color]
     end
@@ -131,13 +133,14 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   end
 
   [
-    { id: "8k-compile-fast", fuzzer: "fuzz.compile", schedule: "fast", afl_flags: [],             color: "#c2410c" },
-    { id: "8k-compile-quad", fuzzer: "fuzz.compile", schedule: "quad", afl_flags: %w[-P exploit], color: "#9a3412" }
+    { id: "8k-compile-fast", fuzzer: "fuzz.compile",      schedule: "fast", afl_flags: [], color: "#c2410c" },
+    { id: "8k-compile-asan", fuzzer: "fuzz.compile.asan", schedule: "fast", afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#dc2626" }
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-8k", afl_role: :secondary, max_input_size: large_max_input do
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
-      loopcount 1000
+      loopcount(spec[:loopcount] || 1000)
+      env(**spec[:env]) if spec[:env]
       mem_limit :none
       color spec[:color]
     end

@@ -354,7 +354,9 @@ module PrismFuzzer
           env_prefix << "MSAN_OPTIONS=#{msan_opts}" if sans.include?("msan")
           cruby_shapes = %w[prism_diff_ruby cruby_compile cruby_pipeline_diff]
           is_cruby_vm = cruby_shapes.include?(fspec["shape"]) || cruby_shapes.include?(aux_fspec&.dig("shape"))
-          asan_eff = is_cruby_vm ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
+          gc_disabled = w["env"].is_a?(Hash) && !w["env"]["FUZZ_DISABLE_GC"].to_s.empty? && w["env"]["FUZZ_DISABLE_GC"].to_s != "0"
+          uar_opt = is_cruby_vm ? ":detect_stack_use_after_return=#{gc_disabled ? 1 : 0}" : ""
+          asan_eff = "#{asan_opts}#{uar_opt}"
           env_prefix << "LSAN_OPTIONS=#{lsan_opts}" if sans.include?("lsan")
           env_prefix << "ASAN_OPTIONS=#{asan_eff}" if sans.include?("asan")
           env_prefix << "UBSAN_OPTIONS=#{ubsan_opts}" if sans.include?("ubsan")
@@ -395,7 +397,9 @@ module PrismFuzzer
           # Reuse fuzz-time sanitizer options (especially ASan detect_leaks=0 / symbolize=0)
           # so embedded runtimes like CRuby do not fail LSan or stall on exit during seed screening.
           self_pass_env = { "FUZZ_DIFF_BACKTRACE" => "0" }
-          asan_eff = %w[prism_diff_ruby cruby_compile cruby_pipeline_diff].include?(fspec["shape"]) ? "#{asan_opts}:detect_stack_use_after_return=0" : asan_opts
+          gc_disabled = w["env"].is_a?(Hash) && !w["env"]["FUZZ_DISABLE_GC"].to_s.empty? && w["env"]["FUZZ_DISABLE_GC"].to_s != "0"
+          uar_opt = %w[prism_diff_ruby cruby_compile cruby_pipeline_diff].include?(fspec["shape"]) ? ":detect_stack_use_after_return=#{gc_disabled ? 1 : 0}" : ""
+          asan_eff = "#{asan_opts}#{uar_opt}"
           self_pass_env["MSAN_OPTIONS"] = msan_opts if fspec_sans.include?("msan")
           self_pass_env["LSAN_OPTIONS"] = lsan_opts if fspec_sans.include?("lsan")
           self_pass_env["ASAN_OPTIONS"] = asan_eff if fspec_sans.include?("asan")
