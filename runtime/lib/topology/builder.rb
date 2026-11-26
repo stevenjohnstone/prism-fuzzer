@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "tmpdir"
+require_relative "../../provenance"
 
 module PrismFuzzer
   module Topology

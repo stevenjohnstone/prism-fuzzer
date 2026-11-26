@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "etc"
 require "fileutils"
 require "json"
 require "open3"
@@ -15,7 +16,7 @@ require "tmpdir"
 module FuzzerBench
   VALID_SHAPES = %w[prism_parse prism_diff_ruby cruby_compile cruby_pipeline_diff].freeze
   VALID_IJON_MODES = %w[none on].freeze
-  VALID_GRAMMAR_MODES = %w[none mutator mutator_mixed lrama].freeze
+  VALID_GRAMMAR_MODES = %w[none mutator mutator_mixed lrama prism prism_mixed].freeze
   VALID_SCHEDULES = %w[fast explore rare coe lin quad mmopt seek].freeze
 
   DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
@@ -337,14 +338,16 @@ module FuzzerBench
     spec
   end
 
-  def prepare_corpus!(opts)
+  def prepare_corpus!(opts, shape: nil)
     return opts[:corpus_dir] if opts[:corpus_dir] && Dir.exist?(opts[:corpus_dir])
 
-    corpus_dir = File.join(opts[:workspace], "corpus")
+    one_byte = %w[cruby_compile cruby_pipeline_diff].include?(shape)
+    corpus_dir = File.join(opts[:workspace], one_byte ? "corpus-compile" : "corpus")
+    header = one_byte ? "\x00".b : FUZZ_HEADER_DEFAULT
     FileUtils.mkdir_p(corpus_dir)
     if Dir.children(corpus_dir).empty?
       BUILTIN_SEEDS.each_with_index do |src, idx|
-        File.binwrite(File.join(corpus_dir, format("seed_%03d.bin", idx)), FUZZ_HEADER_DEFAULT + src.b)
+        File.binwrite(File.join(corpus_dir, format("seed_%03d.bin", idx)), header + src.b)
       end
     end
     corpus_dir
@@ -382,6 +385,37 @@ module FuzzerBench
     [so_out, gen_out]
   end
 
+  def build_prism_mutator!(opts, fuzz_root:)
+    build_dir = File.join(opts[:workspace], "build")
+    so_out = File.join(build_dir, "libprismmutator.so")
+    mut_src = File.join(fuzz_root, "harnesses", "prism", "prism_mutator.c")
+    abort "fuzzer_bench: missing #{mut_src}" unless File.file?(mut_src)
+    return so_out if File.file?(so_out) && File.mtime(so_out) >= File.mtime(mut_src)
+
+    prism_dir = opts[:prism_dir] || File.join(build_dir, "targets", "prism_a")
+    abort "fuzzer_bench: missing prism checkout at #{prism_dir}" unless Dir.exist?(prism_dir)
+
+    pm_work = File.join(build_dir, "prism-mutator-src")
+    FileUtils.rm_rf(pm_work)
+    FileUtils.mkdir_p(File.dirname(pm_work))
+    FileUtils.cp_r(prism_dir, pm_work)
+
+    nproc = begin
+      Etc.nprocessors
+    rescue StandardError
+      4
+    end
+    ok = system("ruby", "-I#{File.join(pm_work, 'lib')}", File.join(pm_work, "templates", "template.rb"), chdir: pm_work) &&
+         system("make", "-C", pm_work, "-j#{nproc}", "build/libprism.a", "CC=clang",
+                "CFLAGS=-O2 -fPIC -std=c99 -Iinclude -DPRISM_EXPORT_SYMBOLS") &&
+         system("clang", "-O2", "-fPIC", "-shared", "-Wall", "-Wextra", "-Werror",
+                "-I#{File.join(pm_work, 'include')}",
+                mut_src, File.join(pm_work, "build", "libprism.a"),
+                "-o", so_out)
+    abort "fuzzer_bench: failed to build libprismmutator.so" unless ok
+    so_out
+  end
+
   def afl_command_for(cell, opts:, corpus_dir:, out_dir:, trial:, foreign_dir: nil, tree_dir: nil)
     build_dir = File.join(opts[:workspace], "build")
     target_bin = File.join(build_dir, cell["binary"])
@@ -400,6 +434,10 @@ module FuzzerBench
       env["AFL_CUSTOM_MUTATOR_LIBRARY"] = File.join(build_dir, "libgrammarmutator-ruby.so")
       env["AFL_CUSTOM_MUTATOR_ONLY"] = "1" if cell["grammar"] == "mutator"
       env["GRAMMAR_MUTATOR_TREE_DIR"] = tree_dir if tree_dir
+    elsif %w[prism prism_mixed].include?(cell["grammar"])
+      env["AFL_CUSTOM_MUTATOR_LIBRARY"] = File.join(build_dir, "libprismmutator.so")
+      env["AFL_CUSTOM_MUTATOR_ONLY"] = "1" if cell["grammar"] == "prism"
+      env["PRISM_MUTATOR_HEADER_BYTES"] = %w[cruby_compile cruby_pipeline_diff].include?(cell["shape"]) ? "1" : "4"
     end
 
     cmd = [
@@ -732,9 +770,13 @@ module FuzzerBench
       if cells.any? { |c| %w[mutator mutator_mixed].include?(c["grammar"]) }
         build_grammar_mutator!(opts, fuzz_root: fuzz_root)
       end
+
+      if cells.any? { |c| %w[prism prism_mixed].include?(c["grammar"]) }
+        build_prism_mutator!(opts, fuzz_root: fuzz_root)
+      end
     end
 
-    corpus_dir = prepare_corpus!(opts)
+    corpus_by_shape = opts[:shapes].each_with_object({}) { |s, h| h[s] = prepare_corpus!(opts, shape: s) }
 
     jobs = []
     cells.each do |cell|
@@ -756,7 +798,7 @@ module FuzzerBench
           end
           cell, trial = job
           warn "[fuzzer-bench] starting #{cell['id']} trial #{trial}/#{opts[:trials]} (#{opts[:duration]}s)..." unless opts[:quiet]
-          res = run_trial(cell, opts: opts, corpus_dir: corpus_dir, trial: trial, fuzz_root: fuzz_root)
+          res = run_trial(cell, opts: opts, corpus_dir: corpus_by_shape.fetch(cell["shape"]), trial: trial, fuzz_root: fuzz_root)
           mutex.synchronize { per_cell[cell["id"]] << res }
           warn "[fuzzer-bench] finished #{cell['id']} trial #{trial}: exec/s=#{res['execs_per_sec']} edges=#{res['cfg_edges']} crashes=#{res.dig('crashes', 'total')}" unless opts[:quiet]
         end

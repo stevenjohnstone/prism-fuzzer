@@ -119,6 +119,36 @@ class FuzzerBenchTest < Minitest::Test
     assert_includes cmd_lrama, "/tmp/f"
   end
 
+  def test_prism_mutator_modes_and_header_bytes
+    opts = FuzzerBench.parse_options(%w[
+      --shapes prism_parse,cruby_compile
+      --ijon none
+      --grammar prism,prism_mixed
+    ])
+    cells = FuzzerBench.expand_matrix(opts)
+    assert_equal 4, cells.length
+
+    p_only = cells.find { |c| c["shape"] == "prism_parse" && c["grammar"] == "prism" }
+    env_p, = FuzzerBench.afl_command_for(p_only, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1)
+    assert_equal "1", env_p["AFL_CUSTOM_MUTATOR_ONLY"]
+    assert env_p["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libprismmutator.so")
+    assert_equal "4", env_p["PRISM_MUTATOR_HEADER_BYTES"]
+
+    c_mix = cells.find { |c| c["shape"] == "cruby_compile" && c["grammar"] == "prism_mixed" }
+    env_c, = FuzzerBench.afl_command_for(c_mix, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1)
+    assert_nil env_c["AFL_CUSTOM_MUTATOR_ONLY"]
+    assert env_c["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libprismmutator.so")
+    assert_equal "1", env_c["PRISM_MUTATOR_HEADER_BYTES"]
+
+    Dir.mktmpdir("fbench-corpus-") do |dir|
+      c_opts = opts.merge(workspace: dir)
+      c_dir = FuzzerBench.prepare_corpus!(c_opts, shape: "cruby_compile")
+      p_dir = FuzzerBench.prepare_corpus!(c_opts, shape: "prism_parse")
+      assert_equal "\x001 + 2\n".b, File.binread(File.join(c_dir, "seed_000.bin"))
+      assert_equal "\x00\x00\x03\x011 + 2\n".b, File.binread(File.join(p_dir, "seed_000.bin"))
+    end
+  end
+
   def test_dry_run_exits_zero
     out = nil
     status = nil
