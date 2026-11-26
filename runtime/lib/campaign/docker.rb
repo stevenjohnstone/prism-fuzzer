@@ -183,7 +183,7 @@ module PrismFuzzer
       end
     end
 
-    def ensure_docker_image!(fuzz_root: Topology.locate_fuzz_root, build_dir: nil, image: default_image, ruby_git_ref: ENV["RUBY_GIT_REF"], force: false, dry_run: false, logs_dir: nil, emit_cached: false)
+    def ensure_docker_image!(fuzz_root: Topology.locate_fuzz_root, build_dir: nil, image: default_image, ruby_git_ref: ENV["RUBY_GIT_REF"], prism_git_ref: ENV["PRISM_GIT_REF"], force: false, dry_run: false, logs_dir: nil, emit_cached: false)
       return true if in_docker?
 
       dockerfile = File.join(fuzz_root, "docker", "Dockerfile")
@@ -191,7 +191,10 @@ module PrismFuzzer
 
       stamp = File.join(fuzz_root, "build", ".fuzz.docker.stamp")
       ref_val = ruby_git_ref.to_s.strip
-      digest = Digest::SHA256.hexdigest(File.read(dockerfile) + "\nRUBY_GIT_REF=#{ref_val}\n")
+      prism_ref_val = prism_git_ref.to_s.strip
+      sync_script = File.join(fuzz_root, "docker", "sync_prism_into_ruby.rb")
+      sync_src = File.file?(sync_script) ? File.read(sync_script) : ""
+      digest = Digest::SHA256.hexdigest(File.read(dockerfile) + "\n" + sync_src + "\nRUBY_GIT_REF=#{ref_val}\nPRISM_GIT_REF=#{prism_ref_val}\n")
       existing_id = docker_image_id(image)
       stamp_lines = File.file?(stamp) ? File.read(stamp).lines.map(&:strip) : []
       prev_digest = stamp_lines[0]
@@ -205,6 +208,7 @@ module PrismFuzzer
 
       cmd = ["docker", "build"]
       cmd.push("--build-arg", "RUBY_GIT_REF=#{ref_val}") unless ref_val.empty?
+      cmd.push("--build-arg", "PRISM_GIT_REF=#{prism_ref_val}") unless prism_ref_val.empty?
       cmd.push("-t", image, "-f", dockerfile, fuzz_root)
 
       if dry_run

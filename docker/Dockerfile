@@ -54,18 +54,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libasan8-powerpc-cross \
     && rm -rf /var/lib/apt/lists/*
 
-# Pin an explicit ruby/ruby commit SHA (or override with RUBY_GIT_REF=...).
+# Pin explicit ruby/ruby and ruby/prism commit SHAs (or override with
+# RUBY_GIT_REF=... / PRISM_GIT_REF=...). Syncing mainline Prism into CRuby
+# ensures `ruby --parser=prism` and `ruby -rprism` in the container match the
+# upstream Prism target under test.
 # Targets at other refs can also be built incrementally into build/targets/ruby/.
-ARG RUBY_GIT_REF=f46d41a54ce53b8bc6d86f3571999bdc5075fee2
+ARG RUBY_GIT_REF=17eecca74a586156acebb8b06417f4df17cdedfc
+ARG PRISM_GIT_REF=a5e01d818fa45f2cea9232754251a6855f82ab98
 ENV RUBY_ORACLE_DIR=/opt/ruby
+COPY docker/sync_prism_into_ruby.rb /tmp/sync_prism_into_ruby.rb
 RUN apt-get update && apt-get install -y --no-install-recommends ruby \
     && git init /opt/ruby \
     && git -C /opt/ruby fetch --depth=1 https://github.com/ruby/ruby.git "${RUBY_GIT_REF}" \
     && git -C /opt/ruby checkout FETCH_HEAD \
+    && git init /tmp/prism \
+    && git -C /tmp/prism fetch --depth=1 https://github.com/ruby/prism.git "${PRISM_GIT_REF}" \
+    && git -C /tmp/prism checkout FETCH_HEAD \
+    && ruby /tmp/sync_prism_into_ruby.rb /tmp/prism /opt/ruby \
     && cd /opt/ruby && ./autogen.sh && ./configure --disable-install-doc && make && make install \
     && apt-get purge -y ruby && apt-get autoremove -y && rm -rf /var/lib/apt/lists/* && hash -r \
     && sed -i 's|^BASERUBY = .*|BASERUBY = /usr/local/bin/ruby --disable=gems|' /opt/ruby/Makefile \
-    && git config --system --add safe.directory /opt/ruby
+    && git config --system --add safe.directory /opt/ruby \
+    && cd /tmp/prism && ruby templates/template.rb \
+    && gem build prism.gemspec \
+    && gem install --no-document --force prism-*.gem \
+    && cd / && rm -rf /tmp/prism /tmp/sync_prism_into_ruby.rb
 
 RUN gem install --no-document concurrent-ruby:1.3.8 lrama:0.8.0 lrama-fuzz:0.1.0
 

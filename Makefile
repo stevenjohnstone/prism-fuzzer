@@ -73,6 +73,7 @@ FUZZ_CCACHE_FLAGS ?= $(if $(filter 0,$(FUZZ_CCACHE)),,-v $(FUZZ_CCACHE_VOLUME):/
 JOBS ?=
 _JOBS_DOCKER_ENV := $(if $(strip $(JOBS)),-e JOBS=$(strip $(JOBS)),)
 RUBY_GIT_REF ?=
+PRISM_GIT_REF ?=
 
 FUZZ_MAX_INPUT_SIZE ?= 1024
 FUZZ_MAX_ALLOCATED ?= 128
@@ -115,9 +116,9 @@ docker-force: ;
 docker-build: $(FUZZ_DOCKER_STAMP)
 	$(ECHO) "Docker image '$(FUZZ_DOCKER_IMAGE)' is up to date"
 
-$(FUZZ_DOCKER_STAMP): docker/Dockerfile $(if $(strip $(RUBY_GIT_REF)),docker-force,)
-	$(Q) FUZZ_DOCKER_IMAGE="$(FUZZ_DOCKER_IMAGE)" RUBY_GIT_REF="$(RUBY_GIT_REF)" \
-		ruby ./bin/campaign.rb docker-build --build-dir "$(FUZZ_BUILD_DIR)" $(if $(strip $(RUBY_GIT_REF)),--force,) && \
+$(FUZZ_DOCKER_STAMP): docker/Dockerfile docker/sync_prism_into_ruby.rb $(if $(strip $(RUBY_GIT_REF)$(PRISM_GIT_REF)),docker-force,)
+	$(Q) FUZZ_DOCKER_IMAGE="$(FUZZ_DOCKER_IMAGE)" RUBY_GIT_REF="$(RUBY_GIT_REF)" PRISM_GIT_REF="$(PRISM_GIT_REF)" \
+		ruby ./bin/campaign.rb docker-build --build-dir "$(FUZZ_BUILD_DIR)" $(if $(strip $(RUBY_GIT_REF)$(PRISM_GIT_REF)),--force,) && \
 		$(MAKEDIRS) $(@D) && touch $@
 
 update:
@@ -128,14 +129,18 @@ update:
 		test -n "$$ruby_rev" || { echo "Failed to resolve ruby/ruby master SHA" >&2; exit 1; }; \
 		ruby -e 'df, prism_rev, ruby_rev, *tfs = ARGV; \
 			s = File.read(df); cur = s[/^ARG RUBY_GIT_REF=(.*)/, 1] or abort("ARG RUBY_GIT_REF not found in #{df}"); \
-			if cur.strip != ruby_rev then s.sub!(/^ARG RUBY_GIT_REF=.*/, "ARG RUBY_GIT_REF=#{ruby_rev}"); File.write(df, s); puts("Updated #{df} RUBY_GIT_REF: #{cur} -> #{ruby_rev}") else puts("#{df} already pinned to #{ruby_rev}") end; \
+			changed = false; \
+			if cur.strip != ruby_rev then s.sub!(/^ARG RUBY_GIT_REF=.*/, "ARG RUBY_GIT_REF=#{ruby_rev}"); changed = true; puts("Updated #{df} RUBY_GIT_REF: #{cur} -> #{ruby_rev}") else puts("#{df} already pinned to #{ruby_rev}") end; \
+			pcur = s[/^ARG PRISM_GIT_REF=(.*)/, 1] or abort("ARG PRISM_GIT_REF not found in #{df}"); \
+			if pcur.strip != prism_rev then s.sub!(/^ARG PRISM_GIT_REF=.*/, "ARG PRISM_GIT_REF=#{prism_rev}"); changed = true; puts("Updated #{df} PRISM_GIT_REF: #{pcur} -> #{prism_rev}") else puts("#{df} already pinned to #{prism_rev}") end; \
+			File.write(df, s) if changed; \
 			tfs.each do |tf| \
 				ts = File.read(tf); tcur = ts[/^DEFAULT_PRISM_REF = "([^"]+)"/, 1] or next; \
 				if tcur != prism_rev then ts.sub!(/^DEFAULT_PRISM_REF = "[^"]+"/, "DEFAULT_PRISM_REF = \"#{prism_rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_PRISM_REF -> #{prism_rev}") else puts("#{tf} already pinned to #{prism_rev}") end; \
 				ts = File.read(tf); tcur = ts[/^DEFAULT_RUBY_REF = "([^"]+)"/, 1] or next; \
 				if tcur != ruby_rev then ts.sub!(/^DEFAULT_RUBY_REF = "[^"]+"/, "DEFAULT_RUBY_REF = \"#{ruby_rev}\""); File.write(tf, ts); puts("Updated #{tf} DEFAULT_RUBY_REF -> #{ruby_rev}") else puts("#{tf} already pinned to #{ruby_rev}") end; \
 			end' docker/Dockerfile "$$prism_rev" "$$ruby_rev" campaigns/*.rb && \
-		$(MAKE) docker-build RUBY_GIT_REF="$$ruby_rev"
+		$(MAKE) docker-build RUBY_GIT_REF="$$ruby_rev" PRISM_GIT_REF="$$prism_rev"
 
 targets-sync topology-sync:
 	$(Q) $(TARGETS_ENV) ruby ./bin/topology.rb sync --topology "$(TOPOLOGY)" $(TARGETS_ARGS)
