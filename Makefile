@@ -120,7 +120,7 @@ $(FUZZ_DOCKER_STAMP): docker/Dockerfile $(if $(strip $(RUBY_GIT_REF)),docker-for
 		ruby ./bin/campaign.rb docker-build --build-dir "$(FUZZ_BUILD_DIR)" $(if $(strip $(RUBY_GIT_REF)),--force,) && \
 		$(MAKEDIRS) $(@D) && touch $@
 
-docker-update:
+update:
 	$(ECHO) "resolving mainline Prism and CRuby HEAD from ruby/prism and ruby/ruby"
 	$(Q) prism_rev="$$(git ls-remote https://github.com/ruby/prism.git refs/heads/main | awk 'NR==1 { print $$1 }')"; \
 		ruby_rev="$$(git ls-remote https://github.com/ruby/ruby.git refs/heads/master | awk 'NR==1 { print $$1 }')"; \
@@ -360,4 +360,4 @@ clean:
 	$(Q) ruby -r./runtime/campaign -e 'PrismFuzzer::Campaign.clean_preserving_paths(ARGV[0], ARGV[1..])' "$(FUZZ_DIR)" "$(FUZZ_BUILD_DIR)" "$(FUZZ_TRIAGE_DIR)"
 	$(ECHO) "done"
 
-.PHONY: all docker-force docker-build docker-update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean
+.PHONY: all docker-force docker-build update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean
