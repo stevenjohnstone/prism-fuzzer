@@ -328,6 +328,17 @@ module PrismFuzzer
         snapshot_aux << File.basename(f["ids_file"]) if f["ids_file"]
         snapshot_aux << File.basename(f["mutator"]) if f["mutator"]
       end
+      active_workers.each do |w|
+        next unless w["mutator"]
+
+        mbase = File.basename(w["mutator"].to_s)
+        snapshot_bins << mbase
+        snapshot_aux << mbase
+        if mbase == "libgrammarmutator-ruby.so"
+          snapshot_bins << "grammar_generator-ruby"
+          snapshot_aux << "grammar_generator-ruby"
+        end
+      end
       explain_bins.each_value { |eb| snapshot_aux << File.basename(eb) }
 
       # Map generator names, legacy grammar alias, and shadow peer import names

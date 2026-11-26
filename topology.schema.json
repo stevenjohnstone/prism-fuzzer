@@ -1006,6 +1006,10 @@
         "cmplog": {
           "$ref": "#/$defs/identifier"
         },
+        "mutator": {
+          "type": "string",
+          "minLength": 1
+        },
         "loopcount": {
           "type": "integer",
           "minimum": 1

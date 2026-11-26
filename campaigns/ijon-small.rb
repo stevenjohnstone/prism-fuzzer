@@ -18,7 +18,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "17eecca74a586156acebb8b06417f4df17cdedfc"
+DEFAULT_RUBY_REF = "11121e7878cd87f02f6b4f5eb4a03db681d37ad4"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -79,9 +79,9 @@ PrismFuzzer.campaign "ijon-small-prism-fleet" do
                     ulimit_v_kb: 4_194_304,
                     color: "#34d399"
 
-  # IJON-instrumented binaries (share 64 KiB ijon_set bitmap & 512-slot ijon_max hills).
+  # IJON-instrumented binaries (share 8 KiB ijon_set bitmap & 128-slot ijon_max hills).
   # Slow / MSan / LSan builds enable PRISM_FUZZ_ALLOW_STREAM_WITH_IJON so stream_mode
-  # (and INVARIANT[stream_diff]) stays active alongside source-level PM_IJON_* hooks.
+  # (and INVARIANT[stream_diff]) stays active alongside post-parse IJON guidance.
   ijon_stream_defs = { PRISM_FUZZ_ALLOW_STREAM_WITH_IJON: 1 }
   fuzzer "fuzz.ijon",       shape: :prism_parse,     source: :prism_a, sanitizers: [],             mode: :fast, afl: :lto,     ijon: true, xallocator: true
   fuzzer "fuzz.ijon.asan",  shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto,     ijon: true
@@ -156,10 +156,10 @@ PrismFuzzer.campaign "ijon-small-prism-fleet" do
   end
 
   ijon_diff_variants = [
-    { id: "ijon-diff",   schedule: "explore", afl_flags: [],                   no_trim: false, color: "#f97316" },
-    { id: "ijon-diff-2", schedule: "fast",    afl_flags: %w[-L 0],             no_trim: true },
-    { id: "ijon-diff-3", schedule: "coe",     afl_flags: %w[-Z -a text],       no_trim: false },
-    { id: "ijon-diff-4", schedule: "exploit", afl_flags: %w[-P explore],       no_trim: true }
+    { id: "ijon-diff",    schedule: "explore", afl_flags: [],             no_trim: false, color: "#f97316" },
+    { id: "ijon-diff-gm", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], no_trim: false },
+    { id: "ijon-diff-2",  schedule: "fast",    afl_flags: %w[-L 0],       no_trim: true },
+    { id: "ijon-diff-3",  schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false }
   ]
 
   workers ijon_diff_variants, kind: :afl, fuzzer: "fuzz.ijon.diff", sync_group: "afl-ijon", afl_role: :secondary, mem_limit: :none, color: "#fb923c" do

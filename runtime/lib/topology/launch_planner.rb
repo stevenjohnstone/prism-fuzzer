@@ -372,6 +372,14 @@ module PrismFuzzer
             aux_bin = File.join(bin_dir, File.basename(aux_fspec ? aux_fspec["binary"] : w["aux_fuzzer"].to_s))
             afl_args_pre.push("-w", aux_bin)
           end
+          if (raw_mut = w["mutator"] || fspec["mutator"]) && !raw_mut.to_s.empty?
+            mutator_name = File.basename(raw_mut.to_s)
+            mutator_path = File.join(bin_dir, mutator_name)
+            env_prefix << "AFL_CUSTOM_MUTATOR_LIBRARY=#{Shellwords.escape(mutator_path)}"
+            if mutator_name == "libgrammarmutator-ruby.so"
+              env_prefix << "GRAMMAR_MUTATOR_TREE_DIR=#{Shellwords.escape("/tmp/afl-tmpdir/#{wid}/trees")}"
+            end
+          end
           afl_args_post = ["-o", out_dir, w["afl_role"] == "main" ? "-M" : "-S", wid]
           Array(w["foreign_sync"]).each do |gid|
             sdir = generator_seeds_dirs[gid.to_s]

@@ -184,6 +184,7 @@ module PrismFuzzer
       def schedule(val) = (@spec["schedule"] = val.to_s)
       def afl_flags(*vals) = (@spec["afl_flags"] = vals.flatten.map(&:to_s))
       def cmplog(val) = (@spec["cmplog"] = val.to_s)
+      def mutator(val) = (@spec["mutator"] = val.to_s)
       def loopcount(val) = (@spec["loopcount"] = Integer(val))
       def max_input_size(val) = (@spec["max_input_size"] = Integer(val))
       def no_trim(flag = true) = (@spec["no_trim"] = !!flag)

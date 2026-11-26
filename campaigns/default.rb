@@ -6,7 +6,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "17eecca74a586156acebb8b06417f4df17cdedfc"
+DEFAULT_RUBY_REF = "11121e7878cd87f02f6b4f5eb4a03db681d37ad4"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -74,7 +74,8 @@ PrismFuzzer.campaign "default-prism-fleet" do
   fuzzer "fuzz.sand",     shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan],   mode: :fast, afl: :sand
   fuzzer "fuzz.slow",     shape: :prism_parse, source: :prism_a, sanitizers: %i[asan ubsan],   mode: :slow, afl: :lto
   fuzzer "fuzz.cmplog",   shape: :prism_parse, source: :prism_a, sanitizers: [],               mode: :fast, afl: :cmplog
-  fuzzer "fuzz.diff",     shape: :prism_diff_ruby, prism: :prism_a, ruby: :ruby, sanitizers: [],             afl: :pcguard, document_ids: true
+  fuzzer "fuzz.diff",      shape: :prism_diff_ruby, prism: :prism_a, ruby: :ruby, sanitizers: [], afl: :pcguard, document_ids: true
+  fuzzer "fuzz.ijon.diff", shape: :prism_diff_ruby, prism: :prism_a, ruby: :ruby, sanitizers: [], afl: :pcguard, ijon: true, document_ids: true
   fuzzer "fuzz.arm32",    shape: :prism_cross_oracle, source: :prism_a, arch: :arm32, sanitizers: %i[asan ubsan], afl: :pcguard, mutator: "mutator_oracle64.so", repro: "fuzz.arm32.repro"
   fuzzer "fuzz.ppc",      shape: :prism_cross_oracle, source: :prism_a, arch: :ppc,   sanitizers: %i[asan ubsan], afl: :pcguard, mutator: "mutator_oracle64.so", repro: "fuzz.ppc.repro"
 
@@ -145,15 +146,16 @@ PrismFuzzer.campaign "default-prism-fleet" do
   end
 
   diff_variants = [
-    { id: :diff,     schedule: "explore", afl_flags: [],                   no_trim: false, color: "#f97316" },
-    { id: "diff-2",  schedule: "fast",    afl_flags: %w[-L 0],             no_trim: true },
-    { id: "diff-3",  schedule: "coe",     afl_flags: %w[-Z -a text],       no_trim: false },
-    { id: "diff-4",  schedule: "lin",     afl_flags: %w[-P exploit],       no_trim: true },
-    { id: "diff-5",  schedule: "quad",    afl_flags: %w[-P explore -a text], no_trim: false },
-    { id: "diff-6",  schedule: "exploit", afl_flags: %w[-P explore],       no_trim: true }
+    { id: :diff,       fuzzer: "fuzz.diff",      schedule: "explore", afl_flags: [],             no_trim: false, color: "#f97316" },
+    { id: "diff-2",    fuzzer: "fuzz.diff",      schedule: "fast",    afl_flags: %w[-L 0],       no_trim: true },
+    { id: "diff-3",    fuzzer: "fuzz.diff",      schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false },
+    { id: "diff-4",    fuzzer: "fuzz.diff",      schedule: "lin",     afl_flags: %w[-P exploit], no_trim: true },
+    { id: "diff-ijon", fuzzer: "fuzz.ijon.diff", schedule: "explore", afl_flags: [],             no_trim: false },
+    { id: "diff-gm",   fuzzer: "fuzz.ijon.diff", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], no_trim: false }
   ]
 
-  workers diff_variants, kind: :afl, fuzzer: "fuzz.diff", sync_group: :afl, afl_role: :secondary, mem_limit: :none, color: "#fb923c" do
-    seeds from: :corpus, filter: :self_pass, cache_key: "diff"
+  workers diff_variants, kind: :afl, sync_group: :afl, afl_role: :secondary, mem_limit: :none, color: "#fb923c" do |w, cfg|
+    cache_id = cfg["fuzzer"] == "fuzz.ijon.diff" ? "ijon_diff" : "diff"
+    w.seeds from: :corpus, filter: :self_pass, cache_key: cache_id
   end
 end

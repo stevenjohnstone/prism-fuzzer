@@ -255,6 +255,31 @@ module PrismFuzzer
           input_dir = seed_dir
         end
 
+        if afl_launch["mutator_name"] == "libgrammarmutator-ruby.so"
+          gm_gen = File.join(effective_bin_dir, "grammar_generator-ruby")
+          tree_dir = "/tmp/afl-tmpdir/#{wid}/trees"
+          gm_seed_dir = "/tmp/afl-tmpdir/#{wid}/gm_seeds"
+          FileUtils.mkdir_p(tree_dir)
+          if File.executable?(gm_gen)
+            FileUtils.rm_rf(gm_seed_dir)
+            FileUtils.mkdir_p(gm_seed_dir)
+            max_len = Integer(w["max_input_size"] || 256)
+            Open3.capture2e(gm_gen, "200", max_len.to_s, gm_seed_dir, tree_dir)
+            unless need_seed_copy
+              seed_dir = "/tmp/afl-tmpdir/#{wid}/seeds"
+              FileUtils.rm_rf(seed_dir)
+              FileUtils.mkdir_p(seed_dir)
+              selected_files.each { |f| FileUtils.cp(f, File.join(seed_dir, File.basename(f))) }
+              input_dir = seed_dir
+            end
+            Dir.glob(File.join(gm_seed_dir, "*")).each do |gf|
+              next unless File.file?(gf)
+
+              FileUtils.cp(gf, File.join(input_dir, File.basename(gf)))
+            end
+          end
+        end
+
         seeds_meta["bin_path"] = bin_path if seeds_meta.key?("bin_path")
         seeds_meta["selected_files"] = selected_files
         seeds_meta["staged"] = true

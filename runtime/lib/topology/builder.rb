@@ -1030,6 +1030,41 @@ module PrismFuzzer
       FileUtils.rm_f(tmp_out) if tmp_out && File.exist?(tmp_out)
     end
 
+    def build_grammar_mutator!(fuzz_root:, build_dir:, pool: nil)
+      so_out = File.join(build_dir, "libgrammarmutator-ruby.so")
+      gen_out = File.join(build_dir, "grammar_generator-ruby")
+      stamps_dir = File.join(build_dir, ".stamps")
+      stamp_file = File.join(stamps_dir, "grammar_mutator.json")
+
+      grammar_json = File.join(fuzz_root, "grammar", "ruby.json")
+      patch_file = File.join(fuzz_root, "patches", "grammar-mutator", "grammar-mutator.patch")
+      deps = [grammar_json, patch_file]
+      bkey = build_key_digest({ kind: "grammar_mutator", grammar: File.read(grammar_json), patch: File.read(patch_file) })
+      return if File.file?(gen_out) && stamp_up_to_date?(stamp_file, so_out, bkey, deps)
+
+      gm_src = "/AFLplusplus/Grammar-Mutator"
+      raise TopologyError, "Grammar-Mutator source not found at #{gm_src}; rebuild Docker image" unless Dir.exist?(gm_src)
+
+      log_progress "building Grammar-Mutator (libgrammarmutator-ruby.so + grammar_generator-ruby)"
+      gm_work = File.join(build_dir, "grammar-mutator-src")
+      FileUtils.rm_rf(gm_work)
+      FileUtils.mkdir_p(File.dirname(gm_work))
+      FileUtils.cp_r(gm_src, gm_work)
+
+      eff_pool = pool || BuildPool.new(default_build_jobs)
+      run_build_cmd(eff_pool, "git", "-C", gm_work, "apply", patch_file)
+      run_build_cmd(eff_pool, "python3", File.join(gm_work, "grammars", "f1_c_gen.py"), grammar_json, gm_work)
+      run_build_cmd(eff_pool, "make", "-C", File.join(gm_work, "third_party", "rxi_map"))
+      run_build_cmd(eff_pool, "make", "-C", File.join(gm_work, "third_party", "Cyan4973_xxHash"))
+      run_build_cmd(eff_pool, "make", "-C", File.join(gm_work, "src"), "GRAMMAR_FILENAME=ruby", "NO_ANTLR=1")
+
+      FileUtils.mkdir_p(build_dir)
+      FileUtils.cp(File.join(gm_work, "src", "libgrammarmutator-ruby.so"), so_out)
+      FileUtils.cp(File.join(gm_work, "src", "grammar_generator-ruby"), gen_out)
+      FileUtils.chmod(0o755, gen_out)
+      record_stamp(stamp_file, bkey, so_out)
+    end
+
     def build_explain_for_source!(src_id, out_rel, plan:, fuzz_root:, build_dir:, pool: nil)
       src = plan.fetch("sources").fetch(src_id)
       src_dir = src.fetch("path")
@@ -1214,6 +1249,12 @@ module PrismFuzzer
         next unless src_spec
 
         tasks << -> { build_ruby_ext_for_source!(src_id, src_spec, build_dir: build_dir, primary: idx == 0, pool: pool, sub_jobs: sub_jobs) }
+      end
+
+      needs_grammar_mutator = fuzzers.values.any? { |fs| fs["mutator"].to_s == "libgrammarmutator-ruby.so" } ||
+                              Array(plan["workers"]).any? { |w| w["mutator"].to_s == "libgrammarmutator-ruby.so" }
+      if needs_grammar_mutator
+        tasks << -> { build_grammar_mutator!(fuzz_root: fuzz_root, build_dir: build_dir, pool: pool) }
       end
 
       pool.parallel_map(tasks, max_threads: tasks.size, &:call)

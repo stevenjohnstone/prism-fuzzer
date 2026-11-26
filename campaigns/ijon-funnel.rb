@@ -31,7 +31,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "17eecca74a586156acebb8b06417f4df17cdedfc"
+DEFAULT_RUBY_REF = "11121e7878cd87f02f6b4f5eb4a03db681d37ad4"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -195,11 +195,11 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   end
 
   small_diff_workers = [
-    { id: "small-diff",     fuzzer: "fuzz.ijon.diff", schedule: "explore", afl_flags: [],                   no_trim: false, color: "#f97316" },
-    { id: "small-diff-2",   fuzzer: "fuzz.ijon.diff", schedule: "fast",    afl_flags: %w[-L 0],             no_trim: true,  color: "#fb923c" },
-    { id: "small-diff-3",   fuzzer: "fuzz.ijon.diff", schedule: "coe",     afl_flags: %w[-Z -a text],       no_trim: false, color: "#fdba74" },
-    { id: "small-diff-4",   fuzzer: "fuzz.ijon.diff", schedule: "exploit", afl_flags: %w[-P explore],       no_trim: true,  color: "#fbbf24" },
-    { id: "small-cfg-diff", fuzzer: "fuzz.diff",      schedule: "mmopt",   afl_flags: [],                   no_trim: true,  color: "#f59e0b" }
+    { id: "small-diff",       fuzzer: "fuzz.ijon.diff", schedule: "explore", afl_flags: [],             no_trim: false, color: "#f97316" },
+    { id: "small-diff-gm",    fuzzer: "fuzz.ijon.diff", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], no_trim: false, color: "#fb923c" },
+    { id: "small-diff-text",  fuzzer: "fuzz.ijon.diff", schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false, color: "#fdba74" },
+    { id: "small-cfg-diff",   fuzzer: "fuzz.diff",      schedule: "mmopt",   afl_flags: [],             no_trim: true,  color: "#f59e0b" },
+    { id: "small-cfg-diff-2", fuzzer: "fuzz.diff",      schedule: "fast",    afl_flags: %w[-L 0],       no_trim: true,  color: "#fbbf24" }
   ]
 
   workers small_diff_workers, kind: :afl, sync_group: "afl-small", afl_role: :secondary, max_input_size: small_max_input, mem_limit: :none do |w, cfg|
