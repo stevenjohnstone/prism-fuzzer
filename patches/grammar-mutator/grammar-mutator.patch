@@ -1,0 +1,173 @@
+diff --git a/grammars/f1_c_gen.py b/grammars/f1_c_gen.py
+index 2bb68ad..5a7e739 100644
+--- a/grammars/f1_c_gen.py
++++ b/grammars/f1_c_gen.py
+@@ -179,11 +179,11 @@ class CFuzzer(PyCompiledFuzzer):
+                 if key == token:
+                     res.append('node->recursion_edge_size += 1;')
+             else:
+-                esc_token_chars = [self.esc_char(c) for c in token]
+-                esc_token = ''.join(esc_token_chars)
++                token_bytes = token.encode('utf-8')
++                esc_token = bytes_to_c_str(token_bytes)
+                 res.append(
+                     'subnode = node_create_with_val(NODE_TERM__, "%s", %d);' % (
+-                        esc_token, len(esc_token_chars)))
++                        esc_token, len(token_bytes)))
+                 res.append('*consumed += %d;' % (len(token)))
+             res.append('node->subnodes[%d] = subnode;' % i)
+             res.append('subnode->parent = node;')
+diff --git a/src/Makefile b/src/Makefile
+index bf4cd69..d668ef7 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -65,7 +65,14 @@ ANTLR4_CXX_RUNTIME_LIB = $(realpath ../third_party/antlr4-cpp-runtime/libantlr4-
+ ANTLR4_SHIM_LIB = $(realpath ../lib/antlr4_shim/libantlr4_shim.a)
+ XXHASH_LIB = $(realpath ../third_party/Cyan4973_xxHash/libxxhash.a)
+ 
++ifdef NO_ANTLR
++C_DEFINES += -DGRAMMAR_MUTATOR_NO_ANTLR
++LIBS = $(RXI_MAP_LIB) $(XXHASH_LIB)
++SHIM_DEP =
++else
+ LIBS = $(RXI_MAP_LIB) $(ANTLR4_SHIM_LIB) $(ANTLR4_CXX_RUNTIME_LIB) $(XXHASH_LIB)
++SHIM_DEP = $(ANTLR4_SHIM_LIB)
++endif
+ 
+ # The linker option that names the shared library. The macOS linker does not
+ # know the GNU option -soname.
+@@ -91,7 +98,7 @@ endif
+ all: $(TARGETS)
+ 
+ # A new parser in the shim library also makes the library again
+-$(GRAMMAR_MUTATOR_LIB): $(LIB_OBJS) $(ANTLR4_SHIM_LIB)
++$(GRAMMAR_MUTATOR_LIB): $(LIB_OBJS) $(SHIM_DEP)
+ 	$(CXX) -fPIC $(C_FLAGS) -shared $(SONAME_FLAG) -o $@ $(LIB_OBJS) $(LDFLAGS)
+ 
+ %.o: %.c
+@@ -101,19 +108,19 @@ grammar_generator.o: grammar_generator.c
+ 	$(CC) $(C_DEFINES) -I../include $(C_FLAGS) $(DEP_FLAGS) -o $@ -c $<
+ 
+ $(GRAMMAR_GENERATOR_PROM): $(GEN_OBJS) $(GRAMMAR_MUTATOR_LIB)
+-	$(CXX) $(C_FLAGS) $< -o $@ -Wl,-rpath,$(realpath ./) $(GRAMMAR_MUTATOR_LIB)
++	$(CXX) $(C_FLAGS) $< -o $@ -Wl,-rpath,'$$ORIGIN' $(GRAMMAR_MUTATOR_LIB)
+ 
+ $(PARSER_OBJS): %.o: %.c
+ 	$(CC) $(C_DEFINES) -I../include $(C_FLAGS) $(DEP_FLAGS) -pthread -o $@ -c $<
+ 
+ $(GRAMMAR_PARSER_PROM): $(PARSER_OBJS) $(GRAMMAR_MUTATOR_LIB)
+-	$(CXX) $(C_FLAGS) -pthread $(PARSER_OBJS) -o $@ -Wl,-rpath,$(realpath ./) $(GRAMMAR_MUTATOR_LIB)
++	$(CXX) $(C_FLAGS) -pthread $(PARSER_OBJS) -o $@ -Wl,-rpath,'$$ORIGIN' $(GRAMMAR_MUTATOR_LIB)
+ 
+ benchmark/benchmark.o: benchmark/benchmark.c
+ 	$(CC) $(C_DEFINES) -I../include $(C_FLAGS) $(DEP_FLAGS) -o $@ -c $<
+ 
+ $(BENCH_PROM): $(BENCHMARK_OBJS) $(GRAMMAR_MUTATOR_LIB)
+-	$(CXX) $(C_FLAGS) $< -o $@ -Wl,-rpath,$(realpath ./) $(GRAMMAR_MUTATOR_LIB) -lm
++	$(CXX) $(C_FLAGS) $< -o $@ -Wl,-rpath,'$$ORIGIN' $(GRAMMAR_MUTATOR_LIB) -lm
+ 
+ -include $(OBJS:.o=.d)
+ 
+diff --git a/src/grammar_mutator.c b/src/grammar_mutator.c
+index de60fb4..36bdebd 100644
+--- a/src/grammar_mutator.c
++++ b/src/grammar_mutator.c
+@@ -195,7 +195,8 @@ static tree_t *parse_entry(my_mutator_t *data, const char *fn) {
+   if (map_get(&data->rejected, fn)) return NULL;
+ 
+   parse_status_t status = PARSE_OK;
+-  tree_t        *tree = load_tree_from_test_case_ex(fn, data->budget, &status);
++  (void)fn; (void)data; (void)status;
++  tree_t        *tree = NULL;
+   if (tree) return tree;
+ 
+   // Print each warning once per run, not once per entry.
+@@ -329,10 +330,9 @@ static bool get_tree_fn(const char *fn, char *tree_fn) {
+ 
+   }
+ 
+-  // Copy "/trees" (including the null) to replace the old folder name
+-  memcpy(last_dir, "/trees", 7);
+-
+-  if (!create_directory(tree_out_dir)) {
++  const char *env_tree_dir = getenv("GRAMMAR_MUTATOR_TREE_DIR");
++  const char *target_tree_dir = (env_tree_dir && env_tree_dir[0]) ? env_tree_dir : "/tmp/afl-tmpdir/grammar/trees";
++  if (!create_directory(target_tree_dir)) {
+ 
+     perror("Cannot create the output directory (get_tree_fn)");
+     free(tree_out_dir);
+@@ -340,7 +340,7 @@ static bool get_tree_fn(const char *fn, char *tree_fn) {
+ 
+   }
+ 
+-  snprintf(tree_fn, PATH_MAX - 1, "%s/%s", tree_out_dir, use_name);
++  snprintf(tree_fn, PATH_MAX - 1, "%s/%s", target_tree_dir, use_name);
+   free(tree_out_dir);
+   return true;
+ 
+@@ -421,6 +421,13 @@ int32_t afl_custom_init_trim(my_mutator_t                    *data,
+ 
+   }
+ 
++  if (data->trimmed_tree) {
++
++    tree_free(data->trimmed_tree);
++    data->trimmed_tree = NULL;
++
++  }
++
+   if (!data->tree_cur || !default_trimming_steps) return 0;
+ 
+   // Without the full lists, do no trimming
+@@ -451,6 +458,13 @@ int32_t afl_custom_init_trim(my_mutator_t                    *data,
+ 
+ size_t afl_custom_trim(my_mutator_t *data, uint8_t **out_buf) {
+ 
++  if (data->trimmed_tree) {
++
++    tree_free(data->trimmed_tree);
++    data->trimmed_tree = NULL;
++
++  }
++
+   tree_t *trimmed_tree = NULL;
+   size_t  trimmed_size = 0;
+   tree_t *tree_cur = data->tree_cur;
+@@ -613,8 +627,8 @@ int32_t afl_custom_post_trim(my_mutator_t *data, int success) {
+ 
+   } else {
+ 
+-    // the trimmed tree will not be saved, so destroy it
+-    tree_free(data->trimmed_tree);
++    // Keep data->trimmed_tree alive across post_trim(data, 0) in case AFL++
++    // immediately calls save_if_interesting() -> afl_custom_queue_new_entry().
+ 
+     // Even if the trim didn't work, still count the progress!
+     if (data->cur_trimming_stage == 0) {
+@@ -1003,6 +1017,11 @@ uint8_t afl_custom_queue_new_entry(my_mutator_t  *data,
+     tree, and nothing changed the tree after that, so use them. */
+   tree_t *tree = data->mutated_tree;
+   data->mutated_tree = NULL;
++  if (!tree && data->trimmed_tree) {
++    tree = data->trimmed_tree;
++    data->trimmed_tree = NULL;
++    tree_get_size(tree);
++  }
+   if (tree && !file_has_bytes(fn, tree->data_buf, tree->data_len)) {
+ 
+     tree_free(tree);
+diff --git a/src/tree.c b/src/tree.c
+index 9ca616c..bda4f00 100644
+--- a/src/tree.c
++++ b/src/tree.c
+@@ -1151,3 +1151,10 @@ bool dump_tree_to_test_case(tree_t *tree, const char *filename) {
+                           "dump_tree_to_test_case");
+ 
+ }
++
++#ifdef GRAMMAR_MUTATOR_NO_ANTLR
++tree_t *tree_parse(const uint8_t *buf, size_t len, parse_budget_t *budget, parse_status_t *status) {
++  (void)buf; (void)len; (void)budget; (void)status;
++  return NULL;
++}
++#endif

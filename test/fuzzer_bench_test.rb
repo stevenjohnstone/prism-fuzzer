@@ -9,7 +9,7 @@ class FuzzerBenchTest < Minitest::Test
   def test_expand_matrix_shapes_and_features
     opts = FuzzerBench.parse_options(%w[
       --shapes prism_parse,prism_diff_ruby
-      --ijon none,v1,v2,v1+v2
+      --ijon none,on
       --cmplog false,true
       --sand false,true
       --schedules fast
@@ -19,21 +19,21 @@ class FuzzerBenchTest < Minitest::Test
     parse_cells = cells.select { |c| c["shape"] == "prism_parse" }
     diff_cells  = cells.select { |c| c["shape"] == "prism_diff_ruby" }
 
-    # prism_parse: 4 ijon x 2 cmplog x 2 sand = 16
-    assert_equal 16, parse_cells.length
-    # prism_diff_ruby ignores cmplog/sand: 4 ijon = 4
-    assert_equal 4, diff_cells.length
+    # prism_parse: 2 ijon x 2 cmplog x 2 sand = 8
+    assert_equal 8, parse_cells.length
+    # prism_diff_ruby ignores cmplog/sand: 2 ijon = 2
+    assert_equal 2, diff_cells.length
     assert diff_cells.none? { |c| c["cmplog"] || c["sand"] }
 
-    v2_cell = parse_cells.find { |c| c["ijon"] == "v2" && !c["cmplog"] && !c["sand"] }
-    assert_equal "bench_prism_parse_ijon_v2", v2_cell["binary"]
-    assert_equal "bench_prism_parse_cfg", v2_cell["cfg_binary"]
+    on_cell = parse_cells.find { |c| c["ijon"] == "on" && !c["cmplog"] && !c["sand"] }
+    assert_equal "bench_prism_parse_ijon_on", on_cell["binary"]
+    assert_equal "bench_prism_parse_cfg", on_cell["cfg_binary"]
   end
 
-  def test_build_topology_ir_valid_and_has_v1_v2_defines
+  def test_build_topology_ir_valid_and_has_ijon_attrs
     opts = FuzzerBench.parse_options(%w[
       --shapes prism_parse,prism_diff_ruby
-      --ijon none,v1,v2,v1+v2
+      --ijon none,on
       --cmplog true
       --sand true
     ])
@@ -50,13 +50,9 @@ class FuzzerBenchTest < Minitest::Test
     assert fuzzers.key?("bench_prism_parse_cmplog")
     assert fuzzers.key?("bench_prism_parse_sand")
 
-    v2_diff = fuzzers["bench_prism_diff_ruby_ijon_v2"]
-    assert_equal true, v2_diff["ijon"]
-    assert_equal({ "PRISM_NO_SOURCE_IJON" => 1, "PRISM_FUZZ_IJON_V2" => 1 }, v2_diff["defines"])
-
-    both_diff = fuzzers["bench_prism_diff_ruby_ijon_v1_v2"]
-    assert_equal true, both_diff["ijon"]
-    assert_equal({ "PRISM_FUZZ_IJON_V2" => 1, "PRISM_FUZZ_IJON_KEEP_V1" => 1 }, both_diff["defines"])
+    on_diff = fuzzers["bench_prism_diff_ruby_ijon_on"]
+    assert_equal true, on_diff["ijon"]
+    assert_nil on_diff["defines"]
 
     none_diff = fuzzers["bench_prism_diff_ruby_cfg"]
     refute none_diff["ijon"]
@@ -96,18 +92,44 @@ class FuzzerBenchTest < Minitest::Test
     assert_equal %w[INVARIANT[a] INVARIANT[b]], agg["all_signatures"]
   end
 
+  def test_grammar_modes_expand_and_configure_env
+    opts = FuzzerBench.parse_options(%w[
+      --shapes prism_parse
+      --ijon none
+      --grammar none,mutator,mutator_mixed,lrama
+    ])
+    cells = FuzzerBench.expand_matrix(opts)
+    assert_equal 4, cells.length
+
+    mut = cells.find { |c| c["grammar"] == "mutator" }
+    env, cmd = FuzzerBench.afl_command_for(mut, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, tree_dir: "/tmp/t")
+    assert_equal "1", env["AFL_CUSTOM_MUTATOR_ONLY"]
+    assert env["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libgrammarmutator-ruby.so")
+    assert_equal "/tmp/t", env["GRAMMAR_MUTATOR_TREE_DIR"]
+    assert_includes cmd, "afl-fuzz"
+
+    mix = cells.find { |c| c["grammar"] == "mutator_mixed" }
+    env_mix, _ = FuzzerBench.afl_command_for(mix, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, tree_dir: "/tmp/t")
+    assert_nil env_mix["AFL_CUSTOM_MUTATOR_ONLY"]
+    assert env_mix["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libgrammarmutator-ruby.so")
+
+    lrama = cells.find { |c| c["grammar"] == "lrama" }
+    _, cmd_lrama = FuzzerBench.afl_command_for(lrama, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, foreign_dir: "/tmp/f")
+    assert_includes cmd_lrama, "-F"
+    assert_includes cmd_lrama, "/tmp/f"
+  end
+
   def test_dry_run_exits_zero
     out = nil
     status = nil
     Dir.mktmpdir("fbench-dry-") do |dir|
       out, status = Open3.capture2(
         "ruby", File.expand_path("../runtime/fuzzer_bench.rb", __dir__),
-        "--dry-run", "--workspace", dir, "--shapes", "prism_parse", "--ijon", "none,v1,v2"
+        "--dry-run", "--workspace", dir, "--shapes", "prism_parse", "--ijon", "none,on"
       )
     end
     assert status.success?, "dry-run failed: #{out}"
     assert_includes out, "prism_parse__ijon_none"
-    assert_includes out, "prism_parse__ijon_v1"
-    assert_includes out, "prism_parse__ijon_v2"
+    assert_includes out, "prism_parse__ijon_on"
   end
 end

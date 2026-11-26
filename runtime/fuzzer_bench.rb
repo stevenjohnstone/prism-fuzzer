@@ -14,7 +14,8 @@ require "tmpdir"
 # AFL++ power schedules) under identical corpus, target ref, and time budget.
 module FuzzerBench
   VALID_SHAPES = %w[prism_parse prism_diff_ruby cruby_compile cruby_pipeline_diff].freeze
-  VALID_IJON_MODES = %w[none v1 v2 v1+v2].freeze
+  VALID_IJON_MODES = %w[none on].freeze
+  VALID_GRAMMAR_MODES = %w[none mutator mutator_mixed lrama].freeze
   VALID_SCHEDULES = %w[fast explore rare coe lin quad mmopt seek].freeze
 
   DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
@@ -57,7 +58,8 @@ module FuzzerBench
   def parse_options(argv, fuzz_root: File.expand_path("..", __dir__))
     opts = {
       shapes: %w[prism_parse prism_diff_ruby],
-      ijon_modes: %w[none v1 v2],
+      ijon_modes: %w[none on],
+      grammar_modes: %w[none],
       cmplog: [false],
       sand: [false],
       schedules: %w[fast],
@@ -87,6 +89,9 @@ module FuzzerBench
       end
       p.on("--ijon LIST", "Comma-separated IJON modes: #{VALID_IJON_MODES.join(',')} (default: #{opts[:ijon_modes].join(',')})") do |v|
         opts[:ijon_modes] = v.split(",").map(&:strip).reject(&:empty?).uniq
+      end
+      p.on("--grammar LIST", "Comma-separated grammar modes: #{VALID_GRAMMAR_MODES.join(',')} (default: none)") do |v|
+        opts[:grammar_modes] = v.split(",").map(&:strip).reject(&:empty?).uniq
       end
       p.on("--cmplog LIST", "Comma-separated booleans for CmpLog (-c) on prism_parse (default: false)") do |v|
         opts[:cmplog] = parse_bool_list(v)
@@ -125,6 +130,8 @@ module FuzzerBench
     raise ArgumentError, "Unknown shapes: #{bad_shapes.join(', ')}" unless bad_shapes.empty?
     bad_ijon = opts[:ijon_modes] - VALID_IJON_MODES
     raise ArgumentError, "Unknown IJON modes: #{bad_ijon.join(', ')}" unless bad_ijon.empty?
+    bad_grammar = opts[:grammar_modes] - VALID_GRAMMAR_MODES
+    raise ArgumentError, "Unknown grammar modes: #{bad_grammar.join(', ')}" unless bad_grammar.empty?
     bad_sched = opts[:schedules] - VALID_SCHEDULES
     raise ArgumentError, "Unknown schedules: #{bad_sched.join(', ')}" unless bad_sched.empty?
     raise ArgumentError, "--duration must be >= 1" unless opts[:duration] >= 1
@@ -140,12 +147,8 @@ module FuzzerBench
     case mode
     when "none"
       { "ijon" => false, "defines" => {} }
-    when "v1"
+    when "on"
       { "ijon" => true, "defines" => {} }
-    when "v2"
-      { "ijon" => true, "defines" => { "PRISM_NO_SOURCE_IJON" => 1, "PRISM_FUZZ_IJON_V2" => 1 } }
-    when "v1+v2"
-      { "ijon" => true, "defines" => { "PRISM_FUZZ_IJON_V2" => 1, "PRISM_FUZZ_IJON_KEEP_V1" => 1 } }
     else
       raise ArgumentError, "Unsupported IJON mode: #{mode}"
     end
@@ -158,34 +161,38 @@ module FuzzerBench
       sand_vals   = shape == "prism_parse" ? opts[:sand] : [false]
 
       opts[:ijon_modes].each do |ijon_mode|
-        cmplog_vals.each do |cmplog|
-          sand_vals.each do |sand|
-            opts[:schedules].each do |schedule|
-              slug_parts = [shape, "ijon_#{ijon_mode_slug(ijon_mode)}"]
-              slug_parts << "cmplog" if cmplog
-              slug_parts << "sand" if sand
-              slug_parts << "sched_#{schedule}" if opts[:schedules].length > 1 || schedule != "fast"
+        opts[:grammar_modes].each do |grammar_mode|
+          cmplog_vals.each do |cmplog|
+            sand_vals.each do |sand|
+              opts[:schedules].each do |schedule|
+                slug_parts = [shape, "ijon_#{ijon_mode_slug(ijon_mode)}"]
+                slug_parts << "gram_#{grammar_mode}" if opts[:grammar_modes].length > 1 || grammar_mode != "none"
+                slug_parts << "cmplog" if cmplog
+                slug_parts << "sand" if sand
+                slug_parts << "sched_#{schedule}" if opts[:schedules].length > 1 || schedule != "fast"
 
-              bin_name =
-                if ijon_mode == "none" && !sand
-                  "bench_#{shape}_cfg"
-                else
-                  name = "bench_#{shape}_ijon_#{ijon_mode_slug(ijon_mode)}"
-                  sand ? "#{name}_fast" : name
-                end
+                bin_name =
+                  if ijon_mode == "none" && !sand
+                    "bench_#{shape}_cfg"
+                  else
+                    name = "bench_#{shape}_ijon_#{ijon_mode_slug(ijon_mode)}"
+                    sand ? "#{name}_fast" : name
+                  end
 
-              cells << {
-                "id" => slug_parts.join("__"),
-                "shape" => shape,
-                "ijon" => ijon_mode,
-                "cmplog" => cmplog,
-                "sand" => sand,
-                "schedule" => schedule,
-                "binary" => bin_name,
-                "cfg_binary" => "bench_#{shape}_cfg",
-                "cmplog_binary" => cmplog ? "bench_prism_parse_cmplog" : nil,
-                "sand_binary" => sand ? "bench_prism_parse_sand" : nil
-              }
+                cells << {
+                  "id" => slug_parts.join("__"),
+                  "shape" => shape,
+                  "ijon" => ijon_mode,
+                  "grammar" => grammar_mode,
+                  "cmplog" => cmplog,
+                  "sand" => sand,
+                  "schedule" => schedule,
+                  "binary" => bin_name,
+                  "cfg_binary" => "bench_#{shape}_cfg",
+                  "cmplog_binary" => cmplog ? "bench_prism_parse_cmplog" : nil,
+                  "sand_binary" => sand ? "bench_prism_parse_sand" : nil
+                }
+              end
             end
           end
         end
@@ -343,7 +350,39 @@ module FuzzerBench
     corpus_dir
   end
 
-  def afl_command_for(cell, opts:, corpus_dir:, out_dir:, trial:)
+  def build_grammar_mutator!(opts, fuzz_root:)
+    build_dir = File.join(opts[:workspace], "build")
+    so_out = File.join(build_dir, "libgrammarmutator-ruby.so")
+    gen_out = File.join(build_dir, "grammar_generator-ruby")
+    return [so_out, gen_out] if File.file?(so_out) && File.executable?(gen_out)
+
+    gm_src = "/AFLplusplus/Grammar-Mutator"
+    abort "fuzzer_bench: #{gm_src} not found (rebuild Docker image)" unless Dir.exist?(gm_src)
+
+    grammar_json = File.join(fuzz_root, "grammar", "ruby.json")
+    patch_file   = File.join(fuzz_root, "patches", "grammar-mutator", "grammar-mutator.patch")
+    abort "fuzzer_bench: missing #{grammar_json}" unless File.file?(grammar_json)
+    abort "fuzzer_bench: missing #{patch_file}" unless File.file?(patch_file)
+
+    gm_work = File.join(opts[:workspace], "build", "grammar-mutator-src")
+    FileUtils.rm_rf(gm_work)
+    FileUtils.mkdir_p(File.dirname(gm_work))
+    FileUtils.cp_r(gm_src, gm_work)
+
+    ok = system("git", "-C", gm_work, "apply", patch_file) &&
+         system("python3", File.join(gm_work, "grammars", "f1_c_gen.py"), grammar_json, gm_work) &&
+         system("make", "-C", File.join(gm_work, "third_party", "rxi_map")) &&
+         system("make", "-C", File.join(gm_work, "third_party", "Cyan4973_xxHash")) &&
+         system("make", "-C", File.join(gm_work, "src"), "GRAMMAR_FILENAME=ruby", "NO_ANTLR=1")
+    abort "fuzzer_bench: failed to build Grammar-Mutator" unless ok
+
+    FileUtils.cp(File.join(gm_work, "src", "libgrammarmutator-ruby.so"), so_out)
+    FileUtils.cp(File.join(gm_work, "src", "grammar_generator-ruby"), gen_out)
+    FileUtils.chmod(0o755, gen_out)
+    [so_out, gen_out]
+  end
+
+  def afl_command_for(cell, opts:, corpus_dir:, out_dir:, trial:, foreign_dir: nil, tree_dir: nil)
     build_dir = File.join(opts[:workspace], "build")
     target_bin = File.join(build_dir, cell["binary"])
     max_len = opts[:max_input_size] + 4
@@ -357,6 +396,12 @@ module FuzzerBench
       "AFL_NO_AFFINITY" => "1"
     }
 
+    if %w[mutator mutator_mixed].include?(cell["grammar"])
+      env["AFL_CUSTOM_MUTATOR_LIBRARY"] = File.join(build_dir, "libgrammarmutator-ruby.so")
+      env["AFL_CUSTOM_MUTATOR_ONLY"] = "1" if cell["grammar"] == "mutator"
+      env["GRAMMAR_MUTATOR_TREE_DIR"] = tree_dir if tree_dir
+    end
+
     cmd = [
       "afl-fuzz",
       "-i", corpus_dir,
@@ -367,6 +412,7 @@ module FuzzerBench
       "-s", (opts[:seed] + trial).to_s,
       "-t", "1000+"
     ]
+    cmd.push("-M", "default", "-F", foreign_dir) if foreign_dir
     cmd.push("-c", File.join(build_dir, cell["cmplog_binary"])) if cell["cmplog_binary"]
     cmd.push("-w", File.join(build_dir, cell["sand_binary"])) if cell["sand_binary"]
     cmd.push("--", target_bin, "@@")
@@ -495,6 +541,7 @@ module FuzzerBench
       "id" => cell["id"],
       "shape" => cell["shape"],
       "ijon" => cell["ijon"],
+      "grammar" => cell["grammar"] || "none",
       "cmplog" => cell["cmplog"],
       "sand" => cell["sand"],
       "schedule" => cell["schedule"],
@@ -514,22 +561,73 @@ module FuzzerBench
     }
   end
 
-  def run_trial(cell, opts:, corpus_dir:, trial:)
+  def run_trial(cell, opts:, corpus_dir:, trial:, fuzz_root:)
     out_dir = File.join(opts[:workspace], "runs", cell["id"], "trial_#{trial}")
     FileUtils.rm_rf(out_dir)
     FileUtils.mkdir_p(out_dir)
 
-    env, cmd = afl_command_for(cell, opts: opts, corpus_dir: corpus_dir, out_dir: out_dir, trial: trial)
+    build_dir = File.join(opts[:workspace], "build")
+    eff_corpus = corpus_dir
+    foreign_dir = nil
+    tree_dir = nil
+    lrama_pid = nil
+
+    if %w[mutator mutator_mixed].include?(cell["grammar"])
+      eff_corpus = File.join("/tmp/fbench-gm", "#{cell['id']}_t#{trial}", "seeds")
+      tree_dir   = File.join("/tmp/fbench-gm", "#{cell['id']}_t#{trial}", "trees")
+      FileUtils.rm_rf(File.dirname(eff_corpus))
+      FileUtils.mkdir_p(eff_corpus)
+      FileUtils.mkdir_p(tree_dir)
+      gen_bin = File.join(build_dir, "grammar_generator-ruby")
+      ok = system(gen_bin, "200", opts[:max_input_size].to_s, eff_corpus, tree_dir, out: File::NULL, err: File::NULL)
+      abort "fuzzer_bench: grammar_generator-ruby failed" unless ok
+    elsif cell["grammar"] == "lrama"
+      foreign_dir = File.join("/tmp/fbench-lrama", "#{cell['id']}_t#{trial}", "seeds")
+      FileUtils.rm_rf(File.dirname(foreign_dir))
+      FileUtils.mkdir_p(foreign_dir)
+      lrama_script = File.join(fuzz_root, "runtime", "grammar.rb")
+      lrama_env = {
+        "FUZZ_MAX_INPUT_SIZE" => opts[:max_input_size].to_s,
+        "AFL_SYNC_TIME" => "1"
+      }
+      lrama_pid = Process.spawn(lrama_env, "ruby", lrama_script, out_dir, foreign_dir, out: File::NULL, err: File::NULL)
+      # Wait briefly for initial lrama seeds so -F has inputs early.
+      sleep 1
+    end
+
+    env, cmd = afl_command_for(
+      cell,
+      opts: opts,
+      corpus_dir: eff_corpus,
+      out_dir: out_dir,
+      trial: trial,
+      foreign_dir: foreign_dir,
+      tree_dir: tree_dir
+    )
     log_path = File.join(out_dir, "afl.log")
 
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    # Hard safety timeout = duration + 30s in case afl-fuzz takes a moment to flush.
-    _, _, _st = Open3.capture3(env, "timeout", "--signal=INT", (opts[:duration] + 30).to_s, *cmd, stdin_data: "")
+    begin
+      # Hard safety timeout = duration + 30s in case afl-fuzz takes a moment to flush.
+      _, _, _st = Open3.capture3(env, "timeout", "--signal=INT", (opts[:duration] + 30).to_s, *cmd, stdin_data: "")
+    ensure
+      if lrama_pid
+        begin
+          Process.kill("TERM", lrama_pid)
+        rescue SystemCallError
+          nil
+        end
+        begin
+          Process.wait(lrama_pid)
+        rescue SystemCallError
+          nil
+        end
+      end
+    end
     elapsed = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
 
     default_dir = File.join(out_dir, "default")
     stats = parse_fuzzer_stats(File.join(default_dir, "fuzzer_stats"))
-    build_dir = File.join(opts[:workspace], "build")
     cfg_bin = File.join(build_dir, cell["cfg_binary"])
 
     cfg_edges = Dir.mktmpdir("fbench-map-") do |tmp_dir|
@@ -564,10 +662,10 @@ module FuzzerBench
 
     puts ""
     puts format(
-      "%-36s | %-5s | %-6s | %-4s | %8s | %6s | %9s | %6s | %6s | %6s | %7s | %4s | %8s",
-      "Cell", "IJON", "CmpLog", "SAND", "Exec/s", "Queue", "CFG Edges", "2Paths", "Val2P", "Valid%", "Crashes", "Uniq", "1st(s)"
+      "%-36s | %-5s | %-13s | %-4s | %8s | %6s | %9s | %6s | %6s | %6s | %7s | %4s | %8s",
+      "Cell", "IJON", "Grammar", "SAND", "Exec/s", "Queue", "CFG Edges", "2Paths", "Val2P", "Valid%", "Crashes", "Uniq", "1st(s)"
     )
-    puts "-" * 142
+    puts "-" * 149
     results.each do |r|
       first_s = r["min_first_crash_ms"] ? format("%.1f", r["min_first_crash_ms"] / 1000.0) : "-"
       edges_s = r["median_cfg_edges"] ? r["median_cfg_edges"].to_s : "-"
@@ -576,10 +674,10 @@ module FuzzerBench
         edges_s = "#{edges_s} (#{delta >= 0 ? "+#{delta}" : delta})"
       end
       puts format(
-        "%-36s | %-5s | %-6s | %-4s | %8s | %6s | %9s | %6s | %6s | %6s | %7d | %4s | %8s",
+        "%-36s | %-5s | %-13s | %-4s | %8s | %6s | %9s | %6s | %6s | %6s | %7d | %4s | %8s",
         r["id"][0, 36],
         r["ijon"],
-        r["cmplog"] ? "yes" : "no",
+        r["grammar"] || "none",
         r["sand"] ? "yes" : "no",
         r["median_execs_per_sec"] ? format("%.1f", r["median_execs_per_sec"]) : "-",
         r["median_corpus_count"] || "-",
@@ -630,6 +728,10 @@ module FuzzerBench
         ok = system("ruby", topo_bin, sub, "--topology", topo_path)
         abort "fuzzer_bench: topology #{sub} failed" unless ok
       end
+
+      if cells.any? { |c| %w[mutator mutator_mixed].include?(c["grammar"]) }
+        build_grammar_mutator!(opts, fuzz_root: fuzz_root)
+      end
     end
 
     corpus_dir = prepare_corpus!(opts)
@@ -654,7 +756,7 @@ module FuzzerBench
           end
           cell, trial = job
           warn "[fuzzer-bench] starting #{cell['id']} trial #{trial}/#{opts[:trials]} (#{opts[:duration]}s)..." unless opts[:quiet]
-          res = run_trial(cell, opts: opts, corpus_dir: corpus_dir, trial: trial)
+          res = run_trial(cell, opts: opts, corpus_dir: corpus_dir, trial: trial, fuzz_root: fuzz_root)
           mutex.synchronize { per_cell[cell["id"]] << res }
           warn "[fuzzer-bench] finished #{cell['id']} trial #{trial}: exec/s=#{res['execs_per_sec']} edges=#{res['cfg_edges']} crashes=#{res.dig('crashes', 'total')}" unless opts[:quiet]
         end
@@ -669,6 +771,7 @@ module FuzzerBench
       "config" => {
         "shapes" => opts[:shapes],
         "ijon_modes" => opts[:ijon_modes],
+        "grammar_modes" => opts[:grammar_modes],
         "cmplog" => opts[:cmplog],
         "sand" => opts[:sand],
         "schedules" => opts[:schedules],
