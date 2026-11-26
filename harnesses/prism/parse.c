@@ -168,12 +168,23 @@ static inline fuzz_span_t fuzz_magic_comment_value_span(const pm_magic_comment_t
 #endif
 }
 
+/* Hard C-stack recursion cap for harness AST walks (check_node_location,
+ * fuzz_line_offset_visit). Left-associative operator chains (e.g. i||||...)
+ * are parsed iteratively in Prism's Pratt loop and can legitimately produce
+ * ASTs thousands of nodes deep without exceeding PRISM_DEPTH_MAXIMUM; bounding
+ * our recursive pm_visit_node walks prevents ASan stack-overflow false
+ * positives on such chains. */
+#ifndef FUZZ_MAX_VISIT_DEPTH
+#define FUZZ_MAX_VISIT_DEPTH 1024u
+#endif
+
 typedef struct {
     const uint8_t *source;
     size_t parsed_size;
     pm_node_type_t parent_type;
     pm_parser_t *parser;
     size_t depth;
+    size_t visit_depth;
 } fuzz_node_check_t;
 
 typedef struct {
@@ -187,6 +198,7 @@ typedef struct {
     size_t parsed_size;
     uint32_t probe;
     const char *ctx;
+    size_t visit_depth;
 } fuzz_line_offset_ctx_t;
 #endif
 
@@ -239,7 +251,12 @@ static pm_visit_result_t fuzz_line_offset_visit(const pm_node_t *node, void *dat
         } else if (in_node_loc) {
             st->ctx = fuzz_node_type_name(node->type);
         }
-        return PM_VISIT_DESCEND;
+        if (st->visit_depth < FUZZ_MAX_VISIT_DEPTH) {
+            st->visit_depth++;
+            pm_visit_child_nodes(node, fuzz_line_offset_visit, st);
+            st->visit_depth--;
+        }
+        return PM_VISIT_SKIP;
     }
 
     switch (PM_NODE_TYPE(node)) {
@@ -267,7 +284,12 @@ static pm_visit_result_t fuzz_line_offset_visit(const pm_node_t *node, void *dat
             break;
     }
 
-    return PM_VISIT_DESCEND;
+    if (st->visit_depth < FUZZ_MAX_VISIT_DEPTH) {
+        st->visit_depth++;
+        pm_visit_child_nodes(node, fuzz_line_offset_visit, st);
+        st->visit_depth--;
+    }
+    return PM_VISIT_SKIP;
 }
 #endif
 
@@ -763,14 +785,17 @@ static pm_visit_result_t check_node_location(const pm_node_t *node, void *data) 
 #else
     size_t cur_depth = ctx->depth + 1u;
 #endif
-    fuzz_node_check_t child_ctx = {
-        .source = ctx->source,
-        .parsed_size = ctx->parsed_size,
-        .parent_type = node->type,
-        .parser = ctx->parser,
-        .depth = cur_depth,
-    };
-    pm_visit_child_nodes(node, check_node_location, &child_ctx);
+    if (ctx->visit_depth < FUZZ_MAX_VISIT_DEPTH) {
+        fuzz_node_check_t child_ctx = {
+            .source = ctx->source,
+            .parsed_size = ctx->parsed_size,
+            .parent_type = node->type,
+            .parser = ctx->parser,
+            .depth = cur_depth,
+            .visit_depth = ctx->visit_depth + 1u,
+        };
+        pm_visit_child_nodes(node, check_node_location, &child_ctx);
+    }
 #if !defined(PRISM_FUZZ_NO_SUB_LOCATIONS)
     fuzz_check_node_sub_locations(node, ctx);
 #endif
