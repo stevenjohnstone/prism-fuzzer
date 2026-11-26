@@ -18,7 +18,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "17eecca74a586156acebb8b06417f4df17cdedfc"
+DEFAULT_RUBY_REF = "11121e7878cd87f02f6b4f5eb4a03db681d37ad4"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -106,10 +106,11 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   [
     { id: "small-compile-fast",    fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0],       color: "#fb923c" },
     { id: "small-compile-exploit", fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],             color: "#f59e0b" },
-    { id: "small-compile-coe",     fuzzer: "fuzz.compile",      schedule: "coe",     afl_flags: %w[-P explore], color: "#fbbf24" },
+    { id: "small-compile-gm",      fuzzer: "fuzz.ijon.compile", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], color: "#fbbf24" },
     { id: "small-compile-text",    fuzzer: "fuzz.compile",      schedule: "lin",     afl_flags: %w[-Z -a text], color: "#fdba74" }
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-small", afl_role: :secondary, max_input_size: small_max_input do
+      mutator spec[:mutator] if spec[:mutator]
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount 1000
