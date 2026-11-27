@@ -34,6 +34,10 @@ ruby_dir = non_empty_env.call("RUBY_DIR") || non_empty_env.call("RUBY_ORACLE_DIR
 small_max_input = Integer(non_empty_env.call("FUZZ_SMALL_MAX_INPUT_SIZE") || "256")
 large_max_input = Integer(non_empty_env.call("FUZZ_LARGE_MAX_INPUT_SIZE") || non_empty_env.call("FUZZ_MAX_INPUT_SIZE") || "8192")
 max_allocated_mb = Integer(non_empty_env.call("FUZZ_MAX_ALLOCATED") || "256")
+# Work around CRuby #22533 (iseq_peephole_optimize infinite loop) until fixed upstream;
+# set FUZZ_DISABLE_PEEPHOLE=0 to re-enable peephole optimization across workers.
+disable_peephole = non_empty_env.call("FUZZ_DISABLE_PEEPHOLE") || "1"
+base_compile_env = disable_peephole == "0" ? {} : { FUZZ_DISABLE_PEEPHOLE: disable_peephole }
 
 PrismFuzzer.campaign "cruby-compile-fleet" do
   workspace "tmp/fuzz-compile", build_dir: "tmp/fuzz-compile/build"
@@ -101,7 +105,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
     seeds from: :corpus_small, filter: :self_pass, cache_key: "compile_small_pass"
     loopcount 1000
     mem_limit :none
-    env AFL_SYNC_TIME: "1"
+    env(**base_compile_env, AFL_SYNC_TIME: "1")
     color "#f97316"
   end
 
@@ -123,7 +127,8 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount(spec[:loopcount] || 1000)
-      env(**spec[:env]) if spec[:env]
+      worker_env = base_compile_env.merge(spec[:env] || {})
+      env(**worker_env) unless worker_env.empty?
       mem_limit :none
       color spec[:color]
     end
@@ -135,6 +140,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
     seeds from: :corpus_8k, filter: :self_pass, cache_key: "compile_8k_pass"
     peer_import group: "afl-small", worker: :"small-compile-main", alias: "small_compile"
     loopcount 1000
+    env(**base_compile_env) unless base_compile_env.empty?
     mem_limit :none
     keep_open_on_exit true
     color "#ea580c"
@@ -154,7 +160,8 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount(spec[:loopcount] || 1000)
-      env(**spec[:env]) if spec[:env]
+      worker_env = base_compile_env.merge(spec[:env] || {})
+      env(**worker_env) unless worker_env.empty?
       mem_limit :none
       color spec[:color]
     end

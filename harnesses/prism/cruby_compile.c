@@ -269,9 +269,9 @@ static VALUE compile_warning_warn(int argc, VALUE *argv, VALUE self) {
     return Qnil;
 }
 
-static VALUE compile_build_opt_hash(unsigned int mask) {
+static VALUE compile_build_opt_hash(unsigned int mask, bool disable_peephole) {
     VALUE h = rb_hash_new();
-    rb_hash_aset(h, ID2SYM(rb_intern("peephole_optimization")), (mask & 0x01u) ? Qfalse : Qtrue);
+    rb_hash_aset(h, ID2SYM(rb_intern("peephole_optimization")), (disable_peephole || (mask & 0x01u)) ? Qfalse : Qtrue);
     rb_hash_aset(h, ID2SYM(rb_intern("tailcall_optimization")), (mask & 0x02u) ? Qtrue : Qfalse);
     rb_hash_aset(h, ID2SYM(rb_intern("specialized_instruction")), (mask & 0x04u) ? Qfalse : Qtrue);
     rb_hash_aset(h, ID2SYM(rb_intern("operands_unification")), (mask & 0x08u) ? Qfalse : Qtrue);
@@ -313,8 +313,10 @@ static void compile_core_ids_init(void) {
     RB_OBJ_FREEZE(g_compiled_label);
     rb_gc_register_mark_object(g_compiled_label);
 
+    const char *disable_peephole_env = getenv("FUZZ_DISABLE_PEEPHOLE");
+    bool disable_peephole = (disable_peephole_env != NULL && disable_peephole_env[0] != '\0' && strcmp(disable_peephole_env, "0") != 0);
     for (unsigned int mask = 0; mask < COMPILE_OPT_COMBOS; mask++) {
-        g_compile_opts[mask] = compile_build_opt_hash(mask);
+        g_compile_opts[mask] = compile_build_opt_hash(mask, disable_peephole);
     }
 }
 
