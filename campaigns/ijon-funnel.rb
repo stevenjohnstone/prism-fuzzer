@@ -130,7 +130,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   sync_group "afl-small", dir: "afl-small"
 
   # ===========================================================================
-  # Island 1: 256 B High-Velocity Factory (`afl-small`, 14 AFL++ workers)
+  # Island 1: 256 B High-Velocity Factory (`afl-small`, 15 AFL++ workers)
   #   No incoming imports from `afl-8k` so workers never waste cycles on
   #   truncated >256 B prefixes.
   # ===========================================================================
@@ -145,6 +145,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
 
   small_san_workers = [
     { id: "small-explore-2", fuzzer: "fuzz.ijon",      schedule: "fast",    afl_flags: %w[-L 0],       mem_limit: :none, env: { AFL_CRASH_EXITCODE: "23" }, color: "#22c55e" },
+    { id: "small-ast",       fuzzer: "fuzz.ijon",      mutator: "libprismmutator.so", schedule: "explore", mem_limit: :none, env: { AFL_CRASH_EXITCODE: "23" }, color: "#10b981" },
     { id: "small-asan",      fuzzer: "fuzz.ijon.asan", cmplog: "fuzz.cmplog", schedule: "exploit",     loopcount: 2000, keep_open_on_exit: true, color: "#60a5fa" },
     { id: "small-asan-coe",  fuzzer: "fuzz.ijon.asan", schedule: "coe",     afl_flags: %w[-P explore], loopcount: 2000, color: "#38bdf8" },
     { id: "small-asan-text", fuzzer: "fuzz.ijon.asan", schedule: "lin",     afl_flags: %w[-Z -a text], loopcount: 2000, color: "#818cf8" },
@@ -181,10 +182,10 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   end
 
   # ===========================================================================
-  # Island 2: 8 KiB Deep-State, Bignum & Cross-Arch Hub (`afl-8k`, 6 AFL++ workers)
+  # Island 2: 8 KiB Deep-State, Bignum & Cross-Arch Hub (`afl-8k`, 7 AFL++ workers)
   #   Pulls one-way discoveries from `afl-small` (`small-scout`, `small-asan`,
-  #   `small-diff`) + `grammar-8k`, splicing compact building blocks into 8 KiB
-  #   programs, Karatsuba bignums, stream chunks, and 32-bit LE/BE AST checks.
+  #   `small-diff`), splicing compact building blocks into 8 KiB programs,
+  #   Karatsuba bignums, stream chunks, and 32-bit LE/BE AST checks.
   # ===========================================================================
   worker :"8k-main", fuzzer: "fuzz.ijon.asan", sync_group: "afl-8k", afl_role: :main, max_input_size: large_max_input do
     cmplog "fuzz.cmplog"
@@ -221,6 +222,14 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
     mem_limit :none
     seeds from: :corpus_8k, filter: :self_pass, cache_key: "large_ijon_diff"
     color "#ea580c"
+  end
+
+  worker :"8k-diff-ast", fuzzer: "fuzz.ijon.diff", sync_group: "afl-8k", afl_role: :secondary, max_input_size: large_max_input do
+    mutator "libprismmutator.so"
+    schedule "explore"
+    mem_limit :none
+    seeds from: :corpus_8k, filter: :self_pass, cache_key: "large_ijon_diff"
+    color "#fb923c"
   end
 
   large_cross_workers = [

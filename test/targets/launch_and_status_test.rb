@@ -910,7 +910,7 @@ class LaunchAndStatusTest < Minitest::Test
     plan_fn = PrismFuzzer::Topology.compile_plan(ir_fn, fuzz_root: root_dir)
     lp_fn = PrismFuzzer::Topology.plan_launch(plan_fn, fuzz_root: root_dir)
     assert_equal "ijon-funnel-prism-fleet", plan_fn["name"]
-    assert_equal 20, plan_fn["workers"].size
+    assert_equal 22, plan_fn["workers"].size
     assert_equal 8192, PrismFuzzer::Topology.effective_compiled_max_input_size(plan_fn)
     assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/afl-8k"), lp_fn["primary_afl_dir"]
     assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/corpus-8k"), lp_fn["corpus_dir"]
@@ -949,7 +949,7 @@ class LaunchAndStatusTest < Minitest::Test
     with_env("PRISM_B_REF" => "a1d1d96c368d49b752d06e361823a098b54f9a9d") do
       ir_fn_b, = PrismFuzzer::Topology.load_ir(funnel_camp, fuzz_root: root_dir)
       plan_fn_b = PrismFuzzer::Topology.compile_plan(ir_fn_b, fuzz_root: root_dir)
-      assert_equal 22, plan_fn_b["workers"].size
+      assert_equal 24, plan_fn_b["workers"].size
     end
   end
 
