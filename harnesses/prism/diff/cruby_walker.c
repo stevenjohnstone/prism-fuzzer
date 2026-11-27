@@ -663,7 +663,12 @@ static void diff_cruby_visit_scope_child_ctx(VALUE sc, int scope_kind, diff_crub
                 diff_cruby_visit_val_ctx(RARRAY_AREF(ch, 2), sub);
             }
         } else {
-            diff_cruby_visit_slot("body", RARRAY_AREF(ch, 2), sub);
+            VALUE body_val = RARRAY_AREF(ch, 2);
+            if ((diff_scope_kind_t) scope_kind == DIFF_SCOPE_DEF &&
+                diff_cruby_node_tid(body_val) == diff_ids.nil_n) {
+                body_val = Qnil;
+            }
+            diff_cruby_visit_slot("body", body_val, sub);
         }
         diff_tree_close(ctx.out);
     } else {
@@ -1298,6 +1303,31 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         }
         diff_cruby_ctx_t idx_ctx = sub;
         idx_ctx.in_target = true;
+        if (diff_cruby_is_ast_node(idx_node) && diff_cruby_node_tid(idx_node) == diff_ids.masgn) {
+            ID mt = 0;
+            volatile VALUE mch = diff_cruby_get_children(idx_node, ctx.out, &mt);
+            if (RARRAY_LEN(mch) >= 3 &&
+                diff_cruby_node_tid(RARRAY_AREF(mch, 0)) != diff_ids.for_masgn &&
+                NIL_P(RARRAY_AREF(mch, 2)) &&
+                diff_cruby_node_tid(RARRAY_AREF(mch, 1)) == diff_ids.list_n) {
+                ID lt = 0;
+                volatile VALUE lch = diff_cruby_get_children(RARRAY_AREF(mch, 1), ctx.out, &lt);
+                VALUE single = Qnil;
+                long non_nil = 0;
+                for (long li = 0; li < RARRAY_LEN(lch); li++) {
+                    VALUE item = RARRAY_AREF(lch, li);
+                    if (!NIL_P(item)) {
+                        single = item;
+                        non_nil++;
+                    }
+                }
+                if (non_nil == 1) {
+                    idx_node = single;
+                }
+                RB_GC_GUARD(lch);
+            }
+            RB_GC_GUARD(mch);
+        }
         diff_cruby_visit_slot("idx", idx_node, idx_ctx);
         diff_cruby_visit_slot("body", body_node, sub);
         diff_tree_close(ctx.out);
@@ -1326,8 +1356,12 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
     } else if (tid == diff_ids.args) {
         diff_cruby_emit_args_node(node, ctx);
     } else if (tid == diff_ids.block_n || tid == diff_ids.begin_n || tid == diff_ids.once_n) {
+        diff_cruby_ctx_t bsub = sub;
+        if (len == 1 && (tid == diff_ids.block_n || tid == diff_ids.begin_n)) {
+            bsub.in_container = ctx.in_container;
+        }
         for (long i = 0; i < len; i++) {
-            diff_cruby_visit_val_ctx(RARRAY_AREF(ch, i), sub);
+            diff_cruby_visit_val_ctx(RARRAY_AREF(ch, i), bsub);
         }
     } else if (tid == diff_ids.errinfo) {
         /* stripped synthetic $! reference */

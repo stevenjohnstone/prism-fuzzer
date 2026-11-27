@@ -413,7 +413,9 @@ static void diff_prism_visit_interpolated(
         size_t total_len = 0;
         diff_prism_hash_static_parts(parts, &h, &total_len, ctx->depth);
         if (leaf_tag == DIFF_TOK_REGX) {
-            diff_prism_emit_regexp_leaf(ctx->out, diff_prism_regexp_opts(node->flags), h, total_len);
+            /* RubyVM::AST NODE_DREGX does not expose regexp option flags, so
+             * cruby_walker emits 0 when folding static-interpolated regexps. */
+            diff_prism_emit_regexp_leaf(ctx->out, 0, h, total_len);
         } else {
             char buf[48];
             snprintf(buf, sizeof(buf), "%zu:%016llx", total_len, (unsigned long long) h);
