@@ -25,6 +25,10 @@
 
 #include <ruby.h>
 #include <ruby/version.h>
+#ifdef PRISM_FUZZ_IJON
+#include "vm_core.h"
+#include "iseq.h"
+#endif
 
 #ifndef FUZZ_MAX_INPUT_SIZE
 #define FUZZ_MAX_INPUT_SIZE 1024
@@ -90,8 +94,31 @@ extern bool pm_serialize_parse_success_p(const uint8_t *source, size_t size, con
 #ifdef PRISM_FUZZ_IJON
 #ifndef _USE_IJON
 extern void ijon_set(uint32_t addr, uint32_t val);
+extern void ijon_max(uint32_t addr, uint64_t val);
 extern uint32_t ijon_hashstr(uint32_t old, const char *val);
 #endif
+
+enum {
+    COMPILE_IJON_BASIC = 1u,
+    COMPILE_IJON_ISEQ  = 2u
+};
+
+static unsigned int compile_ijon_mode(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *env = getenv("FUZZ_COMPILE_IJON");
+        if (env == NULL || env[0] == '\0' || strcmp(env, "iseq") == 0) {
+            cached = (int) (COMPILE_IJON_BASIC | COMPILE_IJON_ISEQ);
+        } else if (strcmp(env, "basic") == 0) {
+            cached = (int) COMPILE_IJON_BASIC;
+        } else if (strcmp(env, "none") == 0) {
+            cached = 0;
+        } else {
+            cached = (int) (COMPILE_IJON_BASIC | COMPILE_IJON_ISEQ);
+        }
+    }
+    return (unsigned int) cached;
+}
 
 static inline uint32_t compile_ijon_mix32(uint32_t h) {
     h ^= h >> 16;
@@ -102,15 +129,103 @@ static inline uint32_t compile_ijon_mix32(uint32_t h) {
     return h;
 }
 
-static inline void compile_ijon_record(uint32_t salt, uint32_t val) {
+static inline uint32_t compile_ijon_base_hash(void) {
     static uint32_t base_hash = 0;
     if (base_hash == 0) {
-        base_hash = ijon_hashstr(101u, (char *) "cruby_compile.c");
+        base_hash = ijon_hashstr(101u, (char *) (uintptr_t) "cruby_compile.c");
         if (base_hash == 0) base_hash = 1u;
     }
-    uint32_t h = base_hash ^ salt;
+    return base_hash;
+}
+
+static inline void compile_ijon_record(uint32_t salt, uint32_t val) {
+    uint32_t h = compile_ijon_base_hash() ^ salt;
     if (h == 0) h = 1u;
     ijon_set(h, compile_ijon_mix32(h ^ val) & 0xfffu);
+}
+
+static inline void compile_ijon_max(uint32_t salt, uint64_t val) {
+    uint32_t h = compile_ijon_base_hash() ^ salt;
+    if (h == 0) h = 1u;
+    ijon_max(h, val);
+}
+
+typedef struct {
+    unsigned int opt_mask;
+    unsigned int compiler_bit;
+    uint32_t max_stack;
+    uint32_t max_locals;
+    uint32_t total_catch;
+    uint32_t max_catch_sp;
+    uint32_t total_iseq_size;
+    uint32_t child_count;
+} compile_iseq_stats_t;
+
+static void compile_walk_iseq_ijon(
+    const rb_iseq_t *iseq,
+    compile_iseq_stats_t *st,
+    unsigned int depth
+) {
+    if (iseq == NULL || depth >= 16u || st->child_count >= 64u) {
+        return;
+    }
+    const struct rb_iseq_constant_body *body = ISEQ_BODY(iseq);
+    if (body == NULL) {
+        return;
+    }
+    st->child_count++;
+    if (body->stack_max > st->max_stack) st->max_stack = body->stack_max;
+    if (body->local_table_size > st->max_locals) st->max_locals = body->local_table_size;
+    st->total_iseq_size += body->iseq_size;
+
+    uint32_t itype = (uint32_t) body->type & 0xfu;
+    compile_ijon_record(0x10u, (st->compiler_bit << 10) | ((st->opt_mask & 0x3fu) << 4) | itype);
+
+    const struct iseq_catch_table *ct = body->catch_table;
+    if (ct != NULL && ct->size > 0u) {
+        st->total_catch += ct->size;
+        uint32_t prev_ct = 0u;
+        unsigned int n = ct->size > 32u ? 32u : ct->size;
+        for (unsigned int i = 0u; i < n; i++) {
+            const struct iseq_catch_table_entry *e = &ct->entries[i];
+            uint32_t ctype = (uint32_t) FIX2INT(e->type) & 0xfu;
+            if (e->sp > st->max_catch_sp) st->max_catch_sp = e->sp;
+            compile_ijon_record(0x11u, (st->compiler_bit << 8) | (prev_ct << 4) | ctype);
+            compile_ijon_record(0x12u, (itype << 5) | ((e->sp > 0u ? 1u : 0u) << 4) | ctype);
+            prev_ct = ctype;
+            if (e->iseq != NULL) {
+                compile_walk_iseq_ijon(e->iseq, st, depth + 1u);
+            }
+        }
+    }
+}
+
+static void compile_record_iseq_ijon(
+    VALUE iseq_val,
+    unsigned int opt_mask,
+    unsigned int compiler_bit,
+    compile_iseq_stats_t *out_st
+) {
+    memset(out_st, 0, sizeof(*out_st));
+    out_st->opt_mask = opt_mask;
+    out_st->compiler_bit = compiler_bit;
+    if (NIL_P(iseq_val)) {
+        return;
+    }
+    const rb_iseq_t *iseq = rb_iseqw_to_iseq(iseq_val);
+    compile_walk_iseq_ijon(iseq, out_st, 0u);
+    if (out_st->max_stack > 0u)
+        compile_ijon_max(0x20u, out_st->max_stack > 512u ? 512u : out_st->max_stack);
+    if (out_st->total_catch > 0u)
+        compile_ijon_max(0x21u, out_st->total_catch > 128u ? 128u : out_st->total_catch);
+    if (out_st->max_locals > 0u)
+        compile_ijon_max(0x22u, out_st->max_locals > 128u ? 128u : out_st->max_locals);
+    if (out_st->total_iseq_size > 0u)
+        compile_ijon_max(0x23u, out_st->total_iseq_size > 4096u ? 4096u : out_st->total_iseq_size);
+    if (out_st->child_count > 1u)
+        compile_ijon_max(0x24u, out_st->child_count > 64u ? 64u : out_st->child_count);
+    if (out_st->max_catch_sp > 0u)
+        compile_ijon_max(0x25u, out_st->max_catch_sp > 128u ? 128u : out_st->max_catch_sp);
 }
 #endif
 
@@ -580,8 +695,10 @@ static bool compile_run_iseq(
     char *tag_buf,
     size_t tag_cap,
     char *msg_buf,
-    size_t msg_cap
+    size_t msg_cap,
+    VALUE *out_iseq
 ) {
+    if (out_iseq != NULL) *out_iseq = Qnil;
     compile_call_arg_t arg = {
         .method_id = method_id,
         .src_str = src_str,
@@ -612,6 +729,7 @@ static bool compile_run_iseq(
     }
     if (tag_cap > 0) snprintf(tag_buf, tag_cap, "ok");
     if (msg_cap > 0) snprintf(msg_buf, msg_cap, "ok");
+    if (out_iseq != NULL) *out_iseq = iseq;
     RB_GC_GUARD(iseq);
     return true;
 }
@@ -648,10 +766,11 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
     bool prism_parsed = compile_prism_accepts(src_str);
     bool prism_compiled = false;
+    volatile VALUE prism_iseq = Qnil;
     if (prism_parsed) {
         prism_compiled = compile_run_iseq(
             "prism", g_id_compile_prism, opt_mask, src_str, g_compile_opts[opt_mask],
-            prism_tag, sizeof(prism_tag), prism_msg, sizeof(prism_msg)
+            prism_tag, sizeof(prism_tag), prism_msg, sizeof(prism_msg), (VALUE *) &prism_iseq
         );
     }
 
@@ -659,21 +778,42 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         src_str, parse_y_tag, sizeof(parse_y_tag), parse_y_msg, sizeof(parse_y_msg)
     );
     bool parse_y_compiled = false;
+    volatile VALUE parse_y_iseq = Qnil;
     if (parse_y_parsed) {
         parse_y_compiled = compile_run_iseq(
             "parse_y", g_id_compile_parsey, opt_mask, src_str, g_compile_opts[opt_mask],
-            parse_y_tag, sizeof(parse_y_tag), parse_y_msg, sizeof(parse_y_msg)
+            parse_y_tag, sizeof(parse_y_tag), parse_y_msg, sizeof(parse_y_msg), (VALUE *) &parse_y_iseq
         );
     }
 
 #ifdef PRISM_FUZZ_IJON
-    uint32_t state_bits = (opt_mask << 4u) |
-                          ((prism_parsed ? 1u : 0u) << 3u) |
-                          ((prism_compiled ? 1u : 0u) << 2u) |
-                          ((parse_y_parsed ? 1u : 0u) << 1u) |
-                          (parse_y_compiled ? 1u : 0u);
-    compile_ijon_record(2u, state_bits);
+    unsigned int ij_mode = compile_ijon_mode();
+    if ((ij_mode & COMPILE_IJON_BASIC) != 0u) {
+        uint32_t state_bits = (opt_mask << 4u) |
+                              ((prism_parsed ? 1u : 0u) << 3u) |
+                              ((prism_compiled ? 1u : 0u) << 2u) |
+                              ((parse_y_parsed ? 1u : 0u) << 1u) |
+                              (parse_y_compiled ? 1u : 0u);
+        compile_ijon_record(2u, state_bits);
+    }
+    if ((ij_mode & COMPILE_IJON_ISEQ) != 0u) {
+        compile_iseq_stats_t pst, yst;
+        if (prism_compiled) compile_record_iseq_ijon(prism_iseq, opt_mask, 0u, &pst);
+        if (parse_y_compiled) compile_record_iseq_ijon(parse_y_iseq, opt_mask, 1u, &yst);
+        if (prism_compiled && parse_y_compiled) {
+            uint32_t diff_bits =
+                ((pst.max_stack != yst.max_stack) ? 1u : 0u) |
+                ((pst.total_catch != yst.total_catch) ? 2u : 0u) |
+                ((pst.max_catch_sp != yst.max_catch_sp) ? 4u : 0u) |
+                ((pst.child_count != yst.child_count) ? 8u : 0u);
+            if (diff_bits != 0u) {
+                compile_ijon_record(0x13u, ((opt_mask & 0x3fu) << 4) | diff_bits);
+            }
+        }
+    }
 #endif
+    RB_GC_GUARD(prism_iseq);
+    RB_GC_GUARD(parse_y_iseq);
 
     if (prism_compiled != parse_y_compiled) {
         if (prism_parsed && parse_y_parsed) {
@@ -724,12 +864,34 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     /* Both Prism and parse.y accepted the input as valid syntax; compile with both. */
     char prism_msg[160];
     char parse_y_msg[160];
-    bool prism_ok = compile_run_iseq("prism", g_id_compile_prism, opt_mask, src_str, g_compile_opts[opt_mask], NULL, 0, prism_msg, sizeof(prism_msg));
-    bool parse_y_ok = compile_run_iseq("parse_y", g_id_compile_parsey, opt_mask, src_str, g_compile_opts[opt_mask], NULL, 0, parse_y_msg, sizeof(parse_y_msg));
+    volatile VALUE prism_iseq = Qnil;
+    volatile VALUE parse_y_iseq = Qnil;
+    bool prism_ok = compile_run_iseq("prism", g_id_compile_prism, opt_mask, src_str, g_compile_opts[opt_mask], NULL, 0, prism_msg, sizeof(prism_msg), (VALUE *) &prism_iseq);
+    bool parse_y_ok = compile_run_iseq("parse_y", g_id_compile_parsey, opt_mask, src_str, g_compile_opts[opt_mask], NULL, 0, parse_y_msg, sizeof(parse_y_msg), (VALUE *) &parse_y_iseq);
 
 #ifdef PRISM_FUZZ_IJON
-    compile_ijon_record(1u, (opt_mask << 2u) | ((prism_ok ? 1u : 0u) << 1u) | (parse_y_ok ? 1u : 0u));
+    unsigned int ij_mode = compile_ijon_mode();
+    if ((ij_mode & COMPILE_IJON_BASIC) != 0u) {
+        compile_ijon_record(1u, (opt_mask << 2u) | ((prism_ok ? 1u : 0u) << 1u) | (parse_y_ok ? 1u : 0u));
+    }
+    if ((ij_mode & COMPILE_IJON_ISEQ) != 0u) {
+        compile_iseq_stats_t pst, yst;
+        if (prism_ok) compile_record_iseq_ijon(prism_iseq, opt_mask, 0u, &pst);
+        if (parse_y_ok) compile_record_iseq_ijon(parse_y_iseq, opt_mask, 1u, &yst);
+        if (prism_ok && parse_y_ok) {
+            uint32_t diff_bits =
+                ((pst.max_stack != yst.max_stack) ? 1u : 0u) |
+                ((pst.total_catch != yst.total_catch) ? 2u : 0u) |
+                ((pst.max_catch_sp != yst.max_catch_sp) ? 4u : 0u) |
+                ((pst.child_count != yst.child_count) ? 8u : 0u);
+            if (diff_bits != 0u) {
+                compile_ijon_record(0x13u, ((opt_mask & 0x3fu) << 4) | diff_bits);
+            }
+        }
+    }
 #endif
+    RB_GC_GUARD(prism_iseq);
+    RB_GC_GUARD(parse_y_iseq);
 
 #ifdef FUZZ_COMPILE_CHECK_PARITY
     if (prism_ok != parse_y_ok) {

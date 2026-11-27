@@ -563,6 +563,7 @@ if [ "$MODE" = "fuzz" ]; then
     ${PROVENANCE_CFLAGS[@]+"${PROVENANCE_CFLAGS[@]}"}
     "-I$FUZZ_ROOT/harnesses/prism"
     "-I$FUZZ_ROOT/harnesses/prism/include"
+    "-isystem" "$RUBY_DIR"
     "${RUBY_EMBED_INC[@]}"
   )
   extra_cflags_defines_macro FUZZ_MAX_INPUT_SIZE || HARNESS_CFLAGS+=("-DFUZZ_MAX_INPUT_SIZE=$MAX_INPUT_SIZE")
@@ -612,6 +613,7 @@ elif [ "$MODE" = "verify" ]; then
     ${PROVENANCE_CFLAGS[@]+"${PROVENANCE_CFLAGS[@]}"}
     "-I$FUZZ_ROOT/harnesses/prism"
     "-I$FUZZ_ROOT/harnesses/prism/include"
+    "-isystem" "$RUBY_DIR"
     "${RUBY_EMBED_INC[@]}"
   )
   extra_cflags_defines_macro FUZZ_MAX_INPUT_SIZE || VERIFY_CFLAGS+=("-DFUZZ_MAX_INPUT_SIZE=$MAX_INPUT_SIZE")
