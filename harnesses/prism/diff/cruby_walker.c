@@ -1367,17 +1367,23 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         /* stripped synthetic $! reference */
     } else if (tid == diff_ids.if_n && len >= 3) {
         ctx.out->counts[DIFF_CNT_IF]++;
+        diff_cruby_ctx_t branch_ctx = ctx;
+        branch_ctx.depth = ctx.depth + 1;
+        branch_ctx.in_container = false;
         diff_tree_open_cstr(ctx.out, DIFF_TOK_IF, NULL);
         diff_cruby_visit_slot("cond", RARRAY_AREF(ch, 0), sub);
-        diff_cruby_visit_slot("then", RARRAY_AREF(ch, 1), ctx);
-        diff_cruby_visit_slot("else", RARRAY_AREF(ch, 2), ctx);
+        diff_cruby_visit_slot("then", RARRAY_AREF(ch, 1), branch_ctx);
+        diff_cruby_visit_slot("else", RARRAY_AREF(ch, 2), branch_ctx);
         diff_tree_close(ctx.out);
     } else if (tid == diff_ids.unless_n && len >= 3) {
         ctx.out->counts[DIFF_CNT_UNLESS]++;
+        diff_cruby_ctx_t branch_ctx = ctx;
+        branch_ctx.depth = ctx.depth + 1;
+        branch_ctx.in_container = false;
         diff_tree_open_cstr(ctx.out, DIFF_TOK_UNLESS, NULL);
         diff_cruby_visit_slot("cond", RARRAY_AREF(ch, 0), sub);
-        diff_cruby_visit_slot("then", RARRAY_AREF(ch, 1), ctx);
-        diff_cruby_visit_slot("else", RARRAY_AREF(ch, 2), ctx);
+        diff_cruby_visit_slot("then", RARRAY_AREF(ch, 1), branch_ctx);
+        diff_cruby_visit_slot("else", RARRAY_AREF(ch, 2), branch_ctx);
         diff_tree_close(ctx.out);
     } else if ((tid == diff_ids.while_n || tid == diff_ids.until_n) && len >= 3) {
         ctx.out->counts[tid == diff_ids.while_n ? DIFF_CNT_WHILE : DIFF_CNT_UNTIL]++;
@@ -1412,8 +1418,11 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         RB_GC_GUARD(cur);
     } else if (tid == diff_ids.case3_n && len >= 2) {
         ctx.out->counts[DIFF_CNT_CASE_MATCH]++;
+        diff_cruby_ctx_t expr_ctx = sub;
+        expr_ctx.in_pattern = false;
+        expr_ctx.in_target = false;
         diff_tree_open_cstr(ctx.out, DIFF_TOK_CASE_MATCH, NULL);
-        diff_cruby_visit_slot("head", RARRAY_AREF(ch, 0), sub);
+        diff_cruby_visit_slot("head", RARRAY_AREF(ch, 0), expr_ctx);
         volatile VALUE cur = RARRAY_AREF(ch, 1);
         while (diff_cruby_is_ast_node(cur) && diff_cruby_node_tid(cur) == diff_ids.in_n) {
             ctx.out->counts[DIFF_CNT_IN]++;
@@ -1423,17 +1432,16 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
                 RB_GC_GUARD(ich);
                 break;
             }
-            diff_cruby_ctx_t pat_ctx = sub;
+            diff_cruby_ctx_t pat_ctx = expr_ctx;
             pat_ctx.in_pattern = true;
-            pat_ctx.in_target = false;
             diff_tree_open_cstr(ctx.out, DIFF_TOK_IN, NULL);
             diff_cruby_visit_slot("pat", RARRAY_AREF(ich, 0), pat_ctx);
-            diff_cruby_visit_slot("body", RARRAY_AREF(ich, 1), sub);
+            diff_cruby_visit_slot("body", RARRAY_AREF(ich, 1), expr_ctx);
             diff_tree_close(ctx.out);
             cur = RARRAY_AREF(ich, 2);
             RB_GC_GUARD(ich);
         }
-        diff_cruby_visit_slot("else", cur, sub);
+        diff_cruby_visit_slot("else", cur, expr_ctx);
         diff_tree_close(ctx.out);
         RB_GC_GUARD(cur);
     } else if ((tid == diff_ids.and_n || tid == diff_ids.or_n)) {

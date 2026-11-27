@@ -239,6 +239,14 @@ static bool diff_prism_node_is_static_str_depth(
             }
             return true;
         }
+        case PM_BEGIN_NODE: {
+            const pm_begin_node_t *bn = (const pm_begin_node_t *) node;
+            if (bn->rescue_clause == NULL && bn->ensure_clause == NULL && bn->else_clause == NULL &&
+                bn->statements != NULL && bn->statements->body.size == 1) {
+                return diff_prism_node_is_static_str_depth(parser, bn->statements->body.nodes[0], embed_budget, fold_leading_semi);
+            }
+            return false;
+        }
         default:
             return false;
     }
@@ -312,6 +320,14 @@ static void diff_prism_hash_static_parts(
                 const pm_embedded_statements_node_t *emb = (const pm_embedded_statements_node_t *) part;
                 if (emb->statements != NULL) {
                     diff_prism_hash_static_parts(&emb->statements->body, hash_io, len_io, depth + 1);
+                }
+                break;
+            }
+            case PM_BEGIN_NODE: {
+                const pm_begin_node_t *bn = (const pm_begin_node_t *) part;
+                if (bn->rescue_clause == NULL && bn->ensure_clause == NULL && bn->else_clause == NULL &&
+                    bn->statements != NULL) {
+                    diff_prism_hash_static_parts(&bn->statements->body, hash_io, len_io, depth + 1);
                 }
                 break;
             }
@@ -528,7 +544,21 @@ static void diff_prism_visit_begin_parts(
             diff_tree_open_cstr(ctx->out, DIFF_TOK_RESBODY, NULL);
             diff_tree_open_slot(ctx->out, "exc");
             for (size_t i = 0; i < r->exceptions.size; i++) {
-                diff_prism_emit_seq_elem(r->exceptions.nodes[i], i, "elem", ctx);
+                const pm_node_t *ex = r->exceptions.nodes[i];
+                if (i == 0 && ex != NULL && PM_NODE_TYPE_P(ex, PM_SPLAT_NODE)) {
+                    const pm_splat_node_t *sp = (const pm_splat_node_t *) ex;
+                    if (sp->expression != NULL && PM_NODE_TYPE_P(sp->expression, PM_ARRAY_NODE)) {
+                        const pm_array_node_t *inner = (const pm_array_node_t *) sp->expression;
+                        if (inner->elements.size > 0 &&
+                            !(inner->elements.size == 1 && PM_NODE_TYPE_P(inner->elements.nodes[0], PM_SPLAT_NODE))) {
+                            for (size_t j = 0; j < inner->elements.size; j++) {
+                                diff_prism_emit_seq_elem(inner->elements.nodes[j], j, "elem", ctx);
+                            }
+                            continue;
+                        }
+                    }
+                }
+                diff_prism_emit_seq_elem(ex, i, "elem", ctx);
             }
             diff_tree_close(ctx->out);
             diff_prism_visit_slot("var", r->reference, ctx);
@@ -700,11 +730,14 @@ static void diff_prism_visit_hash_elems(const pm_node_list_t *elements, diff_pri
     diff_tree_open_cstr(ctx->out, DIFF_TOK_HASH, NULL);
     for (size_t i = 0; i < elements->size; i++) {
         const pm_node_t *elem = elements->nodes[i];
-        /* CRuby parse.y drops non-initial `**{}` (empty hash splat) during hash construction. */
+        /* CRuby parse.y flattens non-initial `**{...}` literal hash splats inline. */
         if (i > 0 && elem != NULL && PM_NODE_TYPE_P(elem, PM_ASSOC_SPLAT_NODE)) {
             const pm_assoc_splat_node_t *as = (const pm_assoc_splat_node_t *) elem;
-            if (as->value != NULL && PM_NODE_TYPE_P(as->value, PM_HASH_NODE) &&
-                ((const pm_hash_node_t *) as->value)->elements.size == 0) {
+            if (as->value != NULL && PM_NODE_TYPE_P(as->value, PM_HASH_NODE)) {
+                const pm_hash_node_t *inner = (const pm_hash_node_t *) as->value;
+                for (size_t j = 0; j < inner->elements.size; j++) {
+                    diff_prism_visit_child(inner->elements.nodes[j], ctx);
+                }
                 continue;
             }
         }
