@@ -27,6 +27,8 @@
 #define PM_MUT_MAX_TOKENS    64u
 #define PM_MUT_MAX_DEPTH     128u
 #define PM_MUT_INIT_CAP      32768u
+#define PM_MUT_MAX_TRIM_STEPS 32u
+#define PM_MUT_MAX_TRIM_CANDS 128u
 
 typedef struct {
     uint32_t start;
@@ -86,6 +88,14 @@ typedef struct {
 } ast_index_t;
 
 typedef struct {
+    uint32_t start;
+    uint32_t length;
+    const char *repl;
+    uint32_t repl_len;
+    uint32_t savings;
+} trim_cand_t;
+
+typedef struct {
     uint64_t rng;
     size_t header_bytes;
     uint8_t *out_buf;
@@ -97,6 +107,19 @@ typedef struct {
     bool cache_valid;
     bool cache_has_nodes;
     ast_index_t cache_idx;
+    /* AST-guided custom trimmer state */
+    uint8_t *trim_cur_buf;
+    size_t trim_cur_len;
+    size_t trim_cur_cap;
+    uint8_t *trim_cand_buf;
+    size_t trim_cand_len;
+    size_t trim_cand_cap;
+    size_t trim_orig_len;
+    trim_cand_t trim_cands[PM_MUT_MAX_TRIM_STEPS];
+    size_t trim_cand_count;
+    size_t trim_cand_idx;
+    int32_t trim_step;
+    int32_t trim_max_steps;
 } prism_mutator_t;
 
 static uint64_t fnv1a_64(const uint8_t *data, size_t len) {
@@ -1491,7 +1514,357 @@ void afl_custom_deinit(void *data) {
     }
     free(m->cache_src);
     free(m->out_buf);
+    free(m->trim_cur_buf);
+    free(m->trim_cand_buf);
     free(m);
+}
+
+typedef struct {
+    const uint8_t *src;
+    size_t src_len;
+    trim_cand_t cands[PM_MUT_MAX_TRIM_CANDS];
+    size_t count;
+    unsigned depth;
+} trim_index_t;
+
+static void add_trim_cand(
+    trim_index_t *ti,
+    uint32_t start,
+    uint32_t length,
+    const char *repl,
+    uint32_t repl_len
+) {
+    if (ti->count >= PM_MUT_MAX_TRIM_CANDS) {
+        return;
+    }
+    if (start > ti->src_len || length > ti->src_len - start || length <= repl_len) {
+        return;
+    }
+    /* Avoid duplicate (start, length, repl_len) candidates */
+    for (size_t i = 0; i < ti->count; i++) {
+        if (ti->cands[i].start == start && ti->cands[i].length == length &&
+            ti->cands[i].repl_len == repl_len) {
+            return;
+        }
+    }
+    ti->cands[ti->count++] = (trim_cand_t) {
+        .start = start,
+        .length = length,
+        .repl = repl,
+        .repl_len = repl_len,
+        .savings = length - repl_len
+    };
+}
+
+static void add_trim_list_items(trim_index_t *ti, const pm_node_list_t *list) {
+    for (size_t i = 0; i < list->size && ti->count < PM_MUT_MAX_TRIM_CANDS; i++) {
+        const pm_node_t *el = list->nodes[i];
+        if (el == NULL || !valid_loc(el->location, ti->src_len)) {
+            continue;
+        }
+        uint32_t s = el->location.start;
+        uint32_t e = s + el->location.length;
+        /* Consume trailing comma + horizontal space if present; else leading comma. */
+        uint32_t pe = e;
+        while (pe < ti->src_len && (ti->src[pe] == ' ' || ti->src[pe] == '\t')) {
+            pe++;
+        }
+        if (pe < ti->src_len && ti->src[pe] == ',') {
+            pe++;
+            while (pe < ti->src_len && (ti->src[pe] == ' ' || ti->src[pe] == '\t')) {
+                pe++;
+            }
+            add_trim_cand(ti, s, pe - s, "", 0);
+        } else {
+            uint32_t ps = s;
+            while (ps > 0 && (ti->src[ps - 1] == ' ' || ti->src[ps - 1] == '\t')) {
+                ps--;
+            }
+            if (ps > 0 && ti->src[ps - 1] == ',') {
+                ps--;
+                add_trim_cand(ti, ps, e - ps, "", 0);
+            } else {
+                add_trim_cand(ti, s, e - s, "", 0);
+            }
+        }
+    }
+}
+
+static pm_visit_result_t collect_trim_cb(const pm_node_t *node, void *data) {
+    trim_index_t *ti = (trim_index_t *) data;
+    if (ti->depth >= PM_MUT_MAX_DEPTH || ti->count >= PM_MUT_MAX_TRIM_CANDS) {
+        return PM_VISIT_SKIP;
+    }
+
+    pm_node_type_t type = PM_NODE_TYPE(node);
+    switch (type) {
+        case PM_STATEMENTS_NODE: {
+            const pm_statements_node_t *sn = (const pm_statements_node_t *) node;
+            if (sn->body.size >= 2) {
+                for (size_t i = 0; i < sn->body.size && ti->count < PM_MUT_MAX_TRIM_CANDS; i++) {
+                    const pm_node_t *stmt = sn->body.nodes[i];
+                    if (stmt == NULL || !valid_loc(stmt->location, ti->src_len)) {
+                        continue;
+                    }
+                    uint32_t s = stmt->location.start;
+                    uint32_t e = s + stmt->location.length;
+                    while (e < ti->src_len && (ti->src[e] == ' ' || ti->src[e] == '\t')) {
+                        e++;
+                    }
+                    if (e < ti->src_len && (ti->src[e] == ';' || ti->src[e] == '\n')) {
+                        e++;
+                    } else if (e + 1 < ti->src_len && ti->src[e] == '\r' && ti->src[e + 1] == '\n') {
+                        e += 2;
+                    }
+                    add_trim_cand(ti, s, e - s, "", 0);
+                }
+            }
+            break;
+        }
+        case PM_ELSE_NODE:
+        case PM_RESCUE_NODE:
+        case PM_ENSURE_NODE:
+            if (valid_loc(node->location, ti->src_len)) {
+                add_trim_cand(ti, node->location.start, node->location.length, "", 0);
+            }
+            break;
+        case PM_CASE_NODE: {
+            const pm_case_node_t *cn = (const pm_case_node_t *) node;
+            if (cn->conditions.size >= 2) {
+                for (size_t i = 0; i < cn->conditions.size; i++) {
+                    const pm_node_t *w = cn->conditions.nodes[i];
+                    if (w != NULL && valid_loc(w->location, ti->src_len)) {
+                        add_trim_cand(ti, w->location.start, w->location.length, "", 0);
+                    }
+                }
+            }
+            break;
+        }
+        case PM_CASE_MATCH_NODE: {
+            const pm_case_match_node_t *cm = (const pm_case_match_node_t *) node;
+            if (cm->conditions.size >= 2) {
+                for (size_t i = 0; i < cm->conditions.size; i++) {
+                    const pm_node_t *w = cm->conditions.nodes[i];
+                    if (w != NULL && valid_loc(w->location, ti->src_len)) {
+                        add_trim_cand(ti, w->location.start, w->location.length, "", 0);
+                    }
+                }
+            }
+            break;
+        }
+        case PM_CLASS_NODE: {
+            const pm_class_node_t *cn = (const pm_class_node_t *) node;
+            if (cn->superclass != NULL &&
+                valid_loc(cn->inheritance_operator_loc, ti->src_len) &&
+                valid_loc(cn->superclass->location, ti->src_len)) {
+                uint32_t s = cn->inheritance_operator_loc.start;
+                uint32_t e = cn->superclass->location.start + cn->superclass->location.length;
+                if (e > s && e <= ti->src_len) {
+                    add_trim_cand(ti, s, e - s, "", 0);
+                }
+            }
+            break;
+        }
+        case PM_ARRAY_NODE:
+            add_trim_list_items(ti, &((const pm_array_node_t *) node)->elements);
+            break;
+        case PM_HASH_NODE:
+            add_trim_list_items(ti, &((const pm_hash_node_t *) node)->elements);
+            break;
+        case PM_HASH_PATTERN_NODE: {
+            const pm_hash_pattern_node_t *hp = (const pm_hash_pattern_node_t *) node;
+            add_trim_list_items(ti, &hp->elements);
+            if (hp->rest != NULL && valid_loc(hp->rest->location, ti->src_len)) {
+                uint32_t s = hp->rest->location.start;
+                uint32_t e = s + hp->rest->location.length;
+                uint32_t ps = s;
+                while (ps > 0 && (ti->src[ps - 1] == ' ' || ti->src[ps - 1] == '\t')) {
+                    ps--;
+                }
+                if (ps > 0 && ti->src[ps - 1] == ',') {
+                    ps--;
+                }
+                add_trim_cand(ti, ps, e - ps, "", 0);
+            }
+            break;
+        }
+        case PM_ARGUMENTS_NODE:
+            add_trim_list_items(ti, &((const pm_arguments_node_t *) node)->arguments);
+            break;
+        default:
+            break;
+    }
+
+    if (is_replaceable_node(type) && valid_loc(node->location, ti->src_len) && node->location.length >= 4) {
+        add_trim_cand(ti, node->location.start, node->location.length, "0", 1);
+    }
+
+    ti->depth++;
+    pm_visit_child_nodes(node, collect_trim_cb, data);
+    ti->depth--;
+    return PM_VISIT_SKIP;
+}
+
+static int cmp_trim_cand_desc(const void *a, const void *b) {
+    const trim_cand_t *ca = (const trim_cand_t *) a;
+    const trim_cand_t *cb = (const trim_cand_t *) b;
+    if (cb->savings != ca->savings) {
+        return (cb->savings > ca->savings) ? 1 : -1;
+    }
+    if (ca->repl_len != cb->repl_len) {
+        return (ca->repl_len < cb->repl_len) ? -1 : 1;
+    }
+    return (ca->start < cb->start) ? -1 : (ca->start > cb->start ? 1 : 0);
+}
+
+static size_t rebuild_trim_cands(prism_mutator_t *m) {
+    m->trim_cand_count = 0;
+    m->trim_cand_idx = 0;
+    if (m->trim_cur_len <= m->header_bytes + 4u) {
+        return 0;
+    }
+    const uint8_t *src = m->trim_cur_buf + m->header_bytes;
+    size_t src_len = m->trim_cur_len - m->header_bytes;
+    if (src_len > PM_MUT_MAX_PARSE_LEN) {
+        return 0;
+    }
+
+    pm_arena_t *arena = pm_arena_new();
+    if (arena == NULL) {
+        return 0;
+    }
+    pm_parser_t *parser = pm_parser_new(arena, src, src_len, NULL);
+    if (parser == NULL) {
+        pm_arena_free(arena);
+        return 0;
+    }
+    pm_node_t *root = pm_parse(parser);
+    trim_index_t ti;
+    memset(&ti, 0, sizeof(ti));
+    ti.src = src;
+    ti.src_len = src_len;
+    if (root != NULL) {
+        pm_visit_node(root, collect_trim_cb, &ti);
+    }
+    pm_parser_free(parser);
+    pm_arena_free(arena);
+
+    if (ti.count == 0) {
+        return 0;
+    }
+    qsort(ti.cands, ti.count, sizeof(ti.cands[0]), cmp_trim_cand_desc);
+    size_t keep = ti.count < PM_MUT_MAX_TRIM_STEPS ? ti.count : PM_MUT_MAX_TRIM_STEPS;
+    memcpy(m->trim_cands, ti.cands, keep * sizeof(ti.cands[0]));
+    m->trim_cand_count = keep;
+    return keep;
+}
+
+static bool ensure_trim_buf(uint8_t **buf, size_t *cap, size_t needed) {
+    if (needed <= *cap) {
+        return true;
+    }
+    size_t next = *cap ? *cap : 4096u;
+    while (next < needed) {
+        if (next > SIZE_MAX / 2) {
+            return false;
+        }
+        next *= 2;
+    }
+    uint8_t *p = (uint8_t *) realloc(*buf, next);
+    if (p == NULL) {
+        return false;
+    }
+    *buf = p;
+    *cap = next;
+    return true;
+}
+
+int32_t afl_custom_init_trim(void *data, uint8_t *buf, size_t buf_size) {
+    prism_mutator_t *m = (prism_mutator_t *) data;
+    if (m == NULL || buf == NULL || buf_size <= m->header_bytes + 4u) {
+        return 0;
+    }
+    if (!ensure_trim_buf(&m->trim_cur_buf, &m->trim_cur_cap, buf_size) ||
+        !ensure_trim_buf(&m->trim_cand_buf, &m->trim_cand_cap, buf_size)) {
+        return 0;
+    }
+    memcpy(m->trim_cur_buf, buf, buf_size);
+    m->trim_cur_len = buf_size;
+    m->trim_orig_len = buf_size;
+    m->trim_cand_len = buf_size;
+    m->trim_step = 0;
+
+    size_t n = rebuild_trim_cands(m);
+    m->trim_max_steps = (int32_t) n;
+    return m->trim_max_steps;
+}
+
+size_t afl_custom_trim(void *data, uint8_t **out_buf) {
+    prism_mutator_t *m = (prism_mutator_t *) data;
+    if (m == NULL || m->trim_cur_buf == NULL || m->trim_cand_buf == NULL ||
+        m->trim_cand_idx >= m->trim_cand_count) {
+        *out_buf = m ? m->trim_cur_buf : NULL;
+        return m ? m->trim_cur_len : 0;
+    }
+
+    size_t hdr_len = m->header_bytes;
+    const uint8_t *src = m->trim_cur_buf + hdr_len;
+    size_t src_len = m->trim_cur_len - hdr_len;
+    trim_cand_t c = m->trim_cands[m->trim_cand_idx];
+
+    if (c.start > src_len || c.length > src_len - c.start || c.length <= c.repl_len) {
+        *out_buf = m->trim_cur_buf;
+        m->trim_cand_len = m->trim_cur_len;
+        return m->trim_cur_len;
+    }
+
+    size_t tail_off = (size_t) c.start + (size_t) c.length;
+    size_t new_len = hdr_len + (size_t) c.start + (size_t) c.repl_len + (src_len - tail_off);
+    if (new_len > m->trim_orig_len || new_len >= m->trim_cur_len) {
+        *out_buf = m->trim_cur_buf;
+        m->trim_cand_len = m->trim_cur_len;
+        return m->trim_cur_len;
+    }
+
+    uint8_t *dst = m->trim_cand_buf;
+    if (hdr_len > 0) {
+        memcpy(dst, m->trim_cur_buf, hdr_len);
+    }
+    size_t pos = hdr_len;
+    if (c.start > 0) {
+        memcpy(dst + pos, src, c.start);
+        pos += c.start;
+    }
+    if (c.repl_len > 0) {
+        memcpy(dst + pos, c.repl, c.repl_len);
+        pos += c.repl_len;
+    }
+    if (tail_off < src_len) {
+        memcpy(dst + pos, src + tail_off, src_len - tail_off);
+        pos += src_len - tail_off;
+    }
+    m->trim_cand_len = pos;
+    *out_buf = dst;
+    return pos;
+}
+
+int32_t afl_custom_post_trim(void *data, uint8_t success) {
+    prism_mutator_t *m = (prism_mutator_t *) data;
+    if (m == NULL) {
+        return 0;
+    }
+    m->trim_step++;
+    if (success && m->trim_cand_len < m->trim_cur_len && m->trim_cand_len <= m->trim_orig_len) {
+        memcpy(m->trim_cur_buf, m->trim_cand_buf, m->trim_cand_len);
+        m->trim_cur_len = m->trim_cand_len;
+        rebuild_trim_cands(m);
+    } else {
+        m->trim_cand_idx++;
+    }
+    if (m->trim_step >= m->trim_max_steps || m->trim_cand_idx >= m->trim_cand_count) {
+        return m->trim_max_steps;
+    }
+    return m->trim_step;
 }
 
 static bool get_or_index_a(prism_mutator_t *m, const uint8_t *src, size_t src_len) {
@@ -1733,6 +2106,32 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                     sink ^= out[j];
                 }
                 (void) sink;
+            }
+        }
+        /* Also exercise AST-guided custom trimming with mixed accept/reject outcomes. */
+        if (buf != NULL && buf_len > 0) {
+            int32_t steps = afl_custom_init_trim(m, buf, buf_len);
+            if (steps < 0) {
+                abort();
+            }
+            int32_t cur = 0;
+            while (cur < steps) {
+                uint8_t *tout = NULL;
+                size_t tlen = afl_custom_trim(m, &tout);
+                if (tlen > buf_len || (tlen > 0 && tout == NULL)) {
+                    abort();
+                }
+                volatile uint8_t sink = 0;
+                for (size_t j = 0; j < tlen; j++) {
+                    sink ^= tout[j];
+                }
+                (void) sink;
+                uint8_t ok = (uint8_t) (((data[1] >> (cur & 7)) & 1u) != 0);
+                int32_t next = afl_custom_post_trim(m, ok);
+                if (next <= cur || next > steps) {
+                    abort();
+                }
+                cur = next;
             }
         }
         afl_custom_deinit(m);
