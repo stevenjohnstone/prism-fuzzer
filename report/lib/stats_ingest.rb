@@ -36,13 +36,8 @@ module PrismFuzzerReport
     end
 
     def normalize_sync_source(src, consumer_worker: nil, topo_ctx: nil)
-      if (gram_w = Helpers.resolve_grammar_sync_worker(consumer_worker, src, topo_ctx: topo_ctx))
-        return gram_w
-      end
-
-      aliases = (topo_ctx && topo_ctx[:aliases]) || { "seeds" => "grammar" }
+      aliases = (topo_ctx && topo_ctx[:aliases]) || {}
       return aliases[src] if aliases.key?(src)
-      return "grammar" if src =~ /\A(?:grammar|seeds)(?:_\d+)?\z/
       return "ijon" if src =~ /\Aijon(?:_\d+|_peer)?\z/
       return "diff" if src =~ /\Adiff(?:_\d+|_peer)?\z/
 
@@ -71,48 +66,6 @@ module PrismFuzzerReport
         end
       end
       by_name
-    end
-
-    def parse_generator_plot_data(path)
-      return [] unless File.exist?(path)
-
-      rows = []
-      File.foreach(path) do |line|
-        line = PrismFuzzer::Common.utf8_safe(line).strip
-        next if line.empty? || line.start_with?("#")
-
-        parts = line.split(",").map(&:strip)
-        next if parts.size < 4
-
-        rows << {
-          relative_time: parts[0].to_i,
-          files_created: parts[1].to_i,
-          files_per_sec: parts[2].to_f,
-          avg_files_per_sec: parts[3].to_f,
-          attempts_done: (parts[4] || parts[1]).to_i,
-          files_valid: parts[5].to_i,
-          files_invalid: parts[6].to_i,
-          corpus_count: parts[1].to_i,
-          execs_per_sec: parts[2].to_f,
-          total_execs: (parts[4] || parts[1]).to_i,
-          cycles_done: 0,
-          cur_item: 0,
-          pending_total: 0,
-          pending_favs: 0,
-          map_size: 0.0,
-          saved_crashes: 0,
-          saved_hangs: 0,
-          max_depth: 0,
-          edges_found: 0,
-          total_crashes: 0
-        }
-      end
-      rows
-    rescue Errno::ENOENT, Errno::ESTALE
-      []
-    rescue SystemCallError, IOError => e
-      warn "StatsIngest: failed to read generator plot_data #{path}: #{e.class}: #{e.message}" unless ENV["FUZZ_QUIET"] == "1"
-      []
     end
 
     def parse_plot_data(path)
@@ -261,7 +214,7 @@ module PrismFuzzerReport
 
     def sort_fuzzer_names(names, topo_ctx: nil)
       topo_order = (topo_ctx && topo_ctx[:order]) || []
-      priority = { "main" => 0, "grammar" => 1, "msan" => 2, "ijon" => 3, "slow" => 4, "diff" => 5 }
+      priority = { "main" => 0, "msan" => 1, "ijon" => 2, "slow" => 3, "diff" => 4 }
       names.sort_by do |name|
         topo_idx = topo_order.index(name)
         if topo_idx
@@ -284,12 +237,6 @@ module PrismFuzzerReport
 
       w = Array(topo["workers"]).find { |item| item.is_a?(Hash) && item["id"].to_s == name.to_s }
       return nil unless w
-
-      if w["kind"].to_s == "generator"
-        gid = w["generator"].to_s
-        s = topo.dig("generators", gid, "schedule").to_s
-        return s.empty? ? "grammar" : s
-      end
 
       s = w["schedule"].to_s
       s.empty? ? nil : s
@@ -429,7 +376,7 @@ module PrismFuzzerReport
     end
 
     def compute_peer_sync(fuzzers:, afl_fuzzers:, main_fuzzer:, afl_dir:, master_by_group_dir: {}, worker_spec_by_id: {}, topo_ctx: nil)
-      aliases = (topo_ctx && topo_ctx[:aliases]) || { "seeds" => "grammar" }
+      aliases = (topo_ctx && topo_ctx[:aliases]) || {}
       main_name = main_fuzzer[:name]
       expanded_afl_dir = File.expand_path(afl_dir)
       afl_by_name = afl_fuzzers.each_with_object({}) { |af, h| h[af[:name]] = af }
@@ -457,52 +404,6 @@ module PrismFuzzerReport
       peer_sync_by_name = {}
       fuzzers.each do |f|
         peer_name = f[:name]
-        if f[:role] == :generator
-          gen_wspec = worker_spec_by_id[peer_name]
-          gen_id = gen_wspec ? gen_wspec["generator"].to_s : peer_name
-          topo_consumer_w = topo_workers.find do |cw|
-            cw["kind"].to_s != "generator" && Array(cw["foreign_sync"]).map(&:to_s).include?(gen_id)
-          end
-          intake_fuzzer = topo_consumer_w && afl_by_name[topo_consumer_w["id"].to_s]
-          intake_fuzzer ||= afl_fuzzers.max_by { |af| lookup_prefix(af[:origins][:by_source][peer_name] || [], af[:corpus_count]) }
-          if intake_fuzzer.nil? || (topo_consumer_w.nil? && lookup_prefix(intake_fuzzer[:origins][:by_source][peer_name] || [], intake_fuzzer[:corpus_count]).zero?)
-            intake_fuzzer = afl_fuzzers.find { |af| af[:name] == "ijon" } || main_fuzzer
-          end
-          peer_total = [f[:files_created].to_i, 0].max
-          imported_count = lookup_prefix(intake_fuzzer[:origins][:by_source][peer_name] || [], intake_fuzzer[:corpus_count])
-          pending = [f[:pending_files].to_i, 0].max
-          scanned = [peer_total - pending, imported_count].max
-          peer_total = [peer_total, scanned].max
-          backlog = [peer_total - scanned, 0].max
-          sync_pct = peer_total > 0 ? (scanned * 100.0 / peer_total) : 100.0
-          tested_count = [scanned, imported_count].max
-          rejected_count = [tested_count - imported_count, 0].max
-          yield_pct = tested_count > 0 ? (imported_count * 100.0 / tested_count) : 0.0
-          peer_sync_by_name[peer_name] = {
-            is_generator: true,
-            sync_mode: :foreign_seeds,
-            source_fuzzer: f,
-            source_name: peer_name,
-            intake_fuzzer: intake_fuzzer,
-            intake_name: intake_fuzzer[:name],
-            consumer_fuzzer: intake_fuzzer,
-            consumer_name: intake_fuzzer[:name],
-            peer_total: peer_total,
-            watermark: scanned,
-            cursor: scanned,
-            skipped_from_main: 0,
-            tested_by_main: tested_count,
-            imported_by_main: imported_count,
-            rejected_by_main: rejected_count,
-            unsynced_backlog: backlog,
-            sync_pct: sync_pct,
-            yield_pct: yield_pct,
-            peer_from_main_cursor: 0,
-            peer_from_main_pct: 0.0
-          }
-          next
-        end
-
         gdir = File.expand_path(File.dirname(f[:dir]))
         group_master = master_by_group_dir[gdir]
 
@@ -551,43 +452,24 @@ module PrismFuzzerReport
 
       topo_colors = (topo_ctx && topo_ctx[:colors]) || {}
 
-      fuzzers = fuzzer_names.each_with_index.map do |name, idx|
+      fuzzers = fuzzer_names.each_with_index.filter_map do |name, idx|
         dir = fuzzer_dir_by_name[name]
         stats = parse_fuzzer_stats(File.join(dir, "fuzzer_stats"))
-        is_generator = stats["fuzzer_role"] == "generator"
-        raw_plot = if is_generator
-                     parse_generator_plot_data(File.join(dir, "plot_data"))
-                   else
-                     parse_plot_data(File.join(dir, "plot_data"))
-                   end
+        next if stats["fuzzer_role"] == "generator"
+
+        raw_plot = parse_plot_data(File.join(dir, "plot_data"))
         origins = parse_queue_origins(File.join(dir, "queue"), fuzzer_name: name, topo_ctx: topo_ctx)
         synced_cursors = parse_synced_cursors(dir, topo_ctx: topo_ctx)
 
         run_time = stats["run_time"]&.to_i || raw_plot.last&.dig(:relative_time) || 0
-        if is_generator && raw_plot.size < 2 && stats["files_created"]
-          fc = stats["files_created"].to_i
-          fps = (stats["files_per_sec"] || stats["avg_files_per_sec"]).to_f
-          avg_fps = (stats["avg_files_per_sec"] || fps).to_f
-          att = (stats["attempts_done"] || fc).to_i
-          fv = stats["files_valid"].to_i
-          fi = stats["files_invalid"].to_i
-          raw_plot = [
-            { relative_time: 0, files_created: 0, files_per_sec: fps, avg_files_per_sec: avg_fps, attempts_done: 0, files_valid: 0, files_invalid: 0, corpus_count: 0, execs_per_sec: fps, total_execs: 0, cycles_done: 0, cur_item: 0, pending_total: 0, pending_favs: 0, map_size: 0.0, saved_crashes: 0, saved_hangs: 0, max_depth: 0, edges_found: 0, total_crashes: 0 },
-            { relative_time: [run_time, 1].max, files_created: fc, files_per_sec: fps, avg_files_per_sec: avg_fps, attempts_done: att, files_valid: fv, files_invalid: fi, corpus_count: fc, execs_per_sec: fps, total_execs: att, cycles_done: 0, cur_item: 0, pending_total: 0, pending_favs: 0, map_size: 0.0, saved_crashes: 0, saved_hangs: 0, max_depth: 0, edges_found: 0, total_crashes: 0 }
-          ]
-        end
 
         sampled = Charts.downsample(raw_plot).map do |r|
           cc = r[:corpus_count]
-          if is_generator
-            r.merge(synced_count: 0, local_count: cc, seed_count: 0)
-          else
-            r.merge(
-              synced_count: lookup_prefix(origins[:prefix_sync], cc),
-              local_count: lookup_prefix(origins[:prefix_local], cc),
-              seed_count: lookup_prefix(origins[:prefix_seed], cc)
-            )
-          end
+          r.merge(
+            synced_count: lookup_prefix(origins[:prefix_sync], cc),
+            local_count: lookup_prefix(origins[:prefix_local], cc),
+            seed_count: lookup_prefix(origins[:prefix_seed], cc)
+          )
         end
 
         sched = stats["power_mode"] || stats["command_line"]&.[](/-p\s+(\S+)/, 1) || topology_worker_schedule(name, topo_ctx: topo_ctx) || "default"
@@ -608,21 +490,10 @@ module PrismFuzzerReport
         stability = stats["stability"] || "100.00%"
         banner = stats["afl_banner"] || "./tmp/fuzz/build/fuzz"
 
-        files_created = (stats["files_created"] || corpus_count).to_i
-        pending_files = stats["pending_files"].to_i
-        max_pending_files = (stats["max_pending_files"] || "50000").to_i
-        files_pruned = stats["files_pruned"].to_i
-        files_per_sec = (stats["files_per_sec"] || stats["avg_files_per_sec"] || execs_per_sec).to_f
-        avg_files_per_sec = (stats["avg_files_per_sec"] || files_per_sec).to_f
-        attempts_done = (stats["attempts_done"] || execs_done).to_i
-        files_valid = stats["files_valid"].to_i
-        files_invalid = stats["files_invalid"].to_i
-        duplicates_skipped = stats["duplicates_skipped"].to_i
-
         {
           name: name,
           dir: dir,
-          role: is_generator ? :generator : :fuzzer,
+          role: :fuzzer,
           color: topo_colors[name] || Helpers::PALETTE[idx % Helpers::PALETTE.size],
           sched: sched,
           banner: banner,
@@ -646,30 +517,20 @@ module PrismFuzzerReport
           cycles_done: cycles_done,
           max_depth: max_depth,
           run_time: run_time,
-          stability: stability,
-          files_created: files_created,
-          pending_files: pending_files,
-          max_pending_files: max_pending_files,
-          files_pruned: files_pruned,
-          files_per_sec: files_per_sec,
-          avg_files_per_sec: avg_files_per_sec,
-          attempts_done: attempts_done,
-          files_valid: files_valid,
-          files_invalid: files_invalid,
-          duplicates_skipped: duplicates_skipped
+          stability: stability
         }
       end
 
+      raise InputError, "No AFL++ fuzzer directories found in #{afl_dir}" if fuzzers.empty?
+
       color_by_name = fuzzers.to_h { |f| [f[:name], f[:color]] }
-      afl_fuzzers = fuzzers.reject { |f| f[:role] == :generator }
-      gen_fuzzers = fuzzers.select { |f| f[:role] == :generator }
+      afl_fuzzers = fuzzers
       expanded_afl_dir = File.expand_path(afl_dir)
       master_by_group_dir, worker_spec_by_id = resolve_group_masters(afl_fuzzers, expanded_afl_dir: expanded_afl_dir, topo_ctx: topo_ctx)
       main_fuzzer = master_by_group_dir[expanded_afl_dir] ||
                     master_by_group_dir.values.first ||
                     afl_fuzzers.find { |f| f[:name] == "main" } ||
-                    afl_fuzzers.first ||
-                    fuzzers.first
+                    afl_fuzzers.first
 
       peer_sync_by_name, sync_rows, peer_import_stats = compute_peer_sync(
         fuzzers: fuzzers,
@@ -684,7 +545,6 @@ module PrismFuzzerReport
       {
         fuzzers: fuzzers,
         afl_fuzzers: afl_fuzzers,
-        gen_fuzzers: gen_fuzzers,
         main_fuzzer: main_fuzzer,
         main_name: main_fuzzer[:name],
         group_masters: master_by_group_dir.values.map { |m| m[:name] }.uniq,

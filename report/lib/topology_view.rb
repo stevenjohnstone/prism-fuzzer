@@ -140,42 +140,6 @@ module PrismFuzzerReport
       SVG
     end
 
-    def topo_grammar_card_svg(b, wf:, has_consumer:)
-      gspec = b[:spec]
-      gw = b[:worker]
-      gwid = gw ? gw["id"].to_s : b[:id].to_s
-      col = wf ? wf[:color] : (gspec["color"] || "#34d399")
-      sched = (wf && wf[:sched]) || gspec["schedule"] || "grammar"
-      fuz_name = gspec["fuzzer"].to_s
-      sub = fuz_name.empty? ? "lrama · #{gspec['source']}" : "lrama · #{gspec['source']} (#{fuz_name})"
-      stats_txt = if wf
-                    rate = wf[:files_per_sec].to_f > 0 ? " · #{Helpers.format_compact(wf[:files_per_sec])}/s" : ""
-                    "#{Helpers.format_compact(wf[:files_created])} files#{rate}"
-                  else
-                    has_consumer ? "configured (-F)" : "configured"
-                  end
-      clickable = wf && gw
-      cls = clickable ? "topo-node topo-clickable" : "topo-node"
-      onclk = clickable ? %( onclick="selectTab(#{Helpers.topo_js_arg(gwid)})") : ""
-
-      <<~SVG
-        <g class="#{cls}"#{onclk}>
-          <title>#{clickable ? "Live grammar generator #{CGI.escapeHTML(gwid)} — click to open telemetry page" : "Grammar generator #{CGI.escapeHTML(gwid)}"}</title>
-          <rect class="topo-card-bg" x="#{b[:x]}" y="#{b[:y]}" width="#{b[:w]}" height="#{b[:h]}" rx="8" fill="#111827" stroke="#283548" stroke-width="1.2" />
-          <rect x="#{b[:x]}" y="#{b[:y]}" width="4" height="#{b[:h]}" rx="2" fill="#{CGI.escapeHTML(col)}" />
-          <circle cx="#{b[:x] + 15}" cy="#{b[:y] + 19}" r="4.2" fill="#{CGI.escapeHTML(col)}" />
-          <text x="#{b[:x] + 25}" y="#{b[:y] + 23}" fill="#f3f4f6" font-size="12" font-weight="700">#{CGI.escapeHTML(topo_trunc(gwid, 14))}</text>
-          <rect x="#{b[:x] + b[:w] - 118}" y="#{b[:y] + 10}" width="54" height="16" rx="4" fill="#064e3b" />
-          <text x="#{b[:x] + b[:w] - 91}" y="#{b[:y] + 21}" text-anchor="middle" fill="#6ee7b7" font-size="9" font-weight="700">grammar</text>
-          <rect x="#{b[:x] + b[:w] - 60}" y="#{b[:y] + 10}" width="50" height="16" rx="4" fill="#1e293b" />
-          <text x="#{b[:x] + b[:w] - 35}" y="#{b[:y] + 21}" text-anchor="middle" fill="#cbd5e1" font-size="9.2" font-weight="600">#{CGI.escapeHTML(topo_trunc(sched, 7))}</text>
-          <text x="#{b[:x] + 13}" y="#{b[:y] + 42}" fill="#9ca3af" font-size="10">#{CGI.escapeHTML(topo_trunc(sub, 34))}</text>
-          <text x="#{b[:x] + 13}" y="#{b[:y] + 60}" fill="#64748b" font-size="9.5">lrama generator</text>
-          <text x="#{b[:x] + b[:w] - 10}" y="#{b[:y] + 60}" text-anchor="end" fill="#cbd5e1" font-size="9.5" font-variant-numeric="tabular-nums">#{CGI.escapeHTML(stats_txt)}</text>
-        </g>
-      SVG
-    end
-
     def topo_sync_spine_svg(gb:, masters:, secondaries:, worker_boxes:, id_prefix:)
       return ["", ""] if secondaries.empty? && masters.size <= 1
 
@@ -247,30 +211,20 @@ module PrismFuzzerReport
     def render_topology_diagram_svg(topo, worker_by_name:, color_by_name:, peer_sync_by_name:, peer_import_stats: {}, id_prefix: "topo", topo_colors: {})
       return "" unless topo.is_a?(Hash)
 
-      generators = topo["generators"].is_a?(Hash) ? topo["generators"] : {}
       fuzzers_cfg = topo["fuzzers"].is_a?(Hash) ? topo["fuzzers"] : {}
       sync_groups = topo["sync_groups"].is_a?(Hash) ? topo["sync_groups"] : {}
       workers = Array(topo["workers"])
 
-      gen_worker_by_gid = {}
       afl_workers_by_sg = Hash.new { |h, k| h[k] = [] }
       workers.each do |w|
-        next unless w.is_a?(Hash)
+        next unless w.is_a?(Hash) && w["kind"].to_s != "generator"
 
-        if w["kind"].to_s == "generator"
-          gen_worker_by_gid[w["generator"].to_s] = w
-        else
-          afl_workers_by_sg[w["sync_group"].to_s] << w
-        end
+        afl_workers_by_sg[w["sync_group"].to_s] << w
       end
 
-      grammar_gens = generators.select { |_gid, gs| gs.is_a?(Hash) && gs["kind"].to_s == "grammar" }
-      has_grammar = !grammar_gens.empty?
       has_peers = workers.any? { |w| !Array(w["peer_imports"]).empty? }
 
-      left_x = 18
-      left_w = 228
-      grp_x = has_grammar ? (left_x + left_w + 76) : 18
+      grp_x = 18
       sec_w = 342
       master_w = 358
       spine_gap = 48
@@ -362,29 +316,9 @@ module PrismFuzzerReport
         cur_y += box_h + 20
       end
 
-      gen_boxes = {}
-      min_gen_y = 18
-      grammar_gens.each do |gid, gspec|
-        h = 72
-        consumers = workers.select { |w| w["kind"].to_s != "generator" && Array(w["foreign_sync"]).map(&:to_s).include?(gid) }
-        target_y = if !consumers.empty? && (wb = worker_boxes[consumers.first["id"].to_s])
-                     wb[:y] + (wb[:h] - h) * 0.5
-                   elsif gspec["sync_group"] && (gb = sg_boxes[gspec["sync_group"].to_s])
-                     gb[:y] + 38
-                   else
-                     min_gen_y
-                   end
-        gy = [target_y.round, min_gen_y].max
-        gen_boxes[gid] = {
-          id: gid, x: left_x, y: gy, w: left_w, h: h, spec: gspec,
-          worker: gen_worker_by_gid[gid], consumers: consumers
-        }
-        min_gen_y = gy + h + 16
-      end
-
       right_edge = grp_x + unified_box_w
       total_w = has_peers ? (right_edge + 148) : (right_edge + 24)
-      total_h = [cur_y + 8, min_gen_y + 8, 170].max
+      total_h = [cur_y + 8, 170].max
 
       edges_svg = +""
       labels_svg = +""
@@ -400,34 +334,6 @@ module PrismFuzzerReport
         )
         edges_svg << e_str
         labels_svg << l_str
-      end
-
-      gen_boxes.each do |_gid, genb|
-        gw = genb[:worker]
-        gwid = gw ? gw["id"].to_s : genb[:id].to_s
-        wf = worker_by_name[gwid]
-        gx1 = genb[:x] + genb[:w]
-        gy1 = genb[:y] + genb[:h] * 0.5
-        genb[:consumers].each do |cw|
-          cid = cw["id"].to_s
-          wb = worker_boxes[cid]
-          next unless wb
-
-          x2 = wb[:x]
-          y2 = wb[:y] + wb[:h] * 0.5
-          mid_x = ((gx1 + x2) * 0.5).round(1)
-          edges_svg << %(<path d="M#{gx1},#{gy1.round(1)} C#{mid_x},#{gy1.round(1)} #{mid_x},#{y2.round(1)} #{x2},#{y2.round(1)}" fill="none" stroke="#34d399" stroke-width="2.1" stroke-opacity="0.92" marker-end="url(##{id_prefix}-arr-green)" />)
-          ps = wf && peer_sync_by_name[gwid]
-          tag = if ps && ps[:consumer_name] == cid && ps[:imported_by_main].to_i > 0
-                  "-F +#{Helpers.format_compact(ps[:imported_by_main])}"
-                else
-                  "-F foreign_sync"
-                end
-          pw = [tag.length * 6 + 12, 32].max
-          lx = (x2 - grp_x >= 120 ? (grp_x + (x2 - grp_x) * 0.5) : ((gx1 + x2) * 0.5)).round(1)
-          ly = ((gy1 + y2) * 0.5).round(1)
-          labels_svg << %(<g transform="translate(#{lx},#{ly})"><rect x="#{-pw / 2}" y="-9" width="#{pw}" height="17" rx="4" fill="#064e3b" stroke="#34d399" stroke-width="1"/><text x="0" y="3" text-anchor="middle" fill="#6ee7b7" font-size="8.8" font-weight="700">#{CGI.escapeHTML(tag)}</text></g>)
-        end
       end
 
       peer_idx = 0
@@ -486,11 +392,6 @@ module PrismFuzzerReport
       end
 
       nodes_svg = +""
-      gen_boxes.each_value do |b|
-        gwid = b[:worker] ? b[:worker]["id"].to_s : b[:id].to_s
-        nodes_svg << topo_grammar_card_svg(b, wf: worker_by_name[gwid], has_consumer: !b[:consumers].empty?)
-      end
-
       worker_boxes.each do |wid, b|
         w = b[:spec]
         fspec = fuzzers_cfg[w["fuzzer"].to_s] || {}
@@ -561,13 +462,10 @@ module PrismFuzzerReport
     end
 
     def render_topology_legend_html(topo, include_json_btn: false)
-      gens = topo["generators"].is_a?(Hash) ? topo["generators"] : {}
-      has_grammar = gens.values.any? { |g| g.is_a?(Hash) && g["kind"].to_s == "grammar" }
       has_peers = Array(topo["workers"]).any? { |w| w.is_a?(Hash) && !Array(w["peer_imports"]).empty? }
       items = [
         %(<span class="topo-leg-item"><span class="legend-dot" style="background:#3b82f6"></span> Master (-M) &harr; Secondary (-S) sync</span>)
       ]
-      items << %(<span class="topo-leg-item"><span class="legend-dot" style="background:#34d399"></span> foreign_sync (-F)</span>) if has_grammar
       items << %(<span class="topo-leg-item"><span class="legend-dot" style="background:#a78bfa"></span> peer_import bridge</span>) if has_peers
       items << %(<button type="button" class="cov-btn cov-btn-secondary" onclick="selectTab('topology')">View Definition JSON &rarr;</button>) if include_json_btn
       items.join("\n          ")
@@ -661,7 +559,7 @@ module PrismFuzzerReport
           <div class="chart-header">
             <div>
               <h3>Runtime Architecture</h3>
-              <p class="chart-sub">Masters (-M), synchronized Secondaries (-S), companions, and live generator feeds. Click any node to open its page.</p>
+              <p class="chart-sub">Masters (-M), synchronized Secondaries (-S), and companions. Click any node to open its page.</p>
             </div>
             <div class="topo-legend">
               #{render_topology_legend_html(topo, include_json_btn: false)}

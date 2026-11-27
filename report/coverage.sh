@@ -341,16 +341,6 @@ cat << 'RUBY' > "$COLLECT_RB"
 
   rd_flags = File::RDONLY | (defined?(File::NOATIME) ? File::NOATIME : 0)
   generators_cfg = topo && topo["generators"].is_a?(Hash) ? topo["generators"] : {}
-  grammar_gids = generators_cfg.select { |_, gc| gc.is_a?(Hash) && gc["kind"].to_s == "grammar" }.keys.map(&:to_s)
-  multi_grammar = grammar_gids.size > 1
-  dir_has_files = lambda do |cd|
-    cd && Dir.exist?(cd) && Dir.children(cd).any? { |f| !f.start_with?(".") && File.file?(File.join(cd, f)) }
-  end
-  any_gid_live_subdirs = live_seeds_dir && grammar_gids.any? { |k| dir_has_files.call(File.join(live_seeds_dir, k)) }
-  any_gid_configured_seeds = grammar_gids.any? do |k|
-    g_cfg = generators_cfg[k]
-    dir_has_files.call(g_cfg["seeds_dir"]) || dir_has_files.call("/tmp/afl-tmpdir/#{k}/seeds")
-  end
 
   collect_for_pair = lambda do |pair, idx, force_uncached: false|
     pid = pair["id"].to_s
@@ -587,7 +577,7 @@ cat << 'RUBY' > "$COLLECT_RB"
         end
       end
 
-      # 2. Generators targeting this pair source (corpus + grammar seeds)
+      # 2. Generators targeting this pair source (initial corpus seeds)
       Array(pair["generators"]).each do |gid|
         g = generators_cfg[gid]
         next unless g.is_a?(Hash)
@@ -608,25 +598,6 @@ cat << 'RUBY' > "$COLLECT_RB"
             Dir.children(c_dir).sort.each do |fname|
               next if fname.start_with?(".") || fname.start_with?("README")
               add_raw_file.call(File.join(c_dir, fname), queue_files)
-            end
-          end
-        elsif g["kind"].to_s == "grammar"
-          gid_live_dir = live_seeds_dir ? File.join(live_seeds_dir, gid.to_s) : nil
-          live_root_files = dir_has_files.call(live_seeds_dir)
-          allow_shared_fallback = !multi_grammar
-          allow_flat_live_fallback = !multi_grammar || (!any_gid_live_subdirs && !any_gid_configured_seeds && idx == 0)
-          candidates = [
-            gid_live_dir,
-            g["seeds_dir"],
-            "/tmp/afl-tmpdir/#{gid}/seeds",
-            (allow_flat_live_fallback && live_root_files ? live_seeds_dir : nil),
-            (allow_shared_fallback ? "/tmp/afl-tmpdir/grammar/seeds" : nil),
-            (allow_shared_fallback ? File.join(ws_dir, "seeds") : nil)
-          ].compact.uniq
-          seed_src = candidates.find { |cd| dir_has_files.call(cd) }
-          if seed_src
-            Dir.children(seed_src).reject { |f| f.start_with?(".") }.select { |f| File.file?(File.join(seed_src, f)) }.sort.first(5000).each do |fname|
-              add_raw_file.call(File.join(seed_src, fname), queue_files, copy_always: true)
             end
           end
         end
@@ -974,7 +945,7 @@ cat << 'RUBY' > "$EMIT_COV_RB"
 RUBY
 
 # 1. Resolve (source, target) pairs from the topology and collect deduplicated
-#    queue, crash, hang, corpus, and grammar inputs per pair.
+#    queue, crash, hang, and corpus inputs per pair.
 ruby "$COLLECT_RB" "$WORK_DIR" "$PAIRS_META" "$LIVE_SEEDS_DIR"
 
 TOTAL_INPUTS=$(ruby -rjson -e 'puts JSON.parse(File.read(ARGV[0]))["pairs"].sum { |p| p["input_count"].to_i }' "$PAIRS_META")

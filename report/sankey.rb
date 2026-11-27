@@ -20,7 +20,6 @@ module FuzzSankey
   DEFAULT_MAX_CLUSTERS = 20
 
   WORKER_COLORS = {
-    "grammar" => "#34d399",
     "corpus" => "#fbbf24",
     "main" => "#60a5fa",
     "main-2" => "#38bdf8",
@@ -71,7 +70,7 @@ module FuzzSankey
       opts.on("--triage-dir DIR", "Triage directory (default: #{DEFAULT_TRIAGE_DIR})") { |v| options[:triage_dir] = v }
       opts.on("--metadata PATH", "Path to metadata.json") { |v| options[:metadata] = v }
       opts.on("--clusters PATH", "Path to clusters.json") { |v| options[:clusters] = v }
-      opts.on("--afl-dir DIR", "AFL++ directory for grammar/corpus lineage") { |v| options[:afl_dir] = v }
+      opts.on("--afl-dir DIR", "AFL++ directory for corpus lineage") { |v| options[:afl_dir] = v }
       opts.on("-o", "--output PATH", "Output path (.html, .svg, .json, or '-' for stdout)") { |v| options[:output] = v }
       opts.on("--format FMT", "Output format: html | svg | json") { |v| options[:format] = v.downcase }
       opts.on("--metric METRIC", "occurrences | buckets (default: occurrences)") { |v| options[:metric] = v }
@@ -79,7 +78,7 @@ module FuzzSankey
       opts.on("--group GROUP", "all | prism_flaw | cruby_crash | diff_parse_y | diff_prism") { |v| options[:group] = v }
       opts.on("--max-clusters N", Integer, "Max cluster bars before collapsing tail (0 = all, default: #{DEFAULT_MAX_CLUSTERS})") { |v| options[:max_clusters] = v }
       opts.on("--title TEXT", "Custom diagram title") { |v| options[:title] = v }
-      opts.on("--no-origins", "Skip AFL++ queue lineage walk for grammar/corpus seed origins") { options[:trace_origins] = false }
+      opts.on("--no-origins", "Skip AFL++ queue lineage walk for corpus seed origins") { options[:trace_origins] = false }
     end.parse!(argv)
 
     fmt = options[:format]

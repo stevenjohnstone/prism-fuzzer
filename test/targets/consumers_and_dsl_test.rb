@@ -563,8 +563,7 @@ class ConsumersIntegrationTest < Minitest::Test
       )
       html = File.read(report_html_path)
       chunks = load_report_chunks(File.dirname(report_html_path))
-      assert_includes html, "Seed Generator"
-      assert_includes html, "gram_custom"
+      refute_includes html, "Seed Generator"
       assert_includes html, "w_zero"
       assert_includes chunks.dig("tab:sankey", "html").to_s, "0-Crash Workers"
       assert_includes chunks.dig("tab:triage", "html").to_s, "feedbeef12"
@@ -575,40 +574,38 @@ class ConsumersIntegrationTest < Minitest::Test
   def test_report_chunking_deduplicates_steps_bounds_part_files_and_splits_monolithic_html
     with_tmpdir("report-chunking-") do |ws|
       afl_dir = File.join(ws, "afl")
-      gen_dir = File.join(afl_dir, "grammar")
       main_dir = File.join(afl_dir, "main")
       sec_dir = File.join(afl_dir, "sec")
-      seeds_dir = File.join(ws, "seeds")
+      corpus_dir = File.join(ws, "corpus")
       triage_dir = File.join(ws, "triage")
       FileUtils.mkdir_p([
-        gen_dir,
         File.join(main_dir, "queue"),
         File.join(sec_dir, "queue"),
         File.join(sec_dir, "crashes"),
-        seeds_dir,
+        corpus_dir,
         File.join(triage_dir, "ABRT", "b_chunk")
       ])
 
-      File.write(File.join(gen_dir, "fuzzer_stats"), "fuzzer_role : generator\nfiles_created : 30\npending_files : 0\nrun_time : 20\n")
       write_minimal_afl_worker(main_dir, saved_crashes: 0)
       write_minimal_afl_worker(sec_dir, saved_crashes: 2)
 
-      # Shared 6-step ancestry chain in main, fanning out into >20 queue propagation pathways
-      # and crashes in sec so step deduplication, extra-toggle-row sharding, and multi-part splitting all trigger.
+      # Shared 6-step ancestry chain in main, fanning out into >20 crash pathways
+      # across peer workers so step deduplication, extra-toggle-row sharding, and multi-part splitting all trigger.
       shared_seed = "\x00\x00\x03\x01#{"x = 'shared_step_payload_0123456789' # \u{1f680}\n" * 12}".b
-      File.binwrite(File.join(seeds_dir, "seed_shared0000000001"), shared_seed)
-      File.binwrite(File.join(main_dir, "queue", "id:000000,sync:seeds,src:seed_shared0000000001"), shared_seed)
+      File.binwrite(File.join(corpus_dir, "shared_seed.rb"), shared_seed)
+      File.binwrite(File.join(main_dir, "queue", "id:000000,time:0,execs:0,orig:shared_seed.rb"), shared_seed)
       (1..5).each do |i|
         prev = format("%06d", i - 1)
         cur = format("%06d", i)
         File.binwrite(File.join(main_dir, "queue", "id:#{cur},src:#{prev},op:havoc,rep:2"), shared_seed + "# step #{i}\n".b)
       end
 
-      22.times do |k|
+      52.times do |k|
         w_dir = File.join(afl_dir, format("peer_%02d", k))
-        FileUtils.mkdir_p(File.join(w_dir, "queue"))
-        write_minimal_afl_worker(w_dir, saved_crashes: 0)
+        FileUtils.mkdir_p([File.join(w_dir, "queue"), File.join(w_dir, "crashes")])
+        write_minimal_afl_worker(w_dir, saved_crashes: 1)
         File.binwrite(File.join(w_dir, "queue", "id:000000,sync:main,src:000005,+cov"), shared_seed + "# peer #{k}\n".b)
+        File.binwrite(File.join(w_dir, "crashes", "id:000000,sig:06,src:000000,op:havoc"), shared_seed + "# peer crash #{k}\n".b)
       end
 
       File.binwrite(File.join(sec_dir, "queue", "id:000000,sync:main,src:000005"), shared_seed)
@@ -658,14 +655,13 @@ class ConsumersIntegrationTest < Minitest::Test
       end
 
       chunks = load_report_chunks(rep_dir)
-      assert chunks.key?("tab:grammar")
       assert chunks.key?("tab:main")
       assert chunks.key?("tab:sec")
       assert chunks.key?("tab:triage")
       assert chunks.key?("tab:sankey")
       assert chunks.keys.any? { |k| k.start_with?("steps:") }, "expected deduplicated evo-step shard(s)"
       assert chunks.keys.any? { |k| k.start_with?("drawers:") }, "expected lazy drawer shard(s)"
-      assert chunks.keys.any? { |k| k.start_with?("rows:") }, "expected lazy overflow row shard(s) for >15 queue pathways"
+      assert chunks.keys.any? { |k| k.start_with?("rows:") }, "expected lazy overflow row shard(s) for >50 crash pathways"
 
       all_steps = chunks.select { |k, _| k.start_with?("steps:") }.values.each_with_object({}) { |p, h| h.merge!(p.fetch("steps")) }
       # Shared main/queue/id:000003 appears in 22+ pathways across overview + grammar + main + sec, yet is stored only once!

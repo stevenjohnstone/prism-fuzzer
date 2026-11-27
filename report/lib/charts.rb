@@ -91,8 +91,6 @@ module PrismFuzzerReport
           Helpers.format_int(v.round)
         when :rate
           "#{Helpers.format_compact(v)}/s"
-        when :file_rate
-          "#{Helpers.format_compact(v)} files/s"
         else
           Helpers.format_compact(v)
         end
@@ -199,9 +197,8 @@ module PrismFuzzerReport
       HTML
     end
 
-    def render_overview_charts(fleet, gen_import_series:)
+    def render_overview_charts(fleet)
       afl_fuzzers = fleet[:afl_fuzzers]
-      gen_fuzzers = fleet[:gen_fuzzers]
 
       chart_specs = [
         {
@@ -283,90 +280,7 @@ module PrismFuzzerReport
         )
       end
 
-      if gen_fuzzers.any?
-        list << render_svg_chart(
-          title: "Grammar Seeds Imported (-F)",
-          subtitle: "Cumulative grammar-generated seeds imported into the fuzzer queue via foreign sync",
-          y_format: :int,
-          fill_area: true,
-          zero_base: true,
-          chart_id: "ov-gen-imports",
-          series: gen_import_series
-        )
-        list << render_svg_chart(
-          title: "Grammar File Creation Rate (files/sec)",
-          subtitle: "Seed file creation rate over time (rolling and cumulative average)",
-          y_format: :file_rate,
-          zero_base: true,
-          chart_id: "ov-gen-rate",
-          series: gen_fuzzers.flat_map do |gf|
-            [
-              { name: "#{gf[:name]} (files/s)", color: gf[:color], points: gf[:samples].map { |r| [r[:relative_time], r[:files_per_sec]] } },
-              { name: "#{gf[:name]} (avg)", color: "#38bdf8", points: gf[:samples].map { |r| [r[:relative_time], r[:avg_files_per_sec]] } }
-            ]
-          end
-        )
-      end
-
       list.join("\n")
-    end
-
-    def render_generator_charts(gf, intake_name:, intake_points:)
-      s = gf[:samples]
-      name = gf[:name]
-      [
-        render_svg_chart(
-          title: "Cumulative Files Created",
-          subtitle: "Unique seed files written to disk vs. total generation attempts",
-          y_format: :compact,
-          fill_area: true,
-          zero_base: true,
-          chart_id: "#{name}-files",
-          series: [
-            { name: "files_created", color: gf[:color], points: s.map { |r| [r[:relative_time], r[:files_created]] } },
-            { name: "attempts_done", color: "#9ca3af", points: s.map { |r| [r[:relative_time], r[:attempts_done]] } }
-          ]
-        ),
-        render_svg_chart(
-          title: "File Creation Rate (files/sec)",
-          subtitle: "Seed file creation rate over time (rolling interval and cumulative average)",
-          y_format: :file_rate,
-          fill_area: true,
-          zero_base: true,
-          chart_id: "#{name}-rate",
-          series: [
-            { name: "files_per_sec", color: "#a78bfa", points: s.map { |r| [r[:relative_time], r[:files_per_sec]] } },
-            { name: "avg_files_per_sec", color: "#38bdf8", points: s.map { |r| [r[:relative_time], r[:avg_files_per_sec]] } }
-          ]
-        ),
-        render_svg_chart(
-          title: "Valid vs. Invalid Generated Files",
-          subtitle: "Breakdown of syntactically valid vs. error-injected Ruby seeds created",
-          y_format: :compact,
-          fill_area: false,
-          zero_base: true,
-          chart_id: "#{name}-validity",
-          series: [
-            { name: "files_valid", color: "#34d399", points: s.map { |r| [r[:relative_time], r[:files_valid]] } },
-            { name: "files_invalid", color: "#fbbf24", points: s.map { |r| [r[:relative_time], r[:files_invalid]] } }
-          ]
-        ),
-        render_svg_chart(
-          title: "Imports into #{intake_name} Queue",
-          subtitle: "Cumulative #{name} seed files imported by #{intake_name} via -F foreign sync",
-          y_format: :compact,
-          fill_area: true,
-          zero_base: true,
-          chart_id: "#{name}-imports",
-          series: [
-            {
-              name: "imported_by_#{intake_name}",
-              color: "#34d399",
-              points: intake_points
-            }
-          ]
-        )
-      ].join("\n")
     end
 
     def render_fuzzer_charts(f, sync_source_series:)

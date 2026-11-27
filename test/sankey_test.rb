@@ -31,7 +31,7 @@ class SankeyTest < Minitest::Test
 
       [
         File.join(afl_dir, "main", "queue", "id:000000,time:0,execs:0,orig:seed_0001_fixture"),
-        File.join(ijon_dir, "ijon", "queue", "id:000001,sync:seeds_0,src:seed_9999"),
+        File.join(ijon_dir, "ijon", "queue", "id:000001,time:0,execs:0,orig:ijon_fixture.rb"),
         File.join(afl_dir, "main", "queue", "id:000002,sync:ijon_peer,src:000001"),
         File.join(afl_dir, "msan", "queue", "id:000003,sync:main,src:000002"),
         File.join(afl_dir, "diff", "queue", "id:000004,time:0,execs:0,orig:sample.rb")
@@ -77,10 +77,10 @@ class SankeyTest < Minitest::Test
       assert_equal ["ppc"], occ["zero_crash_workers"]
       assert_conservation(occ)
 
-      # Verify grammar origin resolved via AFL queue lineage (ijon_peer -> seeds_0)
+      # Verify corpus origin resolved via multi-hop AFL queue lineage (ijon_peer -> main -> msan)
       orig_links = occ["links"].select { |l| l["column"] == 0 }.to_h { |l| [[l["from"], l["to"]], l["value"]] }
-      assert_equal 2, orig_links[%w[grammar main]]
-      assert_equal 10, orig_links[%w[grammar msan]]
+      assert_equal 2, orig_links[%w[corpus main]]
+      assert_equal 10, orig_links[%w[corpus msan]]
       assert_equal 5, orig_links[%w[corpus diff]]
 
       # Verify buckets metric counts unique worker x bucket pairs (4 pairs: main/ABRT-b1, msan/ABRT-b1, diff/ABRT-b2, main/SEGV-b3)
@@ -412,10 +412,10 @@ class SankeyTest < Minitest::Test
       assert_equal "topo-one", ds1[:topology]&.fetch("name", nil)
       assert_equal "topo-two", ds2[:topology]&.fetch("name", nil)
 
-      # Verify origin tracer forwards topo so sync:alias_one -> w_alpha -> grammar
+      # Verify origin tracer forwards topo so sync:alias_one -> w_alpha -> corpus
       beta_rec1 = ds1[:records].find { |r| r[:worker] == "w_beta" }
       refute_nil beta_rec1
-      assert_equal "grammar", beta_rec1[:origin]
+      assert_equal "corpus", beta_rec1[:origin]
 
       beta_rec2 = ds2[:records].find { |r| r[:worker] == "w_beta" }
       refute_nil beta_rec2

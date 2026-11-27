@@ -44,7 +44,7 @@ module FuzzSankey
     t_idx = topo_order.index(name)
     return [0, t_idx, name] if t_idx
 
-    order = %w[grammar corpus main main-2 ijon msan slow arm32 ppc diff prism_diff]
+    order = %w[corpus main main-2 ijon msan slow arm32 ppc diff prism_diff]
     idx = order.index(name)
     return [1, idx, name] if idx
     return [2, $1.to_i, name] if name =~ /\Adiff-(\d+)\z/
@@ -129,14 +129,7 @@ module FuzzSankey
     display_info = lambda do |col_sym, raw_id|
       case col_sym
       when :origin
-        gram_ws = eff_topo ? grammar_lookup_for_topo(eff_topo)[:grammar_workers] : Set.new(["grammar"])
-        lbl = if gram_ws.include?(raw_id.to_s)
-                "#{raw_id} (lrama)"
-              elsif raw_id == "corpus"
-                "initial corpus"
-              else
-                raw_id.to_s
-              end
+        lbl = raw_id == "corpus" ? "initial corpus" : raw_id.to_s
         { label: lbl, sub: "seed origin", color: color_for(raw_id, layer_kind: :origin, topo: eff_topo) }
       when :worker
         { label: raw_id.to_s, sub: "AFL++ worker", color: color_for(raw_id, layer_kind: :worker, topo: eff_topo) }
