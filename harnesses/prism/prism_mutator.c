@@ -1106,6 +1106,68 @@ size_t afl_custom_fuzz(
     return hdr_len + written;
 }
 
+#ifdef PRISM_MUTATOR_LIBFUZZER
+int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
+    if (size < 4) {
+        return 0;
+    }
+
+    uint32_t seed = ((uint32_t) data[0]) | ((uint32_t) data[1] << 8);
+    size_t hdr_bytes = data[2] % 5u; /* 0..4 */
+    size_t max_size = (size_t) data[3] * 8u; /* 0..2040, exercises small/zero caps */
+    const uint8_t *payload = data + 4;
+    size_t payload_len = size - 4;
+
+    /* Split payload into buf and add_buf */
+    size_t split = payload_len > 0 ? ((size_t) data[0] % (payload_len + 1)) : 0;
+    size_t buf_len = split;
+    size_t add_len = payload_len - split;
+
+    uint8_t *buf = buf_len > 0 ? (uint8_t *) malloc(buf_len) : NULL;
+    uint8_t *add_buf = add_len > 0 ? (uint8_t *) malloc(add_len) : NULL;
+    if ((buf_len > 0 && buf == NULL) || (add_len > 0 && add_buf == NULL)) {
+        free(buf);
+        free(add_buf);
+        return 0;
+    }
+    if (buf_len > 0) memcpy(buf, payload, buf_len);
+    if (add_len > 0) memcpy(add_buf, payload + split, add_len);
+
+    char hdr_str[8];
+    snprintf(hdr_str, sizeof(hdr_str), "%zu", hdr_bytes);
+    setenv("PRISM_MUTATOR_HEADER_BYTES", hdr_str, 1);
+
+    void *m = afl_custom_init(NULL, seed);
+    if (m != NULL) {
+        /* Run multiple rounds on the same buf to exercise both cache miss & cache hit,
+         * with and without add_buf, and with both constrained and generous max_size. */
+        size_t caps[3] = { max_size, buf_len + 256u, 16u };
+        for (int i = 0; i < 6; i++) {
+            uint8_t *out = NULL;
+            uint8_t *donor = (i % 3 == 2) ? NULL : add_buf;
+            size_t donor_len = (i % 3 == 2) ? 0 : add_len;
+            size_t cap = caps[i % 3];
+            size_t n = afl_custom_fuzz(m, buf, buf_len, &out, donor, donor_len, cap);
+            if (cap > 0 && buf != NULL) {
+                if (n > cap) {
+                    abort();
+                }
+                volatile uint8_t sink = 0;
+                for (size_t j = 0; j < n; j++) {
+                    sink ^= out[j];
+                }
+                (void) sink;
+            }
+        }
+        afl_custom_deinit(m);
+    }
+
+    free(buf);
+    free(add_buf);
+    return 0;
+}
+#endif
+
 #ifdef PRISM_MUTATOR_STANDALONE_TEST
 int main(void) {
     setenv("PRISM_MUTATOR_HEADER_BYTES", "1", 1);
