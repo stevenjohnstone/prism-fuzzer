@@ -414,7 +414,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 36)) {
+    switch (rng_below(m, 39)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -538,6 +538,15 @@ static size_t emit_wrapper(
             break;
         case 34:
             ow_puts(w, "class _C < ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 35:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") rescue ("); ow_put(w, y_ptr, y_len); ow_puts(w, "))");
+            break;
+        case 36:
+            ow_puts(w, "begin; "); ow_put(w, x_ptr, x_len); ow_puts(w, "; rescue *("); ow_put(w, y_ptr, y_len); ow_puts(w, ") => _e; retry; rescue; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 37:
+            ow_puts(w, "def _f; "); ow_put(w, x_ptr, x_len); ow_puts(w, "; rescue => _e; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; ensure; "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
             break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
