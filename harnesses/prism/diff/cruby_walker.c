@@ -664,9 +664,44 @@ static void diff_cruby_visit_scope_child_ctx(VALUE sc, int scope_kind, diff_crub
             }
         } else {
             VALUE body_val = RARRAY_AREF(ch, 2);
-            if ((diff_scope_kind_t) scope_kind == DIFF_SCOPE_DEF &&
-                diff_cruby_node_tid(body_val) == diff_ids.nil_n) {
-                body_val = Qnil;
+            if ((diff_scope_kind_t) scope_kind == DIFF_SCOPE_DEF) {
+                VALUE inner = body_val;
+                for (int unwrap = 0; unwrap < 8 && diff_cruby_is_ast_node(inner); unwrap++) {
+                    ID bt = diff_cruby_node_tid(inner);
+                    if (bt != diff_ids.begin_n && bt != diff_ids.block_n) {
+                        break;
+                    }
+                    ID wt = 0;
+                    volatile VALUE wch = diff_cruby_get_children(inner, ctx.out, &wt);
+                    VALUE only = Qnil;
+                    long cnt = 0;
+                    for (long wi = 0; wi < RARRAY_LEN(wch); wi++) {
+                        VALUE item = RARRAY_AREF(wch, wi);
+                        if (NIL_P(item)) {
+                            continue;
+                        }
+                        if (diff_cruby_is_ast_node(item) && diff_cruby_node_tid(item) == diff_ids.begin_n) {
+                            ID b2t = 0;
+                            volatile VALUE b2ch = diff_cruby_get_children(item, ctx.out, &b2t);
+                            bool empty_begin = (RARRAY_LEN(b2ch) == 0 || (RARRAY_LEN(b2ch) == 1 && NIL_P(RARRAY_AREF(b2ch, 0))));
+                            RB_GC_GUARD(b2ch);
+                            if (empty_begin) {
+                                continue;
+                            }
+                        }
+                        only = item;
+                        cnt++;
+                    }
+                    RB_GC_GUARD(wch);
+                    if (cnt == 1) {
+                        inner = only;
+                    } else {
+                        break;
+                    }
+                }
+                if (diff_cruby_node_tid(inner) == diff_ids.nil_n) {
+                    body_val = Qnil;
+                }
             }
             diff_cruby_visit_slot("body", body_val, sub);
         }
@@ -789,7 +824,7 @@ static bool diff_cruby_dstr_val_has_dynamic(VALUE val, int depth) {
     if (tid == diff_ids.str_n) {
         return false;
     }
-    if (tid == diff_ids.list_n) {
+    if (tid == diff_ids.list_n || tid == diff_ids.evstr) {
         volatile VALUE ch = rb_funcall(val, id_children, 0);
         bool dyn = RB_TYPE_P(ch, T_ARRAY) && diff_cruby_dstr_val_has_dynamic(ch, depth + 1);
         RB_GC_GUARD(ch);
@@ -884,7 +919,7 @@ static void diff_cruby_hash_dstr_static(VALUE val, uint64_t *hash_io, size_t *le
     if (RB_TYPE_P(ch, T_ARRAY)) {
         if (tid == diff_ids.str_n && RARRAY_LEN(ch) >= 1) {
             diff_cruby_hash_dstr_static(RARRAY_AREF(ch, 0), hash_io, len_io, depth + 1);
-        } else if (tid == diff_ids.list_n) {
+        } else if (tid == diff_ids.list_n || tid == diff_ids.evstr) {
             for (long i = 0; i < RARRAY_LEN(ch); i++) {
                 diff_cruby_hash_dstr_static(RARRAY_AREF(ch, i), hash_io, len_io, depth + 1);
             }
@@ -1785,8 +1820,10 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         }
         diff_tree_open_cstr(ctx.out, DIFF_TOK_CALL, "=~");
         diff_cruby_visit_slot("recv", RARRAY_AREF(ch, 0), sub);
+        diff_cruby_ctx_t arg_ctx = sub;
+        arg_ctx.in_container = true;
         diff_tree_open_slot(ctx.out, "args");
-        diff_cruby_visit_slot("arg", RARRAY_AREF(ch, 1), sub);
+        diff_cruby_visit_slot("arg", RARRAY_AREF(ch, 1), arg_ctx);
         diff_tree_close(ctx.out);
         diff_tree_open_slot(ctx.out, "blk");
         diff_tree_close(ctx.out);
@@ -1800,8 +1837,10 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
     } else if (tid == diff_ids.match3 && len >= 2) {
         diff_tree_open_cstr(ctx.out, DIFF_TOK_CALL, "=~");
         diff_cruby_visit_slot("recv", RARRAY_AREF(ch, 1), sub);
+        diff_cruby_ctx_t arg_ctx = sub;
+        arg_ctx.in_container = true;
         diff_tree_open_slot(ctx.out, "args");
-        diff_cruby_visit_slot("arg", RARRAY_AREF(ch, 0), sub);
+        diff_cruby_visit_slot("arg", RARRAY_AREF(ch, 0), arg_ctx);
         diff_tree_close(ctx.out);
         diff_tree_open_slot(ctx.out, "blk");
         diff_tree_close(ctx.out);
