@@ -53,8 +53,9 @@ typedef struct {
     uint32_t open_len;
     uint32_t close_start;
     uint32_t close_len;
-    bool has_parens;
-} mut_call_parens_t;
+    const char *open_repl;
+    const char *close_repl;
+} mut_delim_pair_t;
 
 typedef struct {
     const uint8_t *src;
@@ -63,8 +64,8 @@ typedef struct {
     size_t node_count;
     mut_tok_t tokens[PM_MUT_MAX_TOKENS];
     size_t token_count;
-    mut_call_parens_t call_parens[PM_MUT_MAX_TOKENS];
-    size_t call_parens_count;
+    mut_delim_pair_t delim_pairs[PM_MUT_MAX_TOKENS];
+    size_t delim_pair_count;
     unsigned depth;
 } ast_index_t;
 
@@ -120,6 +121,33 @@ static inline bool is_ident_message(const uint8_t *src, pm_location_t loc) {
     uint8_t last = src[loc.start + loc.length - 1];
     bool start_ok = (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_';
     return start_ok && last != '=';
+}
+
+static void record_delim_pair(
+    ast_index_t *idx,
+    uint32_t open_start,
+    uint32_t open_len,
+    uint32_t close_start,
+    uint32_t close_len,
+    const char *open_repl,
+    const char *close_repl
+) {
+    if (idx->delim_pair_count >= PM_MUT_MAX_TOKENS) {
+        return;
+    }
+    size_t open_end = (size_t) open_start + (size_t) open_len;
+    size_t close_end = (size_t) close_start + (size_t) close_len;
+    if (open_end > close_start || close_end > idx->src_len) {
+        return;
+    }
+    idx->delim_pairs[idx->delim_pair_count++] = (mut_delim_pair_t) {
+        .open_start = open_start,
+        .open_len = open_len,
+        .close_start = close_start,
+        .close_len = close_len,
+        .open_repl = open_repl,
+        .close_repl = close_repl
+    };
 }
 
 static void record_tok(ast_index_t *idx, pm_location_t loc, tok_kind_t kind) {
@@ -227,33 +255,64 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
                  (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
                 record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
             }
-            if (idx->call_parens_count < PM_MUT_MAX_TOKENS && n->arguments != NULL &&
+            if (n->arguments != NULL &&
                 valid_loc(n->message_loc, idx->src_len) && is_ident_message(idx->src, n->message_loc)) {
                 if (valid_loc(n->opening_loc, idx->src_len) && valid_loc(n->closing_loc, idx->src_len) &&
                     n->opening_loc.length == 1 && idx->src[n->opening_loc.start] == '(' &&
-                    n->closing_loc.length == 1 && idx->src[n->closing_loc.start] == ')' &&
-                    n->opening_loc.start < n->closing_loc.start) {
-                    idx->call_parens[idx->call_parens_count++] = (mut_call_parens_t) {
-                        .open_start = n->opening_loc.start,
-                        .open_len = 1,
-                        .close_start = n->closing_loc.start,
-                        .close_len = 1,
-                        .has_parens = true
-                    };
+                    n->closing_loc.length == 1 && idx->src[n->closing_loc.start] == ')') {
+                    record_delim_pair(idx, n->opening_loc.start, 1, n->closing_loc.start, 1, " ", "");
                 } else if (n->opening_loc.length == 0 && valid_loc(n->arguments->base.location, idx->src_len)) {
                     uint32_t msg_end = n->message_loc.start + n->message_loc.length;
                     uint32_t arg_start = n->arguments->base.location.start;
                     uint32_t arg_end = arg_start + n->arguments->base.location.length;
-                    if (msg_end <= arg_start && arg_end <= idx->src_len) {
-                        idx->call_parens[idx->call_parens_count++] = (mut_call_parens_t) {
-                            .open_start = msg_end,
-                            .open_len = arg_start - msg_end,
-                            .close_start = arg_end,
-                            .close_len = 0,
-                            .has_parens = false
-                        };
+                    if (msg_end <= arg_start) {
+                        record_delim_pair(idx, msg_end, arg_start - msg_end, arg_end, 0, "(", ")");
                     }
                 }
+            }
+            break;
+        }
+        case PM_BLOCK_NODE: {
+            const pm_block_node_t *n = (const pm_block_node_t *) node;
+            if (valid_loc(n->opening_loc, idx->src_len) && valid_loc(n->closing_loc, idx->src_len)) {
+                if (n->opening_loc.length == 1 && idx->src[n->opening_loc.start] == '{') {
+                    record_delim_pair(idx, n->opening_loc.start, n->opening_loc.length,
+                                      n->closing_loc.start, n->closing_loc.length, " do ", " end ");
+                } else if (n->opening_loc.length == 2 && memcmp(idx->src + n->opening_loc.start, "do", 2) == 0) {
+                    record_delim_pair(idx, n->opening_loc.start, n->opening_loc.length,
+                                      n->closing_loc.start, n->closing_loc.length, " { ", " } ");
+                }
+            }
+            break;
+        }
+        case PM_LAMBDA_NODE: {
+            const pm_lambda_node_t *n = (const pm_lambda_node_t *) node;
+            if (valid_loc(n->opening_loc, idx->src_len) && valid_loc(n->closing_loc, idx->src_len)) {
+                if (n->opening_loc.length == 1 && idx->src[n->opening_loc.start] == '{') {
+                    record_delim_pair(idx, n->opening_loc.start, n->opening_loc.length,
+                                      n->closing_loc.start, n->closing_loc.length, " do ", " end ");
+                } else if (n->opening_loc.length == 2 && memcmp(idx->src + n->opening_loc.start, "do", 2) == 0) {
+                    record_delim_pair(idx, n->opening_loc.start, n->opening_loc.length,
+                                      n->closing_loc.start, n->closing_loc.length, " { ", " } ");
+                }
+            }
+            break;
+        }
+        case PM_PARENTHESES_NODE: {
+            const pm_parentheses_node_t *n = (const pm_parentheses_node_t *) node;
+            if (valid_loc(n->opening_loc, idx->src_len) && valid_loc(n->closing_loc, idx->src_len) &&
+                n->opening_loc.length == 1 && idx->src[n->opening_loc.start] == '(' &&
+                n->closing_loc.length == 1 && idx->src[n->closing_loc.start] == ')') {
+                record_delim_pair(idx, n->opening_loc.start, 1, n->closing_loc.start, 1, " begin; ", "; end ");
+            }
+            break;
+        }
+        case PM_BEGIN_NODE: {
+            const pm_begin_node_t *n = (const pm_begin_node_t *) node;
+            if (n->rescue_clause == NULL && n->ensure_clause == NULL && n->else_clause == NULL &&
+                valid_loc(n->begin_keyword_loc, idx->src_len) && valid_loc(n->end_keyword_loc, idx->src_len)) {
+                record_delim_pair(idx, n->begin_keyword_loc.start, n->begin_keyword_loc.length,
+                                  n->end_keyword_loc.start, n->end_keyword_loc.length, "(", ")");
             }
             break;
         }
@@ -677,23 +736,21 @@ static size_t emit_tok_flip(
     return emit_replace(w, src, src_len, tok.start, tok.length, (const uint8_t *) repl, strlen(repl), false);
 }
 
-static size_t emit_call_parens_toggle(
+static size_t emit_delim_pair_toggle(
     out_writer_t *w,
     const uint8_t *src,
     size_t src_len,
-    mut_call_parens_t cp
+    mut_delim_pair_t dp
 ) {
-    size_t open_end = (size_t) cp.open_start + (size_t) cp.open_len;
-    size_t close_end = (size_t) cp.close_start + (size_t) cp.close_len;
-    if (open_end > cp.close_start || close_end > src_len) {
+    size_t open_end = (size_t) dp.open_start + (size_t) dp.open_len;
+    size_t close_end = (size_t) dp.close_start + (size_t) dp.close_len;
+    if (open_end > dp.close_start || close_end > src_len) {
         return 0;
     }
-    ow_put(w, src, cp.open_start);
-    ow_puts(w, cp.has_parens ? " " : "(");
-    ow_put(w, src + open_end, cp.close_start - open_end);
-    if (!cp.has_parens) {
-        ow_puts(w, ")");
-    }
+    ow_put(w, src, dp.open_start);
+    ow_puts(w, dp.open_repl);
+    ow_put(w, src + open_end, dp.close_start - open_end);
+    ow_puts(w, dp.close_repl);
     if (close_end < src_len) {
         ow_put(w, src + close_end, src_len - close_end);
     }
@@ -860,11 +917,11 @@ size_t afl_custom_fuzz(
             bool parens = rng_below(m, 3) == 0;
             written = emit_replace(&w, src, src_len, a.start, a.length, src + b.start, b.length, parens);
         }
-    } else if (op < 90 && (idx_a.token_count > 0 || idx_a.call_parens_count > 0)) {
-        /* Surgical keyword/operator flip or call-parens toggle */
-        if (idx_a.call_parens_count > 0 && (idx_a.token_count == 0 || rng_below(m, 3) == 0)) {
-            mut_call_parens_t cp = idx_a.call_parens[rng_below(m, idx_a.call_parens_count)];
-            written = emit_call_parens_toggle(&w, src, src_len, cp);
+    } else if (op < 90 && (idx_a.token_count > 0 || idx_a.delim_pair_count > 0)) {
+        /* Surgical keyword/operator flip or delimiter-pair toggle */
+        if (idx_a.delim_pair_count > 0 && (idx_a.token_count == 0 || rng_below(m, 2) == 0)) {
+            mut_delim_pair_t dp = idx_a.delim_pairs[rng_below(m, idx_a.delim_pair_count)];
+            written = emit_delim_pair_toggle(&w, src, src_len, dp);
         } else {
             mut_tok_t tok = idx_a.tokens[rng_below(m, idx_a.token_count)];
             written = emit_tok_flip(m, &w, src, src_len, tok);
