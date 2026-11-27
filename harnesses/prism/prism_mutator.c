@@ -530,6 +530,9 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
             break;
         }
+        case PM_LOCAL_VARIABLE_WRITE_NODE:
+            record_tok(idx, ((const pm_local_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
         case PM_LOCAL_VARIABLE_AND_WRITE_NODE:
             record_tok(idx, ((const pm_local_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
             break;
@@ -538,6 +541,66 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             break;
         case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE:
             record_tok(idx, ((const pm_local_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INSTANCE_VARIABLE_WRITE_NODE:
+            record_tok(idx, ((const pm_instance_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INSTANCE_VARIABLE_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_instance_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INSTANCE_VARIABLE_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_instance_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INSTANCE_VARIABLE_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_instance_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CLASS_VARIABLE_WRITE_NODE:
+            record_tok(idx, ((const pm_class_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CLASS_VARIABLE_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_class_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CLASS_VARIABLE_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_class_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CLASS_VARIABLE_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_class_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_GLOBAL_VARIABLE_WRITE_NODE:
+            record_tok(idx, ((const pm_global_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_GLOBAL_VARIABLE_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_global_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_GLOBAL_VARIABLE_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_global_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_GLOBAL_VARIABLE_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_global_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_PATH_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_path_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_PATH_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_path_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_PATH_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_path_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_CONSTANT_PATH_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_constant_path_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
             break;
         case PM_INDEX_AND_WRITE_NODE:
             record_tok(idx, ((const pm_index_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
@@ -1055,8 +1118,13 @@ static size_t emit_tok_flip(
             return w->len;
         }
         case TOK_ASSIGN_OP: {
-            static const char *const ops[] = { "=", "||=", "&&=", "+=", "-=", "*=" };
-            repl = ops[rng_below(m, sizeof(ops) / sizeof(ops[0]))];
+            if (tok.length == 1 && src[tok.start] == '=') {
+                static const char *const compound_ops[] = { "||=", "&&=", "||=", "&&=", "+=", "-=", "*=" };
+                repl = compound_ops[rng_below(m, sizeof(compound_ops) / sizeof(compound_ops[0]))];
+            } else {
+                static const char *const ops[] = { "=", "||=", "&&=", "+=", "-=", "*=" };
+                repl = ops[rng_below(m, sizeof(ops) / sizeof(ops[0]))];
+            }
             break;
         }
         case TOK_REGEXP_FLAGS: {
