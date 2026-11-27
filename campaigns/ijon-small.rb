@@ -157,7 +157,7 @@ PrismFuzzer.campaign "ijon-small-prism-fleet" do
 
   ijon_diff_variants = [
     { id: "ijon-diff",    schedule: "explore", afl_flags: [],             no_trim: false, color: "#f97316" },
-    { id: "ijon-diff-gm", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], no_trim: false },
+    { id: "ijon-diff-ast", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], no_trim: false },
     { id: "ijon-diff-2",  schedule: "fast",    afl_flags: %w[-L 0],       no_trim: true },
     { id: "ijon-diff-3",  schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false }
   ]

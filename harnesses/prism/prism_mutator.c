@@ -300,6 +300,94 @@ static size_t emit_swap(
     return w->len;
 }
 
+static size_t emit_heredoc_inject(
+    prism_mutator_t *m,
+    out_writer_t *w,
+    const uint8_t *src,
+    size_t src_len,
+    mut_span_t x,
+    const uint8_t *y_ptr,
+    size_t y_len
+) {
+    static const struct {
+        const char *open;
+        const char *close;
+        bool interp;
+    } styles[] = {
+        { "<<~_H",   "_H", true  },
+        { "<<-_H",   "_H", true  },
+        { "<<_H",    "_H", true  },
+        { "<<'_H'",  "_H", false },
+        { "<<\"_H\"", "_H", true },
+        { "<<`_H`",  "_H", true  },
+        { "<<~'_H'", "_H", false }
+    };
+    size_t style_idx = rng_below(m, sizeof(styles) / sizeof(styles[0]));
+    const char *nl = (rng_below(m, 5) == 0) ? "\r\n" : "\n";
+    size_t x_end = (size_t) x.start + (size_t) x.length;
+
+    /* Find the end of the line containing X so the heredoc body starts on the next line. */
+    size_t line_end = x_end;
+    while (line_end < src_len && src[line_end] != '\n') {
+        line_end++;
+    }
+
+    ow_put(w, src, x.start);
+    ow_puts(w, styles[style_idx].open);
+    if (line_end > x_end) {
+        ow_put(w, src + x_end, line_end - x_end);
+    }
+    ow_puts(w, nl);
+    if (styles[style_idx].interp) {
+        ow_puts(w, "  #{");
+        ow_put(w, y_ptr, y_len);
+        ow_puts(w, "}");
+    } else {
+        ow_puts(w, "  ");
+        ow_put(w, y_ptr, y_len);
+    }
+    ow_puts(w, nl);
+    ow_puts(w, styles[style_idx].close);
+    ow_puts(w, nl);
+
+    if (line_end < src_len) {
+        ow_put(w, src + line_end + 1, src_len - (line_end + 1));
+    }
+    return w->len;
+}
+
+static size_t emit_magic_or_end(
+    prism_mutator_t *m,
+    out_writer_t *w,
+    const uint8_t *src,
+    size_t src_len
+) {
+    static const char *const prefixes[] = {
+        "# encoding: UTF-8\n",
+        "# encoding: ASCII-8BIT\n",
+        "# encoding: EUC-JP\n",
+        "# encoding: Shift_JIS\n",
+        "# encoding: Windows-31J\n",
+        "# encoding: CESU-8\n",
+        "# encoding: ISO-8859-1\n",
+        "# frozen_string_literal: true\n",
+        "# frozen_string_literal: false\n",
+        "# shareable_constant_value: literal\n",
+        "# shareable_constant_value: experimental_copy\n",
+        "#!/usr/bin/ruby\n# encoding: UTF-8\n",
+        "\xef\xbb\xbf"
+    };
+    if (rng_below(m, 6) == 0) {
+        ow_put(w, src, src_len);
+        ow_puts(w, "\n__END__\ndata\n");
+        return w->len;
+    }
+    const char *pfx = prefixes[rng_below(m, sizeof(prefixes) / sizeof(prefixes[0]))];
+    ow_puts(w, pfx);
+    ow_put(w, src, src_len);
+    return w->len;
+}
+
 static size_t emit_wrapper(
     prism_mutator_t *m,
     out_writer_t *w,
@@ -315,7 +403,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 22)) {
+    switch (rng_below(m, 27)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -382,6 +470,21 @@ static size_t emit_wrapper(
             break;
         case 20:
             ow_puts(w, "class _C; "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
+            break;
+        case 21:
+            ow_puts(w, "%I[#{"); ow_put(w, x_ptr, x_len); ow_puts(w, "} a]");
+            break;
+        case 22:
+            ow_puts(w, "%w[a b]");
+            break;
+        case 23:
+            ow_puts(w, "%r{(?<k>#{"); ow_put(w, x_ptr, x_len); ow_puts(w, "})}imx");
+            break;
+        case 24:
+            ow_puts(w, "%x[#{"); ow_put(w, x_ptr, x_len); ow_puts(w, "}]");
+            break;
+        case 25:
+            ow_puts(w, "/(?<k>#{"); ow_put(w, x_ptr, x_len); ow_puts(w, "})/ =~ ("); ow_put(w, y_ptr, y_len); ow_puts(w, ")");
             break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
@@ -530,13 +633,13 @@ size_t afl_custom_fuzz(
     size_t op = rng_below(m, 100);
     size_t written = 0;
 
-    if (op < 30 && has_b) {
+    if (op < 26 && has_b) {
         /* Subtree crossover from donor input B */
         mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
         mut_span_t y = idx_b.nodes[rng_below(m, idx_b.node_count)];
         bool parens = rng_below(m, 5) < 2;
         written = emit_replace(&w, src, src_len, x.start, x.length, src_b + y.start, y.length, parens);
-    } else if (op < 65) {
+    } else if (op < 56) {
         /* Compiler-torture wrapper around node X (with Y from A or B) */
         mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
         const uint8_t *y_ptr;
@@ -551,7 +654,25 @@ size_t afl_custom_fuzz(
             y_len = y.length;
         }
         written = emit_wrapper(m, &w, src, src_len, x, y_ptr, y_len);
-    } else if (op < 80 && idx_a.node_count >= 2) {
+    } else if (op < 66) {
+        /* Inline heredoc injection at expression X with body on next line */
+        mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
+        const uint8_t *y_ptr;
+        size_t y_len;
+        if (has_b && rng_below(m, 2) == 0) {
+            mut_span_t y = idx_b.nodes[rng_below(m, idx_b.node_count)];
+            y_ptr = src_b + y.start;
+            y_len = y.length;
+        } else {
+            mut_span_t y = idx_a.nodes[rng_below(m, idx_a.node_count)];
+            y_ptr = src + y.start;
+            y_len = y.length;
+        }
+        written = emit_heredoc_inject(m, &w, src, src_len, x, y_ptr, y_len);
+    } else if (op < 72) {
+        /* Magic comment / encoding / shebang / BOM / __END__ injection */
+        written = emit_magic_or_end(m, &w, src, src_len);
+    } else if (op < 84 && idx_a.node_count >= 2) {
         /* Internal subtree copy or swap */
         mut_span_t a = idx_a.nodes[rng_below(m, idx_a.node_count)];
         mut_span_t b = idx_a.nodes[rng_below(m, idx_a.node_count)];

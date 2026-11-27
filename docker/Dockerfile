@@ -99,13 +99,5 @@ RUN grep -qF '#define MAP_SIZE_IJON_MAP 65536' /AFLplusplus/include/config.h \
     && sed -i "s/^#define MAP_SIZE_IJON_ENTRIES 512/#define MAP_SIZE_IJON_ENTRIES ${IJON_MAX_ENTRIES}/" /AFLplusplus/include/config.h \
     && make -C /AFLplusplus clean && make -C /AFLplusplus source-only && make -C /AFLplusplus install
 
-# Clone pinned AFLplusplus/Grammar-Mutator (built on demand with NO_ANTLR=1
-# against grammar/ruby.json + patches/grammar-mutator/grammar-mutator.patch).
-ARG GRAMMAR_MUTATOR_COMMIT=f5daa1db93b9865000f282f5a261babf55d2eba7
-RUN git init /AFLplusplus/Grammar-Mutator \
-    && git -C /AFLplusplus/Grammar-Mutator fetch --depth=1 https://github.com/AFLplusplus/Grammar-Mutator.git "${GRAMMAR_MUTATOR_COMMIT}" \
-    && git -C /AFLplusplus/Grammar-Mutator checkout FETCH_HEAD \
-    && git config --system --add safe.directory /AFLplusplus/Grammar-Mutator
-
 WORKDIR /prism-fuzzer
 USER $USERNAME

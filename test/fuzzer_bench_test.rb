@@ -96,22 +96,10 @@ class FuzzerBenchTest < Minitest::Test
     opts = FuzzerBench.parse_options(%w[
       --shapes prism_parse
       --ijon none
-      --grammar none,mutator,mutator_mixed,lrama
+      --grammar none,lrama,prism,prism_mixed
     ])
     cells = FuzzerBench.expand_matrix(opts)
     assert_equal 4, cells.length
-
-    mut = cells.find { |c| c["grammar"] == "mutator" }
-    env, cmd = FuzzerBench.afl_command_for(mut, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, tree_dir: "/tmp/t")
-    assert_equal "1", env["AFL_CUSTOM_MUTATOR_ONLY"]
-    assert env["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libgrammarmutator-ruby.so")
-    assert_equal "/tmp/t", env["GRAMMAR_MUTATOR_TREE_DIR"]
-    assert_includes cmd, "afl-fuzz"
-
-    mix = cells.find { |c| c["grammar"] == "mutator_mixed" }
-    env_mix, _ = FuzzerBench.afl_command_for(mix, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, tree_dir: "/tmp/t")
-    assert_nil env_mix["AFL_CUSTOM_MUTATOR_ONLY"]
-    assert env_mix["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libgrammarmutator-ruby.so")
 
     lrama = cells.find { |c| c["grammar"] == "lrama" }
     _, cmd_lrama = FuzzerBench.afl_command_for(lrama, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, foreign_dir: "/tmp/f")

@@ -16,7 +16,7 @@ require "tmpdir"
 module FuzzerBench
   VALID_SHAPES = %w[prism_parse prism_diff_ruby cruby_compile cruby_pipeline_diff].freeze
   VALID_IJON_MODES = %w[none on].freeze
-  VALID_GRAMMAR_MODES = %w[none mutator mutator_mixed lrama prism prism_mixed].freeze
+  VALID_GRAMMAR_MODES = %w[none lrama prism prism_mixed].freeze
   VALID_SCHEDULES = %w[fast explore rare coe lin quad mmopt seek].freeze
 
   DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
@@ -351,38 +351,6 @@ module FuzzerBench
     corpus_dir
   end
 
-  def build_grammar_mutator!(opts, fuzz_root:)
-    build_dir = File.join(opts[:workspace], "build")
-    so_out = File.join(build_dir, "libgrammarmutator-ruby.so")
-    gen_out = File.join(build_dir, "grammar_generator-ruby")
-    return [so_out, gen_out] if File.file?(so_out) && File.executable?(gen_out)
-
-    gm_src = "/AFLplusplus/Grammar-Mutator"
-    abort "fuzzer_bench: #{gm_src} not found (rebuild Docker image)" unless Dir.exist?(gm_src)
-
-    grammar_json = File.join(fuzz_root, "grammar", "ruby.json")
-    patch_file   = File.join(fuzz_root, "patches", "grammar-mutator", "grammar-mutator.patch")
-    abort "fuzzer_bench: missing #{grammar_json}" unless File.file?(grammar_json)
-    abort "fuzzer_bench: missing #{patch_file}" unless File.file?(patch_file)
-
-    gm_work = File.join(opts[:workspace], "build", "grammar-mutator-src")
-    FileUtils.rm_rf(gm_work)
-    FileUtils.mkdir_p(File.dirname(gm_work))
-    FileUtils.cp_r(gm_src, gm_work)
-
-    ok = system("git", "-C", gm_work, "apply", patch_file) &&
-         system("python3", File.join(gm_work, "grammars", "f1_c_gen.py"), grammar_json, gm_work) &&
-         system("make", "-C", File.join(gm_work, "third_party", "rxi_map")) &&
-         system("make", "-C", File.join(gm_work, "third_party", "Cyan4973_xxHash")) &&
-         system("make", "-C", File.join(gm_work, "src"), "GRAMMAR_FILENAME=ruby", "NO_ANTLR=1")
-    abort "fuzzer_bench: failed to build Grammar-Mutator" unless ok
-
-    FileUtils.cp(File.join(gm_work, "src", "libgrammarmutator-ruby.so"), so_out)
-    FileUtils.cp(File.join(gm_work, "src", "grammar_generator-ruby"), gen_out)
-    FileUtils.chmod(0o755, gen_out)
-    [so_out, gen_out]
-  end
-
   def build_prism_mutator!(opts, fuzz_root:)
     build_dir = File.join(opts[:workspace], "build")
     so_out = File.join(build_dir, "libprismmutator.so")
@@ -428,11 +396,7 @@ module FuzzerBench
       "AFL_NO_AFFINITY" => "1"
     }
 
-    if %w[mutator mutator_mixed].include?(cell["grammar"])
-      env["AFL_CUSTOM_MUTATOR_LIBRARY"] = File.join(build_dir, "libgrammarmutator-ruby.so")
-      env["AFL_CUSTOM_MUTATOR_ONLY"] = "1" if cell["grammar"] == "mutator"
-      env["GRAMMAR_MUTATOR_TREE_DIR"] = tree_dir if tree_dir
-    elsif %w[prism prism_mixed].include?(cell["grammar"])
+    if %w[prism prism_mixed].include?(cell["grammar"])
       env["AFL_CUSTOM_MUTATOR_LIBRARY"] = File.join(build_dir, "libprismmutator.so")
       env["AFL_CUSTOM_MUTATOR_ONLY"] = "1" if cell["grammar"] == "prism"
       env["PRISM_MUTATOR_HEADER_BYTES"] = "4"
@@ -608,16 +572,7 @@ module FuzzerBench
     tree_dir = nil
     lrama_pid = nil
 
-    if %w[mutator mutator_mixed].include?(cell["grammar"])
-      eff_corpus = File.join("/tmp/fbench-gm", "#{cell['id']}_t#{trial}", "seeds")
-      tree_dir   = File.join("/tmp/fbench-gm", "#{cell['id']}_t#{trial}", "trees")
-      FileUtils.rm_rf(File.dirname(eff_corpus))
-      FileUtils.mkdir_p(eff_corpus)
-      FileUtils.mkdir_p(tree_dir)
-      gen_bin = File.join(build_dir, "grammar_generator-ruby")
-      ok = system(gen_bin, "200", opts[:max_input_size].to_s, eff_corpus, tree_dir, out: File::NULL, err: File::NULL)
-      abort "fuzzer_bench: grammar_generator-ruby failed" unless ok
-    elsif cell["grammar"] == "lrama"
+    if cell["grammar"] == "lrama"
       foreign_dir = File.join("/tmp/fbench-lrama", "#{cell['id']}_t#{trial}", "seeds")
       FileUtils.rm_rf(File.dirname(foreign_dir))
       FileUtils.mkdir_p(foreign_dir)
@@ -763,10 +718,6 @@ module FuzzerBench
       %w[sync build].each do |sub|
         ok = system("ruby", topo_bin, sub, "--topology", topo_path)
         abort "fuzzer_bench: topology #{sub} failed" unless ok
-      end
-
-      if cells.any? { |c| %w[mutator mutator_mixed].include?(c["grammar"]) }
-        build_grammar_mutator!(opts, fuzz_root: fuzz_root)
       end
 
       if cells.any? { |c| %w[prism prism_mixed].include?(c["grammar"]) }

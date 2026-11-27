@@ -196,7 +196,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
 
   small_diff_workers = [
     { id: "small-diff",       fuzzer: "fuzz.ijon.diff", schedule: "explore", afl_flags: [],             no_trim: false, color: "#f97316" },
-    { id: "small-diff-gm",    fuzzer: "fuzz.ijon.diff", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], no_trim: false, color: "#fb923c" },
+    { id: "small-diff-ast",   fuzzer: "fuzz.ijon.diff", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], no_trim: false, color: "#fb923c" },
     { id: "small-diff-text",  fuzzer: "fuzz.ijon.diff", schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false, color: "#fdba74" },
     { id: "small-cfg-diff",   fuzzer: "fuzz.diff",      schedule: "mmopt",   afl_flags: [],             no_trim: true,  color: "#f59e0b" },
     { id: "small-cfg-diff-2", fuzzer: "fuzz.diff",      schedule: "fast",    afl_flags: %w[-L 0],       no_trim: true,  color: "#fbbf24" }

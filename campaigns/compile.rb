@@ -107,7 +107,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   [
     { id: "small-compile-fast",    fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0], color: "#fb923c" },
     { id: "small-compile-exploit", fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],       color: "#f59e0b" },
-    { id: "small-compile-gm",      fuzzer: "fuzz.ijon.compile", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], color: "#fbbf24" },
+    { id: "small-compile-ast",     fuzzer: "fuzz.ijon.compile", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], color: "#fbbf24" },
     { id: "small-compile-asan",    fuzzer: "fuzz.compile.asan", schedule: "fast",    afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#ef4444" }
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-small", afl_role: :secondary, max_input_size: small_max_input do

@@ -105,7 +105,7 @@ PrismFuzzer.campaign "cruby-pipeline-fleet" do
 
   [
     { id: "small-pipeline-fast", fuzzer: "fuzz.pipeline",      schedule: "fast",    afl_flags: %w[-L 0],       color: "#0ea5e9" },
-    { id: "small-pipeline-gm",   fuzzer: "fuzz.ijon.pipeline", mutator: "libgrammarmutator-ruby.so", schedule: "explore", afl_flags: [], color: "#0284c7" },
+    { id: "small-pipeline-ast",  fuzzer: "fuzz.ijon.pipeline", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], color: "#0284c7" },
     { id: "small-compile-fast",  fuzzer: "fuzz.compile",       schedule: "fast",    afl_flags: %w[-P explore], color: "#f97316" },
     { id: "small-pipeline-text", fuzzer: "fuzz.pipeline",      schedule: "lin",     afl_flags: %w[-Z -a text], color: "#7dd3fc" }
   ].each do |spec|
