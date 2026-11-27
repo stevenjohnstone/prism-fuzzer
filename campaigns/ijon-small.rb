@@ -124,7 +124,7 @@ PrismFuzzer.campaign "ijon-small-prism-fleet" do
     peer_import group: :afl, worker: :diff, alias: "cfg_diff_peer"
     seeds from: :corpus, shard_group: :ijon_prism
     mem_limit :none
-    env AFL_SAN_ABSTRACTION: "coverage_increase", AFL_SYNC_TIME: "1", AFL_CRASH_EXITCODE: "23"
+    env AFL_SAN_ABSTRACTION: "coverage_increase", AFL_CRASH_EXITCODE: "23"
     color "#4ade80"
   end
 

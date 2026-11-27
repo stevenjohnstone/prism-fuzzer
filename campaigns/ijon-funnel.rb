@@ -166,7 +166,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
     foreign_sync :grammar_small
     seeds from: :corpus_small, shard_group: :small_prism
     mem_limit :none
-    env AFL_SAN_ABSTRACTION: "coverage_increase", AFL_SYNC_TIME: "1", AFL_CRASH_EXITCODE: "23"
+    env AFL_SAN_ABSTRACTION: "coverage_increase", AFL_CRASH_EXITCODE: "23"
     color "#4ade80"
   end
 
@@ -223,7 +223,6 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
     peer_import group: "afl-small", worker: :"small-asan",  alias: "small_asan_feed"
     peer_import group: "afl-small", worker: :"small-diff",  alias: "small_diff_feed"
     seeds from: :corpus_8k, shard_group: :large_prism
-    env AFL_SYNC_TIME: "1"
     color "#2563eb"
   end
 

@@ -106,6 +106,7 @@ module PrismFuzzer
           s["dir"] = plan_dir if s["dir"] && !Topology.blank?(plan_dir)
         end
       end
+      ir["lifecycle"] = Topology.deep_dup(ctx[:lifecycle]) if ctx[:lifecycle].is_a?(Hash) && !ctx[:lifecycle].empty?
       ir
     end
 

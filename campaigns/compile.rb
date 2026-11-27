@@ -105,7 +105,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
     seeds from: :corpus_small, filter: :self_pass, cache_key: "compile_small_pass"
     loopcount 1000
     mem_limit :none
-    env(**base_compile_env, AFL_SYNC_TIME: "1")
+    env(**base_compile_env) unless base_compile_env.empty?
     color "#f97316"
   end
 

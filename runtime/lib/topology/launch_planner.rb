@@ -306,10 +306,23 @@ module PrismFuzzer
                     end
         sans = aux_fspec ? (fspec_sans | Array(aux_fspec["sanitizers"]).map(&:to_s)) : fspec_sans
 
+        default_sync_time = if !Topology.blank?(ENV["AFL_SYNC_TIME"])
+                              ENV["AFL_SYNC_TIME"].to_s.strip
+                            else
+                              dur = plan.dig("lifecycle", "duration_seconds")
+                              if dur && dur.to_f > 0
+                                (dur.to_f / 720.0).round.clamp(1, 20).to_s
+                              else
+                                "5"
+                              end
+                            end
+
         env_prefix = []
         env_prefix << "FUZZ_DIFF_BACKTRACE=#{diff_bt}" if %w[prism_diff_ruby cruby_compile cruby_pipeline_diff].include?(fspec["shape"])
         env_prefix << "AFL_FUZZER_LOOPCOUNT=#{w['loopcount']}" if w["loopcount"]
         env_prefix << "AFL_DISABLE_TRIM=1" if w["no_trim"]
+        has_explicit_sync = w["env"].is_a?(Hash) && w["env"].any? { |k, _| k.to_s == "AFL_SYNC_TIME" }
+        env_prefix << "AFL_SYNC_TIME=#{Shellwords.escape(default_sync_time)}" unless has_explicit_sync
         w["env"].each { |k, v| env_prefix << "#{k}=#{Shellwords.escape(v.to_s)}" } if w["env"].is_a?(Hash)
 
         cross_oracle = nil

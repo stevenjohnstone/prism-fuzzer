@@ -109,7 +109,7 @@ PrismFuzzer.campaign "default-prism-fleet" do
     foreign_sync :grammar
     seeds from: :corpus, shard_group: :prism
     mem_limit max_allocated_mb * 16
-    env AFL_SYNC_TIME: "1", AFL_CRASH_EXITCODE: "23"
+    env AFL_CRASH_EXITCODE: "23"
     ulimit_v_kb 4_194_304
     color "#4ade80"
   end

@@ -99,7 +99,6 @@ PrismFuzzer.campaign "cruby-pipeline-fleet" do
     seeds from: :corpus_small, filter: :self_pass, cache_key: "pipeline_small_pass"
     loopcount 1000
     mem_limit :none
-    env AFL_SYNC_TIME: "1"
     color "#38bdf8"
   end
 

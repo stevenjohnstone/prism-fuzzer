@@ -137,7 +137,7 @@ fi
 export AFL_AUTORESUME=1
 export AFL_FUZZER_STATS_UPDATE_INTERVAL=1
 export AFL_FUZZER_LOOPCOUNT=10000
-export AFL_SYNC_TIME=2
+export AFL_SYNC_TIME="${AFL_SYNC_TIME:-5}"
 
 # --- Trap Signals ---
 # Trap SIGINT (Ctrl+C) and SIGTERM (docker stop)
