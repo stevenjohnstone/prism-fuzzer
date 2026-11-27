@@ -824,9 +824,26 @@ static bool diff_cruby_dstr_val_has_dynamic(VALUE val, int depth) {
     if (tid == diff_ids.str_n) {
         return false;
     }
-    if (tid == diff_ids.list_n || tid == diff_ids.evstr) {
+    if (tid == diff_ids.list_n) {
         volatile VALUE ch = rb_funcall(val, id_children, 0);
         bool dyn = RB_TYPE_P(ch, T_ARRAY) && diff_cruby_dstr_val_has_dynamic(ch, depth + 1);
+        RB_GC_GUARD(ch);
+        return dyn;
+    }
+    if (tid == diff_ids.evstr) {
+        volatile VALUE ch = rb_funcall(val, id_children, 0);
+        bool dyn = true;
+        if (RB_TYPE_P(ch, T_ARRAY) && RARRAY_LEN(ch) == 1) {
+            VALUE inner = RARRAY_AREF(ch, 0);
+            if (NIL_P(inner)) {
+                dyn = false;
+            } else if (diff_cruby_is_ast_node(inner)) {
+                ID it = diff_cruby_node_tid(inner);
+                if (it == diff_ids.str_n || it == diff_ids.dstr) {
+                    dyn = diff_cruby_dstr_val_has_dynamic(inner, depth + 1);
+                }
+            }
+        }
         RB_GC_GUARD(ch);
         return dyn;
     }
