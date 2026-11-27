@@ -50,7 +50,11 @@ typedef enum {
     TOK_PATTERN_VAL = 12,
     TOK_PATTERN_KEY = 13,
     TOK_HASH_TO_PATTERN = 14,
-    TOK_PATTERN_TO_HASH = 15
+    TOK_PATTERN_TO_HASH = 15,
+    TOK_CLASS_ADD_SUPER = 16,
+    TOK_CLASS_STRIP_SUPER = 17,
+    TOK_CLASS_MODULE_FLIP = 18,
+    TOK_SCLASS_FLIP = 19
 } tok_kind_t;
 
 typedef struct {
@@ -446,6 +450,41 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         case PM_MATCH_REQUIRED_NODE:
             record_tok(idx, ((const pm_match_required_node_t *) node)->operator_loc, TOK_MATCH_OP);
             break;
+        case PM_CLASS_NODE: {
+            const pm_class_node_t *cn = (const pm_class_node_t *) node;
+            if (cn->superclass == NULL) {
+                if (cn->constant_path != NULL) {
+                    record_tok(idx, cn->constant_path->location, TOK_CLASS_ADD_SUPER);
+                }
+                record_tok(idx, cn->class_keyword_loc, TOK_CLASS_MODULE_FLIP);
+            } else if (valid_loc(cn->inheritance_operator_loc, idx->src_len) &&
+                       valid_loc(cn->superclass->location, idx->src_len)) {
+                uint32_t s = cn->inheritance_operator_loc.start;
+                uint32_t e = cn->superclass->location.start + cn->superclass->location.length;
+                if (e > s && e <= idx->src_len) {
+                    pm_location_t span = { .start = s, .length = e - s };
+                    record_tok(idx, span, TOK_CLASS_STRIP_SUPER);
+                }
+            }
+            break;
+        }
+        case PM_MODULE_NODE: {
+            const pm_module_node_t *mn = (const pm_module_node_t *) node;
+            record_tok(idx, mn->module_keyword_loc, TOK_CLASS_MODULE_FLIP);
+            break;
+        }
+        case PM_SINGLETON_CLASS_NODE: {
+            const pm_singleton_class_node_t *sc = (const pm_singleton_class_node_t *) node;
+            if (valid_loc(sc->class_keyword_loc, idx->src_len) && valid_loc(sc->operator_loc, idx->src_len)) {
+                uint32_t s = sc->class_keyword_loc.start;
+                uint32_t e = sc->operator_loc.start + sc->operator_loc.length;
+                if (e > s && e <= idx->src_len) {
+                    pm_location_t span = { .start = s, .length = e - s };
+                    record_tok(idx, span, TOK_SCLASS_FLIP);
+                }
+            }
+            break;
+        }
         case PM_SYMBOL_NODE:
             record_percent_open(idx, ((const pm_symbol_node_t *) node)->opening_loc);
             break;
@@ -1184,6 +1223,40 @@ static size_t emit_tok_flip(
                 ow_put(w, src + tail, src_len - tail);
             }
             return w->len;
+        }
+        case TOK_CLASS_ADD_SUPER: {
+            static const char *const supers[] = {
+                " < Object", " < BasicObject", " < ::Object",
+                " < (self)", " < (nil)", " < Struct.new(:a)"
+            };
+            const char *sup = supers[rng_below(m, sizeof(supers) / sizeof(supers[0]))];
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+            ow_put(w, src, tail);
+            ow_puts(w, sup);
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
+        }
+        case TOK_CLASS_STRIP_SUPER: {
+            static const char *const repls[] = {
+                "", "", "", " < BasicObject", " < ::Object", " < (self)", " < (nil)"
+            };
+            repl = repls[rng_below(m, sizeof(repls) / sizeof(repls[0]))];
+            break;
+        }
+        case TOK_CLASS_MODULE_FLIP: {
+            if (tok.length == 5 && memcmp(src + tok.start, "class", 5) == 0) {
+                repl = (rng_below(m, 2) == 0) ? "module" : "class <<";
+            } else {
+                repl = (rng_below(m, 2) == 0) ? "class" : "class <<";
+            }
+            break;
+        }
+        case TOK_SCLASS_FLIP: {
+            static const char *const repls[] = { "class _C < ", "class _C; ", "module _M; " };
+            repl = repls[rng_below(m, sizeof(repls) / sizeof(repls[0]))];
+            break;
         }
     }
     if (repl == NULL) {
