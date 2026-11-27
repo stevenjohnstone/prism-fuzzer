@@ -49,12 +49,22 @@ typedef struct {
 } mut_tok_t;
 
 typedef struct {
+    uint32_t open_start;
+    uint32_t open_len;
+    uint32_t close_start;
+    uint32_t close_len;
+    bool has_parens;
+} mut_call_parens_t;
+
+typedef struct {
     const uint8_t *src;
     size_t src_len;
     mut_span_t nodes[PM_MUT_MAX_NODES];
     size_t node_count;
     mut_tok_t tokens[PM_MUT_MAX_TOKENS];
     size_t token_count;
+    mut_call_parens_t call_parens[PM_MUT_MAX_TOKENS];
+    size_t call_parens_count;
     unsigned depth;
 } ast_index_t;
 
@@ -100,6 +110,16 @@ static bool ensure_out_cap(prism_mutator_t *m, size_t needed) {
 
 static inline bool valid_loc(pm_location_t loc, size_t src_len) {
     return loc.length > 0 && loc.start <= src_len && loc.length <= src_len - loc.start;
+}
+
+static inline bool is_ident_message(const uint8_t *src, pm_location_t loc) {
+    if (loc.length == 0) {
+        return false;
+    }
+    uint8_t first = src[loc.start];
+    uint8_t last = src[loc.start + loc.length - 1];
+    bool start_ok = (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_';
+    return start_ok && last != '=';
 }
 
 static void record_tok(ast_index_t *idx, pm_location_t loc, tok_kind_t kind) {
@@ -206,6 +226,34 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
                 ((n->call_operator_loc.length == 1 && idx->src[n->call_operator_loc.start] == '.') ||
                  (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
                 record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
+            }
+            if (idx->call_parens_count < PM_MUT_MAX_TOKENS && n->arguments != NULL &&
+                valid_loc(n->message_loc, idx->src_len) && is_ident_message(idx->src, n->message_loc)) {
+                if (valid_loc(n->opening_loc, idx->src_len) && valid_loc(n->closing_loc, idx->src_len) &&
+                    n->opening_loc.length == 1 && idx->src[n->opening_loc.start] == '(' &&
+                    n->closing_loc.length == 1 && idx->src[n->closing_loc.start] == ')' &&
+                    n->opening_loc.start < n->closing_loc.start) {
+                    idx->call_parens[idx->call_parens_count++] = (mut_call_parens_t) {
+                        .open_start = n->opening_loc.start,
+                        .open_len = 1,
+                        .close_start = n->closing_loc.start,
+                        .close_len = 1,
+                        .has_parens = true
+                    };
+                } else if (n->opening_loc.length == 0 && valid_loc(n->arguments->base.location, idx->src_len)) {
+                    uint32_t msg_end = n->message_loc.start + n->message_loc.length;
+                    uint32_t arg_start = n->arguments->base.location.start;
+                    uint32_t arg_end = arg_start + n->arguments->base.location.length;
+                    if (msg_end <= arg_start && arg_end <= idx->src_len) {
+                        idx->call_parens[idx->call_parens_count++] = (mut_call_parens_t) {
+                            .open_start = msg_end,
+                            .open_len = arg_start - msg_end,
+                            .close_start = arg_end,
+                            .close_len = 0,
+                            .has_parens = false
+                        };
+                    }
+                }
             }
             break;
         }
@@ -629,6 +677,29 @@ static size_t emit_tok_flip(
     return emit_replace(w, src, src_len, tok.start, tok.length, (const uint8_t *) repl, strlen(repl), false);
 }
 
+static size_t emit_call_parens_toggle(
+    out_writer_t *w,
+    const uint8_t *src,
+    size_t src_len,
+    mut_call_parens_t cp
+) {
+    size_t open_end = (size_t) cp.open_start + (size_t) cp.open_len;
+    size_t close_end = (size_t) cp.close_start + (size_t) cp.close_len;
+    if (open_end > cp.close_start || close_end > src_len) {
+        return 0;
+    }
+    ow_put(w, src, cp.open_start);
+    ow_puts(w, cp.has_parens ? " " : "(");
+    ow_put(w, src + open_end, cp.close_start - open_end);
+    if (!cp.has_parens) {
+        ow_puts(w, ")");
+    }
+    if (close_end < src_len) {
+        ow_put(w, src + close_end, src_len - close_end);
+    }
+    return w->len;
+}
+
 static void maybe_mutate_header(prism_mutator_t *m, uint8_t *hdr, size_t hdr_len) {
     if (hdr_len == 0) {
         return;
@@ -789,10 +860,15 @@ size_t afl_custom_fuzz(
             bool parens = rng_below(m, 3) == 0;
             written = emit_replace(&w, src, src_len, a.start, a.length, src + b.start, b.length, parens);
         }
-    } else if (op < 90 && idx_a.token_count > 0) {
-        /* Surgical keyword/operator flip */
-        mut_tok_t tok = idx_a.tokens[rng_below(m, idx_a.token_count)];
-        written = emit_tok_flip(m, &w, src, src_len, tok);
+    } else if (op < 90 && (idx_a.token_count > 0 || idx_a.call_parens_count > 0)) {
+        /* Surgical keyword/operator flip or call-parens toggle */
+        if (idx_a.call_parens_count > 0 && (idx_a.token_count == 0 || rng_below(m, 3) == 0)) {
+            mut_call_parens_t cp = idx_a.call_parens[rng_below(m, idx_a.call_parens_count)];
+            written = emit_call_parens_toggle(&w, src, src_len, cp);
+        } else {
+            mut_tok_t tok = idx_a.tokens[rng_below(m, idx_a.token_count)];
+            written = emit_tok_flip(m, &w, src, src_len, tok);
+        }
     } else {
         /* Replace node with control-flow / literal atom, or insert statement */
         mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
