@@ -8,9 +8,10 @@
  *
  * Environment variables:
  *   PRISM_MUTATOR_HEADER_BYTES  Number of leading non-Ruby header bytes to
- *                               preserve before parsing (default: 0; set to 1
- *                               for cruby_compile/cruby_pipeline_diff opt_mask,
- *                               or 4 for prism_parse/prism_diff_ruby).
+ *                               preserve before parsing (default: 4, matching
+ *                               the uniform 4-byte header used by prism_parse,
+ *                               prism_diff_ruby, cruby_compile, and
+ *                               cruby_pipeline_diff; set to 0 for raw Ruby).
  */
 
 #include <prism.h>
@@ -447,6 +448,7 @@ void *afl_custom_init(void *afl, unsigned int seed) {
     if (m->rng == 0) {
         m->rng = 0x2545f4914f6cdd1dULL;
     }
+    m->header_bytes = 4;
     const char *hdr_env = getenv("PRISM_MUTATOR_HEADER_BYTES");
     if (hdr_env != NULL && hdr_env[0] != '\0') {
         long v = strtol(hdr_env, NULL, 10);

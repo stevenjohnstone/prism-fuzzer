@@ -138,15 +138,7 @@ class FuzzerBenchTest < Minitest::Test
     env_c, = FuzzerBench.afl_command_for(c_mix, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1)
     assert_nil env_c["AFL_CUSTOM_MUTATOR_ONLY"]
     assert env_c["AFL_CUSTOM_MUTATOR_LIBRARY"].end_with?("libprismmutator.so")
-    assert_equal "1", env_c["PRISM_MUTATOR_HEADER_BYTES"]
-
-    Dir.mktmpdir("fbench-corpus-") do |dir|
-      c_opts = opts.merge(workspace: dir)
-      c_dir = FuzzerBench.prepare_corpus!(c_opts, shape: "cruby_compile")
-      p_dir = FuzzerBench.prepare_corpus!(c_opts, shape: "prism_parse")
-      assert_equal "\x001 + 2\n".b, File.binread(File.join(c_dir, "seed_000.bin"))
-      assert_equal "\x00\x00\x03\x011 + 2\n".b, File.binread(File.join(p_dir, "seed_000.bin"))
-    end
+    assert_equal "4", env_c["PRISM_MUTATOR_HEADER_BYTES"]
   end
 
   def test_dry_run_exits_zero

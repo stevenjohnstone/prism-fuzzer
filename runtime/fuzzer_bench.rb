@@ -338,16 +338,14 @@ module FuzzerBench
     spec
   end
 
-  def prepare_corpus!(opts, shape: nil)
+  def prepare_corpus!(opts)
     return opts[:corpus_dir] if opts[:corpus_dir] && Dir.exist?(opts[:corpus_dir])
 
-    one_byte = %w[cruby_compile cruby_pipeline_diff].include?(shape)
-    corpus_dir = File.join(opts[:workspace], one_byte ? "corpus-compile" : "corpus")
-    header = one_byte ? "\x00".b : FUZZ_HEADER_DEFAULT
+    corpus_dir = File.join(opts[:workspace], "corpus")
     FileUtils.mkdir_p(corpus_dir)
     if Dir.children(corpus_dir).empty?
       BUILTIN_SEEDS.each_with_index do |src, idx|
-        File.binwrite(File.join(corpus_dir, format("seed_%03d.bin", idx)), header + src.b)
+        File.binwrite(File.join(corpus_dir, format("seed_%03d.bin", idx)), FUZZ_HEADER_DEFAULT + src.b)
       end
     end
     corpus_dir
@@ -437,7 +435,7 @@ module FuzzerBench
     elsif %w[prism prism_mixed].include?(cell["grammar"])
       env["AFL_CUSTOM_MUTATOR_LIBRARY"] = File.join(build_dir, "libprismmutator.so")
       env["AFL_CUSTOM_MUTATOR_ONLY"] = "1" if cell["grammar"] == "prism"
-      env["PRISM_MUTATOR_HEADER_BYTES"] = %w[cruby_compile cruby_pipeline_diff].include?(cell["shape"]) ? "1" : "4"
+      env["PRISM_MUTATOR_HEADER_BYTES"] = "4"
     end
 
     cmd = [
@@ -776,7 +774,7 @@ module FuzzerBench
       end
     end
 
-    corpus_by_shape = opts[:shapes].each_with_object({}) { |s, h| h[s] = prepare_corpus!(opts, shape: s) }
+    corpus_dir = prepare_corpus!(opts)
 
     jobs = []
     cells.each do |cell|
@@ -798,7 +796,7 @@ module FuzzerBench
           end
           cell, trial = job
           warn "[fuzzer-bench] starting #{cell['id']} trial #{trial}/#{opts[:trials]} (#{opts[:duration]}s)..." unless opts[:quiet]
-          res = run_trial(cell, opts: opts, corpus_dir: corpus_by_shape.fetch(cell["shape"]), trial: trial, fuzz_root: fuzz_root)
+          res = run_trial(cell, opts: opts, corpus_dir: corpus_dir, trial: trial, fuzz_root: fuzz_root)
           mutex.synchronize { per_cell[cell["id"]] << res }
           warn "[fuzzer-bench] finished #{cell['id']} trial #{trial}: exec/s=#{res['execs_per_sec']} edges=#{res['cfg_edges']} crashes=#{res.dig('crashes', 'total')}" unless opts[:quiet]
         end
