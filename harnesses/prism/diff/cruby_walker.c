@@ -1409,7 +1409,7 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         diff_cruby_emit_args_node(node, ctx);
     } else if (tid == diff_ids.block_n || tid == diff_ids.begin_n || tid == diff_ids.once_n) {
         diff_cruby_ctx_t bsub = sub;
-        if (tid == diff_ids.block_n) {
+        if (ctx.in_pattern && tid == diff_ids.block_n) {
             bsub.in_pattern = false;
             bsub.in_target = false;
         }
