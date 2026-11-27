@@ -324,12 +324,73 @@ static void diff_cruby_extract_scope_locals(VALUE tbl, diff_scope_kind_t kind, d
     diff_scope_vec_push(&out->scopes, sc);
 }
 
+#ifdef PRISM_FUZZ_IJON
+#ifndef _USE_IJON
+extern void ijon_set(uint32_t addr, uint32_t val);
+extern void ijon_max(uint32_t addr, uint64_t val);
+extern uint32_t ijon_hashstr(uint32_t old, const char *val);
+#endif
+
+static inline uint32_t diff_cruby_ijon_mix32(uint32_t h) {
+    h ^= h >> 16;
+    h *= 0x85ebca6bu;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35u;
+    h ^= h >> 16;
+    return h;
+}
+
+static inline uint32_t diff_cruby_ijon_hash_cstr(const char *s) {
+    uint32_t h = 2166136261u;
+    if (s == NULL) return 0u;
+    for (const unsigned char *p = (const unsigned char *) s; *p != '\0'; p++) {
+        h ^= (uint32_t) *p;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static inline void diff_cruby_ijon_set(uint32_t salt, uint32_t val) {
+    static uint32_t base_hash = 0u;
+    if (base_hash == 0u) {
+        base_hash = ijon_hashstr(211u, (char *) (uintptr_t) "cruby_walker.c");
+    }
+    uint32_t h = base_hash ^ salt;
+    ijon_set(h, diff_cruby_ijon_mix32(h ^ val) & 0xfffu);
+}
+
+static inline void diff_cruby_ijon_max(uint32_t salt, uint64_t val) {
+    static uint32_t base_hash = 0u;
+    if (base_hash == 0u) {
+        base_hash = ijon_hashstr(211u, (char *) (uintptr_t) "cruby_walker.c");
+    }
+    ijon_max(base_hash ^ salt, val);
+}
+
+static inline uint32_t diff_cruby_ijon_enc_tag(const char *enc_name) {
+    if (enc_name == NULL || enc_name[0] == '\0' || strcmp(enc_name, "UTF-8") == 0) {
+        return 0u;
+    }
+    return (diff_cruby_ijon_hash_cstr(enc_name) & 0xffu) | 1u;
+}
+
+typedef struct {
+    uint32_t enc_tag;
+    uint32_t max_depth;
+    uint32_t node_count;
+} diff_cruby_ijon_t;
+#endif
+
 typedef struct {
     diff_summary_t *out;
     int depth;
     bool in_target;
     bool in_pattern;
     bool in_container;
+#ifdef PRISM_FUZZ_IJON
+    diff_cruby_ijon_t *ijon;
+    uint32_t parent_tag;
+#endif
 } diff_cruby_ctx_t;
 
 static void diff_cruby_visit_val_ctx(VALUE val, diff_cruby_ctx_t ctx);
@@ -1306,6 +1367,39 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
     sub.depth = ctx.depth + 1;
     sub.in_container = false;
 
+#ifdef PRISM_FUZZ_IJON
+    if (ctx.ijon != NULL) {
+        const char *tname = rb_id2name(tid);
+        uint32_t node_tag = diff_cruby_ijon_hash_cstr(tname);
+        ctx.ijon->node_count++;
+        if ((uint32_t) ctx.depth > ctx.ijon->max_depth) {
+            ctx.ijon->max_depth = (uint32_t) ctx.depth;
+        }
+        /* 1. parse.y AST 2-path edge bigram (parent_node -> child_node). */
+        uint32_t edge_sig = ((ctx.parent_tag & 0xffu) << 8) | (node_tag & 0xffu);
+        diff_cruby_ijon_set(0x301u, edge_sig);
+        /* 2. Non-UTF-8 encoding x literal/regexp/symbol parse.y NODE types. */
+        if (ctx.ijon->enc_tag != 0u &&
+            (tid == diff_ids.str_n || tid == diff_ids.dstr ||
+             tid == diff_ids.sym_n || tid == diff_ids.dsym ||
+             tid == diff_ids.regx || tid == diff_ids.dregx ||
+             tid == diff_ids.once_n || tid == diff_ids.xstr ||
+             tid == diff_ids.dxstr)) {
+            diff_cruby_ijon_set(0x302u, ((ctx.ijon->enc_tag & 0xffu) << 8) | (node_tag & 0xffu));
+        }
+        /* 3. Context-sensitive parse.y grammar shapes (target/pattern/splat/match/flip). */
+        uint32_t ctx_bits = (ctx.in_pattern ? 2u : 0u) | (ctx.in_target ? 1u : 0u);
+        if (ctx_bits != 0u ||
+            tid == diff_ids.splat || tid == diff_ids.argscat || tid == diff_ids.argspush ||
+            tid == diff_ids.match2 || tid == diff_ids.match3 || tid == diff_ids.for_masgn ||
+            tid == diff_ids.flip2 || tid == diff_ids.flip3 || tid == diff_ids.opt_arg ||
+            tid == diff_ids.kw_arg || tid == diff_ids.postarg || tid == diff_ids.once_n) {
+            diff_cruby_ijon_set(0x303u, (ctx_bits << 10) | (node_tag & 0x3ffu));
+        }
+        sub.parent_tag = node_tag;
+    }
+#endif
+
     if (tid == diff_ids.scope) {
         diff_cruby_visit_scope_child_ctx(node, ctx.depth == 0 ? (int) DIFF_SCOPE_PROGRAM : -1, ctx);
     } else if (tid == diff_ids.defn && len >= 2) {
@@ -2006,7 +2100,14 @@ static void diff_cruby_visit_val_ctx(VALUE val, diff_cruby_ctx_t ctx) {
     }
 }
 
-void diff_collect_cruby_summary(VALUE ast_node, diff_summary_t *out) {
+static void diff_collect_cruby_summary_impl(
+    VALUE ast_node,
+    diff_summary_t *out
+#ifdef PRISM_FUZZ_IJON
+    ,
+    diff_cruby_ijon_t *ijon
+#endif
+) {
     if (NIL_P(ast_node)) {
         return;
     }
@@ -2017,7 +2118,65 @@ void diff_collect_cruby_summary(VALUE ast_node, diff_summary_t *out) {
         .in_target = false,
         .in_pattern = false,
         .in_container = false
+#ifdef PRISM_FUZZ_IJON
+        ,
+        .ijon = ijon,
+        .parent_tag = 0u
+#endif
     };
     diff_cruby_visit_val_ctx(ast_node, ctx);
     diff_finalize_summary(out);
 }
+
+void diff_collect_cruby_summary(VALUE ast_node, diff_summary_t *out) {
+#ifdef PRISM_FUZZ_IJON
+    diff_collect_cruby_summary_impl(ast_node, out, NULL);
+#else
+    diff_collect_cruby_summary_impl(ast_node, out);
+#endif
+}
+
+#ifdef PRISM_FUZZ_IJON
+void diff_collect_cruby_summary_ijon(
+    VALUE ast_node,
+    diff_summary_t *out,
+    const char *cruby_enc,
+    bool cruby_has_data
+) {
+    diff_cruby_ijon_t ijon = {
+        .enc_tag = diff_cruby_ijon_enc_tag(cruby_enc),
+        .max_depth = 0u,
+        .node_count = 0u
+    };
+    diff_collect_cruby_summary_impl(ast_node, out, &ijon);
+    if (ijon.enc_tag != 0u) {
+        diff_cruby_ijon_set(0x304u, ijon.enc_tag | ((cruby_has_data ? 1u : 0u) << 8));
+    } else if (cruby_has_data) {
+        diff_cruby_ijon_set(0x305u, 1u);
+    }
+    if (ijon.max_depth > 0u) {
+        diff_cruby_ijon_max(0x306u, ijon.max_depth > 256u ? 256u : ijon.max_depth);
+    }
+    if (ijon.node_count > 0u) {
+        diff_cruby_ijon_max(0x307u, ijon.node_count > 4096u ? 4096u : ijon.node_count);
+    }
+    uint32_t max_locals = 0u;
+    for (size_t i = 0; i < out->scopes.count; i++) {
+        if (out->scopes.items[i].local_count > max_locals) {
+            max_locals = out->scopes.items[i].local_count;
+        }
+    }
+    if (max_locals > 0u) {
+        diff_cruby_ijon_max(0x308u, max_locals > 64u ? 64u : max_locals);
+    }
+}
+
+void diff_cruby_ijon_record_error(const char *cruby_tag, const char *prism_enc) {
+    uint32_t err_h = diff_cruby_ijon_hash_cstr(cruby_tag);
+    uint32_t enc_tag = diff_cruby_ijon_enc_tag(prism_enc);
+    diff_cruby_ijon_set(0x310u, err_h & 0xfffu);
+    if (enc_tag != 0u) {
+        diff_cruby_ijon_set(0x311u, ((enc_tag & 0x3fu) << 6) | (err_h & 0x3fu));
+    }
+}
+#endif

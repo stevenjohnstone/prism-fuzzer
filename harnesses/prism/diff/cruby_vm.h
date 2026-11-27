@@ -47,6 +47,15 @@ void diff_fail_syntax_mismatch(
 /* cruby_walker.c */
 void diff_ast_ids_init(void);
 void diff_collect_cruby_summary(VALUE ast_node, diff_summary_t *out);
+#ifdef PRISM_FUZZ_IJON
+void diff_collect_cruby_summary_ijon(
+    VALUE ast_node,
+    diff_summary_t *out,
+    const char *cruby_enc,
+    bool cruby_has_data
+);
+void diff_cruby_ijon_record_error(const char *cruby_tag, const char *prism_enc);
+#endif
 void diff_cruby_extract_script_meta(
     VALUE ast_node,
     char *enc_buf,

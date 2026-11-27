@@ -20,6 +20,32 @@
 #include "diff/prism_walker.h"
 #include "diff/cruby_vm.h"
 
+#ifdef PRISM_FUZZ_IJON
+enum {
+    DIFF_IJON_PRISM = 1u,
+    DIFF_IJON_CRUBY = 2u
+};
+
+static unsigned int diff_ijon_mode(void) {
+    static int cached = -1;
+    if (cached < 0) {
+        const char *env = getenv("FUZZ_IJON_MODE");
+        if (env == NULL || env[0] == '\0' || strcmp(env, "prism") == 0) {
+            cached = (int) DIFF_IJON_PRISM;
+        } else if (strcmp(env, "cruby") == 0) {
+            cached = (int) DIFF_IJON_CRUBY;
+        } else if (strcmp(env, "both") == 0) {
+            cached = (int) (DIFF_IJON_PRISM | DIFF_IJON_CRUBY);
+        } else if (strcmp(env, "none") == 0) {
+            cached = 0;
+        } else {
+            cached = (int) DIFF_IJON_PRISM;
+        }
+    }
+    return (unsigned int) cached;
+}
+#endif
+
 #ifndef FUZZ_MAX_INPUT_SIZE
 #define FUZZ_MAX_INPUT_SIZE 1024
 #endif
@@ -192,7 +218,9 @@ static void diff_run_prism(
     pm_parser_t *parser = pm_parser_new(arena, source_buf, size, options);
     pm_node_t *root = pm_parse(parser);
 #ifdef PRISM_FUZZ_IJON
-    fuzz_ijon_post_parse(arena, parser, root, 0U);
+    if ((diff_ijon_mode() & DIFF_IJON_PRISM) != 0u) {
+        fuzz_ijon_post_parse(arena, parser, root, 0U);
+    }
 #endif
     diff_copy_enc_token(pm_parser_encoding_name(parser), out_enc, out_enc_cap);
     const pm_location_t *dloc = pm_parser_data_loc(parser);
@@ -344,6 +372,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         );
     }
 
+#ifdef PRISM_FUZZ_IJON
+    if (!cruby_ok && (diff_ijon_mode() & DIFF_IJON_CRUBY) != 0u) {
+        diff_cruby_ijon_record_error(cruby_tag, prism_enc);
+    }
+#endif
+
     if (prism_ok && cruby_ok) {
         char cruby_enc_raw[48];
         char cruby_enc[48];
@@ -372,8 +406,8 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         }
 
         bool has_bom = (source_size >= 3 && source[0] == 0xEF && source[1] == 0xBB && source[2] == 0xBF);
+        bool cruby_has_data = (cruby_has_lines && !has_bom && cruby_total_bytes < source_size && cruby_last_line_is_end);
         if (cruby_has_lines && !has_bom) {
-            bool cruby_has_data = (cruby_total_bytes < source_size && cruby_last_line_is_end);
             size_t end_marker_len = 8;
             if (prism_has_data && (size_t) prism_data_start + 9 <= source_size &&
                 source[prism_data_start + 7] == '\r' && source[prism_data_start + 8] == '\n') {
@@ -413,7 +447,15 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
 
         diff_summary_t cruby_ast;
         diff_summary_init(&cruby_ast);
+#ifdef PRISM_FUZZ_IJON
+        if ((diff_ijon_mode() & DIFF_IJON_CRUBY) != 0u) {
+            diff_collect_cruby_summary_ijon(ast_node, &cruby_ast, cruby_enc, cruby_has_data);
+        } else {
+            diff_collect_cruby_summary(ast_node, &cruby_ast);
+        }
+#else
         diff_collect_cruby_summary(ast_node, &cruby_ast);
+#endif
         diff_compare_asts(&prism_ast, &cruby_ast);
         diff_summary_free(&cruby_ast);
     }
