@@ -41,7 +41,8 @@ typedef enum {
     TOK_DOT2_DOT3 = 3,
     TOK_CALL_OP = 4,
     TOK_HEREDOC_OPEN = 5,
-    TOK_ASSIGN_OP = 6
+    TOK_ASSIGN_OP = 6,
+    TOK_REGEXP_FLAGS = 7
 } tok_kind_t;
 
 typedef struct {
@@ -353,6 +354,12 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         case PM_INTERPOLATED_X_STRING_NODE:
             record_heredoc_open(idx, ((const pm_interpolated_x_string_node_t *) node)->opening_loc);
             break;
+        case PM_REGULAR_EXPRESSION_NODE:
+            record_tok(idx, ((const pm_regular_expression_node_t *) node)->closing_loc, TOK_REGEXP_FLAGS);
+            break;
+        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+            record_tok(idx, ((const pm_interpolated_regular_expression_node_t *) node)->closing_loc, TOK_REGEXP_FLAGS);
+            break;
         case PM_CALL_AND_WRITE_NODE: {
             const pm_call_and_write_node_t *n = (const pm_call_and_write_node_t *) node;
             if (valid_loc(n->call_operator_loc, idx->src_len) &&
@@ -616,7 +623,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 44)) {
+    switch (rng_below(m, 45)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -765,6 +772,9 @@ static size_t emit_wrapper(
         case 42:
             ow_puts(w, "tap { it ||= ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); ("); ow_put(w, y_ptr, y_len); ow_puts(w, ") }");
             break;
+        case 43:
+            ow_puts(w, "(/(?<_k>a)/ =~ ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); _k)");
+            break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
             break;
@@ -840,6 +850,21 @@ static size_t emit_tok_flip(
             static const char *const ops[] = { "=", "||=", "&&=", "+=", "-=", "*=" };
             repl = ops[rng_below(m, sizeof(ops) / sizeof(ops[0]))];
             break;
+        }
+        case TOK_REGEXP_FLAGS: {
+            static const char *const flag_sets[] = {
+                "", "i", "m", "x", "o", "n", "u", "e", "s",
+                "im", "ix", "imxo", "in", "mu", "xo", "no", "su", "ne", "ii"
+            };
+            const char *flags = flag_sets[rng_below(m, sizeof(flag_sets) / sizeof(flag_sets[0]))];
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+            /* Preserve the closing delimiter byte (e.g. '/', '}', ']', ')') at tok.start. */
+            ow_put(w, src, tok.start + 1u);
+            ow_puts(w, flags);
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
         }
     }
     if (repl == NULL) {
