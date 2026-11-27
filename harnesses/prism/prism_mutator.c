@@ -37,7 +37,8 @@ typedef struct {
 typedef enum {
     TOK_IF_UNLESS = 0,
     TOK_WHILE_UNTIL = 1,
-    TOK_AND_OR = 2
+    TOK_AND_OR = 2,
+    TOK_DOT2_DOT3 = 3
 } tok_kind_t;
 
 typedef struct {
@@ -186,6 +187,16 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         case PM_OR_NODE: {
             const pm_or_node_t *n = (const pm_or_node_t *) node;
             record_tok(idx, n->operator_loc, TOK_AND_OR);
+            break;
+        }
+        case PM_RANGE_NODE: {
+            const pm_range_node_t *n = (const pm_range_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_DOT2_DOT3);
+            break;
+        }
+        case PM_FLIP_FLOP_NODE: {
+            const pm_flip_flop_node_t *n = (const pm_flip_flop_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_DOT2_DOT3);
             break;
         }
         default:
@@ -403,7 +414,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 27)) {
+    switch (rng_below(m, 32)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -486,6 +497,36 @@ static size_t emit_wrapper(
         case 25:
             ow_puts(w, "/(?<k>#{"); ow_put(w, x_ptr, x_len); ow_puts(w, "})/ =~ ("); ow_put(w, y_ptr, y_len); ow_puts(w, ")");
             break;
+        case 26: {
+            const char *dots = (rng_below(m, 2) == 0) ? ".." : "...";
+            ow_puts(w, "if ("); ow_put(w, x_ptr, x_len); ow_puts(w, ")"); ow_puts(w, dots); ow_puts(w, "("); ow_put(w, y_ptr, y_len); ow_puts(w, "); "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
+            break;
+        }
+        case 27: {
+            const char *dots = (rng_below(m, 2) == 0) ? ".." : "...";
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ")"); ow_puts(w, dots); ow_puts(w, "("); ow_put(w, y_ptr, y_len); ow_puts(w, ") ? ("); ow_put(w, x_ptr, x_len); ow_puts(w, ") : ("); ow_put(w, y_ptr, y_len); ow_puts(w, "))");
+            break;
+        }
+        case 28: {
+            const char *dots = (rng_below(m, 2) == 0) ? ".." : "...";
+            ow_puts(w, "while !("); ow_put(w, x_ptr, x_len); ow_puts(w, ")"); ow_puts(w, dots); ow_puts(w, "("); ow_put(w, y_ptr, y_len); ow_puts(w, "); "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
+            break;
+        }
+        case 29: {
+            const char *dots = (rng_below(m, 2) == 0) ? ".." : "...";
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ")"); ow_puts(w, dots); ow_puts(w, "("); ow_put(w, y_ptr, y_len); ow_puts(w, "))");
+            break;
+        }
+        case 30: {
+            static const char *const forms[] = { "(..(", "(...(", "((", "((" };
+            size_t fi = rng_below(m, 4);
+            if (fi < 2) {
+                ow_puts(w, forms[fi]); ow_put(w, x_ptr, x_len); ow_puts(w, "))");
+            } else {
+                ow_puts(w, forms[fi]); ow_put(w, x_ptr, x_len); ow_puts(w, fi == 2 ? ")..)" : ")...)");
+            }
+            break;
+        }
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
             break;
@@ -517,6 +558,9 @@ static size_t emit_tok_flip(
             repl = ops[rng_below(m, 4)];
             break;
         }
+        case TOK_DOT2_DOT3:
+            repl = (tok.length == 2) ? "..." : "..";
+            break;
     }
     if (repl == NULL) {
         return 0;
