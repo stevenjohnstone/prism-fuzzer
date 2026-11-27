@@ -414,7 +414,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 32)) {
+    switch (rng_below(m, 36)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -527,6 +527,18 @@ static size_t emit_wrapper(
             }
             break;
         }
+        case 31:
+            ow_puts(w, "module _M; K = ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 32:
+            ow_puts(w, "module ("); ow_put(w, x_ptr, x_len); ow_puts(w, ")::_M; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 33:
+            ow_puts(w, "class << ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 34:
+            ow_puts(w, "class _C < ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
             break;
