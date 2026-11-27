@@ -59,7 +59,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ensures `ruby --parser=prism` and `ruby -rprism` in the container match the
 # upstream Prism target under test.
 # Targets at other refs can also be built incrementally into build/targets/ruby/.
-ARG RUBY_GIT_REF=11121e7878cd87f02f6b4f5eb4a03db681d37ad4
+ARG RUBY_GIT_REF=f3e180b5ebc835f87c2ff7ccb8474a1bf18b0115
 ARG PRISM_GIT_REF=a5e01d818fa45f2cea9232754251a6855f82ab98
 ENV RUBY_ORACLE_DIR=/opt/ruby
 COPY docker/sync_prism_into_ruby.rb /tmp/sync_prism_into_ruby.rb
