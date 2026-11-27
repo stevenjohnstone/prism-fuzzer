@@ -39,7 +39,8 @@ typedef enum {
     TOK_WHILE_UNTIL = 1,
     TOK_AND_OR = 2,
     TOK_DOT2_DOT3 = 3,
-    TOK_CALL_OP = 4
+    TOK_CALL_OP = 4,
+    TOK_HEREDOC_OPEN = 5
 } tok_kind_t;
 
 typedef struct {
@@ -157,6 +158,13 @@ static void record_tok(ast_index_t *idx, pm_location_t loc, tok_kind_t kind) {
             .length = loc.length,
             .kind = kind
         };
+    }
+}
+
+static void record_heredoc_open(ast_index_t *idx, pm_location_t loc) {
+    if (valid_loc(loc, idx->src_len) && loc.length >= 3 &&
+        idx->src[loc.start] == '<' && idx->src[loc.start + 1] == '<') {
+        record_tok(idx, loc, TOK_HEREDOC_OPEN);
     }
 }
 
@@ -316,6 +324,18 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             }
             break;
         }
+        case PM_STRING_NODE:
+            record_heredoc_open(idx, ((const pm_string_node_t *) node)->opening_loc);
+            break;
+        case PM_INTERPOLATED_STRING_NODE:
+            record_heredoc_open(idx, ((const pm_interpolated_string_node_t *) node)->opening_loc);
+            break;
+        case PM_X_STRING_NODE:
+            record_heredoc_open(idx, ((const pm_x_string_node_t *) node)->opening_loc);
+            break;
+        case PM_INTERPOLATED_X_STRING_NODE:
+            record_heredoc_open(idx, ((const pm_interpolated_x_string_node_t *) node)->opening_loc);
+            break;
         case PM_CALL_AND_WRITE_NODE: {
             const pm_call_and_write_node_t *n = (const pm_call_and_write_node_t *) node;
             if (valid_loc(n->call_operator_loc, idx->src_len) &&
@@ -729,6 +749,40 @@ static size_t emit_tok_flip(
         case TOK_CALL_OP:
             repl = (tok.length == 1) ? "&." : ".";
             break;
+        case TOK_HEREDOC_OPEN: {
+            const uint8_t *p = src + tok.start + 2;
+            const uint8_t *end = src + tok.start + tok.length;
+            if (p < end && (*p == '-' || *p == '~')) {
+                p++;
+            }
+            if (p < end && (*p == '\'' || *p == '"' || *p == '`')) {
+                uint8_t q = *p++;
+                if (end > p && end[-1] == q) {
+                    end--;
+                }
+            }
+            size_t id_len = (size_t) (end - p);
+            static const char *const indents[] = { "", "-", "~" };
+            static const char quotes[] = { '\0', '\'', '"', '`' };
+            const char *ind = indents[rng_below(m, 3)];
+            char q = (id_len == 0) ? quotes[1 + rng_below(m, 3)] : quotes[rng_below(m, 4)];
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+
+            ow_put(w, src, tok.start);
+            ow_puts(w, "<<");
+            ow_puts(w, ind);
+            if (q != '\0') {
+                ow_put(w, &q, 1);
+            }
+            ow_put(w, p, id_len);
+            if (q != '\0') {
+                ow_put(w, &q, 1);
+            }
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
+        }
     }
     if (repl == NULL) {
         return 0;
