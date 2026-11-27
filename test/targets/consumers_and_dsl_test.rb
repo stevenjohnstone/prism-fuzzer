@@ -902,7 +902,7 @@ class CampaignDslAndSchemaTest < Minitest::Test
     v = JSON.parse(val_out)
     assert_equal true, v["valid"]
     assert_equal 2, v["schema_version"]
-    assert_equal 10, v.fetch("workers").size
+    assert_equal 22, v.fetch("workers").size
 
     comp_out, = assert_cmd(repo_path("campaigns/compile.rb"), "compile")
     ir = JSON.parse(comp_out)

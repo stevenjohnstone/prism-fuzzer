@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# CRuby Dual-Compiler Campaign (`cruby-compile-fleet`, 10 workers):
+# CRuby Dual-Compiler Campaign (`cruby-compile-fleet`, 22 workers):
 #   Targets CRuby's bytecode compilers (`compile.c` + `prism_compile.c` + `iseq.c`)
-#   with PCGUARD edge feedback, trapping UBSan, and ABI-safe `RUBY_ASSERT_ALWAYS`.
+#   with PCGUARD edge feedback, patchless IJON, Prism AST mutators (`libprismmutator.so`),
+#   ASan + stack-UAR (`FUZZ_DISABLE_GC=1`), trapping UBSan, and ABI-safe `RUBY_ASSERT_ALWAYS`.
 #   Inputs are gated on parser agreement (both Prism and `parse.y` accept the Ruby
 #   syntax) and then compiled through both `parser: :prism` and `parser: :parse_y`
 #   across decoded `RubyVM::InstructionSequence` optimization masks.
@@ -18,7 +19,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "11121e7878cd87f02f6b4f5eb4a03db681d37ad4"
+DEFAULT_RUBY_REF = "ccbb1f62315dcc9f8de0e2f85e6901ee2ac80f9a"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -105,10 +106,17 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   end
 
   [
-    { id: "small-compile-fast",    fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0], color: "#fb923c" },
-    { id: "small-compile-exploit", fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],       color: "#f59e0b" },
-    { id: "small-compile-ast",     fuzzer: "fuzz.ijon.compile", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], color: "#fbbf24" },
-    { id: "small-compile-asan",    fuzzer: "fuzz.compile.asan", schedule: "fast",    afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#ef4444" }
+    { id: "small-compile-fast",     fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0],       color: "#fb923c" },
+    { id: "small-compile-exploit",  fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],             color: "#f59e0b" },
+    { id: "small-compile-coe",      fuzzer: "fuzz.ijon.compile", schedule: "coe",     afl_flags: [],             color: "#eab308" },
+    { id: "small-compile-rare",     fuzzer: "fuzz.compile",      schedule: "rare",    afl_flags: [],             color: "#facc15" },
+    { id: "small-compile-seek",     fuzzer: "fuzz.compile",      schedule: "seek",    afl_flags: [],             color: "#fde047" },
+    { id: "small-compile-mmopt",    fuzzer: "fuzz.compile",      schedule: "mmopt",   afl_flags: [],             color: "#fdba74" },
+    { id: "small-compile-text",     fuzzer: "fuzz.compile",      schedule: "lin",     afl_flags: %w[-Z -a text], color: "#fed7aa" },
+    { id: "small-compile-ast-1",    fuzzer: "fuzz.ijon.compile", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], color: "#fbbf24" },
+    { id: "small-compile-ast-2",    fuzzer: "fuzz.compile",      mutator: "libprismmutator.so", schedule: "fast",    afl_flags: [], color: "#f59e0b" },
+    { id: "small-compile-ast-only", fuzzer: "fuzz.ijon.compile", mutator: "libprismmutator.so", schedule: "rare",    afl_flags: [], env: { AFL_CUSTOM_MUTATOR_ONLY: "1" }, color: "#d97706" },
+    { id: "small-compile-asan",     fuzzer: "fuzz.compile.asan", schedule: "fast",    afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#ef4444" }
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-small", afl_role: :secondary, max_input_size: small_max_input do
       mutator spec[:mutator] if spec[:mutator]
@@ -133,10 +141,16 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   end
 
   [
-    { id: "8k-compile-fast", fuzzer: "fuzz.compile",      schedule: "fast", afl_flags: [], color: "#c2410c" },
-    { id: "8k-compile-asan", fuzzer: "fuzz.compile.asan", schedule: "fast", afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#dc2626" }
+    { id: "8k-compile-fast",    fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0],      color: "#c2410c" },
+    { id: "8k-compile-exploit", fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],            color: "#9a3412" },
+    { id: "8k-compile-quad",    fuzzer: "fuzz.compile",      schedule: "quad",    afl_flags: %w[-P exploit], color: "#7c2d12" },
+    { id: "8k-compile-rare",    fuzzer: "fuzz.compile",      schedule: "rare",    afl_flags: [],            color: "#b45309" },
+    { id: "8k-compile-ast-1",   fuzzer: "fuzz.ijon.compile", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], color: "#d97706" },
+    { id: "8k-compile-ast-2",   fuzzer: "fuzz.compile",      mutator: "libprismmutator.so", schedule: "fast",    afl_flags: [], color: "#f59e0b" },
+    { id: "8k-compile-asan",    fuzzer: "fuzz.compile.asan", schedule: "fast",    afl_flags: [], loopcount: 50, env: { FUZZ_DISABLE_GC: "1" }, color: "#dc2626" }
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-8k", afl_role: :secondary, max_input_size: large_max_input do
+      mutator spec[:mutator] if spec[:mutator]
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount(spec[:loopcount] || 1000)
