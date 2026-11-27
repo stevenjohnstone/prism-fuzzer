@@ -42,7 +42,8 @@ typedef enum {
     TOK_CALL_OP = 4,
     TOK_HEREDOC_OPEN = 5,
     TOK_ASSIGN_OP = 6,
-    TOK_REGEXP_FLAGS = 7
+    TOK_REGEXP_FLAGS = 7,
+    TOK_PERCENT_OPEN = 8
 } tok_kind_t;
 
 typedef struct {
@@ -183,6 +184,16 @@ static void record_heredoc_open(ast_index_t *idx, pm_location_t loc) {
     if (valid_loc(loc, idx->src_len) && loc.length >= 3 &&
         idx->src[loc.start] == '<' && idx->src[loc.start + 1] == '<') {
         record_tok(idx, loc, TOK_HEREDOC_OPEN);
+    }
+}
+
+static void record_percent_open(ast_index_t *idx, pm_location_t loc) {
+    if (valid_loc(loc, idx->src_len) && loc.length == 3 && idx->src[loc.start] == '%') {
+        uint8_t c = idx->src[loc.start + 1];
+        if (c == 'w' || c == 'W' || c == 'i' || c == 'I' ||
+            c == 'q' || c == 'Q' || c == 'x' || c == 'r' || c == 's') {
+            record_tok(idx, loc, TOK_PERCENT_OPEN);
+        }
     }
 }
 
@@ -342,24 +353,48 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             }
             break;
         }
-        case PM_STRING_NODE:
-            record_heredoc_open(idx, ((const pm_string_node_t *) node)->opening_loc);
+        case PM_STRING_NODE: {
+            pm_location_t oloc = ((const pm_string_node_t *) node)->opening_loc;
+            record_heredoc_open(idx, oloc);
+            record_percent_open(idx, oloc);
             break;
-        case PM_INTERPOLATED_STRING_NODE:
-            record_heredoc_open(idx, ((const pm_interpolated_string_node_t *) node)->opening_loc);
+        }
+        case PM_INTERPOLATED_STRING_NODE: {
+            pm_location_t oloc = ((const pm_interpolated_string_node_t *) node)->opening_loc;
+            record_heredoc_open(idx, oloc);
+            record_percent_open(idx, oloc);
             break;
-        case PM_X_STRING_NODE:
-            record_heredoc_open(idx, ((const pm_x_string_node_t *) node)->opening_loc);
+        }
+        case PM_X_STRING_NODE: {
+            pm_location_t oloc = ((const pm_x_string_node_t *) node)->opening_loc;
+            record_heredoc_open(idx, oloc);
+            record_percent_open(idx, oloc);
             break;
-        case PM_INTERPOLATED_X_STRING_NODE:
-            record_heredoc_open(idx, ((const pm_interpolated_x_string_node_t *) node)->opening_loc);
+        }
+        case PM_INTERPOLATED_X_STRING_NODE: {
+            pm_location_t oloc = ((const pm_interpolated_x_string_node_t *) node)->opening_loc;
+            record_heredoc_open(idx, oloc);
+            record_percent_open(idx, oloc);
             break;
-        case PM_REGULAR_EXPRESSION_NODE:
-            record_tok(idx, ((const pm_regular_expression_node_t *) node)->closing_loc, TOK_REGEXP_FLAGS);
+        }
+        case PM_ARRAY_NODE:
+            record_percent_open(idx, ((const pm_array_node_t *) node)->opening_loc);
             break;
-        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
-            record_tok(idx, ((const pm_interpolated_regular_expression_node_t *) node)->closing_loc, TOK_REGEXP_FLAGS);
+        case PM_SYMBOL_NODE:
+            record_percent_open(idx, ((const pm_symbol_node_t *) node)->opening_loc);
             break;
+        case PM_REGULAR_EXPRESSION_NODE: {
+            const pm_regular_expression_node_t *rn = (const pm_regular_expression_node_t *) node;
+            record_tok(idx, rn->closing_loc, TOK_REGEXP_FLAGS);
+            record_percent_open(idx, rn->opening_loc);
+            break;
+        }
+        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
+            const pm_interpolated_regular_expression_node_t *rn = (const pm_interpolated_regular_expression_node_t *) node;
+            record_tok(idx, rn->closing_loc, TOK_REGEXP_FLAGS);
+            record_percent_open(idx, rn->opening_loc);
+            break;
+        }
         case PM_CALL_AND_WRITE_NODE: {
             const pm_call_and_write_node_t *n = (const pm_call_and_write_node_t *) node;
             if (valid_loc(n->call_operator_loc, idx->src_len) &&
@@ -585,10 +620,17 @@ static size_t emit_magic_or_end(
     static const char *const prefixes[] = {
         "# encoding: UTF-8\n",
         "# encoding: ASCII-8BIT\n",
+        "# encoding: US-ASCII\n",
         "# encoding: EUC-JP\n",
+        "# encoding: EUC-KR\n",
         "# encoding: Shift_JIS\n",
         "# encoding: Windows-31J\n",
+        "# encoding: SJIS-KDDI\n",
         "# encoding: CESU-8\n",
+        "# encoding: Big5\n",
+        "# encoding: GBK\n",
+        "# encoding: IBM437\n",
+        "# encoding: CP852\n",
         "# encoding: ISO-8859-1\n",
         "# frozen_string_literal: true\n",
         "# frozen_string_literal: false\n",
@@ -597,10 +639,32 @@ static size_t emit_magic_or_end(
         "#!/usr/bin/ruby\n# encoding: UTF-8\n",
         "\xef\xbb\xbf"
     };
-    if (rng_below(m, 6) == 0) {
+    size_t kind = rng_below(m, 8);
+    if (kind == 0) {
         ow_put(w, src, src_len);
         ow_puts(w, "\n__END__\ndata\n");
         return w->len;
+    }
+    if (kind <= 2) {
+        /* Mutate a random newline in src to \r\r\n, \r\n, \n\r, or \r\n\f */
+        size_t nl_pos[32];
+        size_t nl_cnt = 0;
+        for (size_t i = 0; i < src_len && nl_cnt < 32; i++) {
+            if (src[i] == '\n') {
+                nl_pos[nl_cnt++] = i;
+            }
+        }
+        if (nl_cnt > 0) {
+            static const char *const eols[] = { "\r\r\n", "\r\n", "\n\r", "\r\n\f" };
+            size_t pos = nl_pos[rng_below(m, nl_cnt)];
+            const char *eol = eols[rng_below(m, sizeof(eols) / sizeof(eols[0]))];
+            ow_put(w, src, pos);
+            ow_puts(w, eol);
+            if (pos + 1 < src_len) {
+                ow_put(w, src + pos + 1, src_len - (pos + 1));
+            }
+            return w->len;
+        }
     }
     const char *pfx = prefixes[rng_below(m, sizeof(prefixes) / sizeof(prefixes[0]))];
     ow_puts(w, pfx);
@@ -623,7 +687,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 45)) {
+    switch (rng_below(m, 49)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -775,6 +839,18 @@ static size_t emit_wrapper(
         case 43:
             ow_puts(w, "(/(?<_k>a)/ =~ ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); _k)");
             break;
+        case 44:
+            ow_puts(w, "def ("); ow_put(w, x_ptr, x_len); ow_puts(w, ")._m; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 45:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") => [a, ^("); ow_put(w, y_ptr, y_len); ow_puts(w, ")])");
+            break;
+        case 46:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") in {k: ^("); ow_put(w, y_ptr, y_len); ow_puts(w, ")})");
+            break;
+        case 47:
+            ow_puts(w, "alias :_a :_b until ("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
+            break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
             break;
@@ -865,6 +941,20 @@ static size_t emit_tok_flip(
                 ow_put(w, src + tail, src_len - tail);
             }
             return w->len;
+        }
+        case TOK_PERCENT_OPEN: {
+            uint8_t cur = src[tok.start + 1u];
+            uint8_t delim = src[tok.start + 2u];
+            static const char word_kinds[] = { 'w', 'W', 'i', 'I' };
+            static const char str_kinds[] = { 'q', 'Q', 'x', 'r', 's' };
+            char next_k;
+            if (cur == 'w' || cur == 'W' || cur == 'i' || cur == 'I') {
+                next_k = word_kinds[rng_below(m, sizeof(word_kinds))];
+            } else {
+                next_k = str_kinds[rng_below(m, sizeof(str_kinds))];
+            }
+            uint8_t rep_buf[3] = { '%', (uint8_t) next_k, delim };
+            return emit_replace(w, src, src_len, tok.start, tok.length, rep_buf, 3, false);
         }
     }
     if (repl == NULL) {
