@@ -549,8 +549,23 @@ module FuzzTriage
         buffered_sentinels = {}
         dup_log_counts = Hash.new(0)
         active_minimizations = {}
+        total_queued = 0
+        completed_count = 0
+        triage_start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+        format_eta = lambda do |secs|
+          s = secs.round
+          if s >= 3600
+            format("%dh %02dm", s / 3600, (s % 3600) / 60)
+          elsif s >= 60
+            format("%dm %02ds", s / 60, s % 60)
+          else
+            "#{s}s"
+          end
+        end
 
         dispatch = lambda do |crash_dir, crash, executable|
+          total_queued += 1
           work = lambda do
             process_crash(
               crash_dir,
@@ -582,6 +597,8 @@ module FuzzTriage
             )
           rescue StandardError => e
             warn "Error processing #{crash}: #{e.class}: #{e.message}\n#{e.backtrace.join("\n")}"
+          ensure
+            semaphore.synchronize { completed_count += 1 }
           end
 
           pool ? pool.post(&work) : work.call
@@ -603,15 +620,27 @@ module FuzzTriage
             heartbeat_interval = Float(ENV.fetch("TRIAGE_HEARTBEAT_SECONDS", "10"))
             until pool.wait_for_termination(heartbeat_interval)
               now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-              inflight = semaphore.synchronize do
-                active_minimizations.map { |path, started| [path, now - started] }
+              done, buckets_n, inflight = semaphore.synchronize do
+                [
+                  completed_count,
+                  published_buckets.size,
+                  active_minimizations.map { |path, started| [path, now - started] }
+                ]
               end
-              next if inflight.empty?
-
-              sample = inflight.sort_by { |_, dt| -dt }.first(3).map do |path, dt|
-                "#{File.basename(File.dirname(File.dirname(path)))}/#{File.basename(path)} (#{format('%.0fs', dt)})"
-              end.join(", ")
-              puts "[triage] still minimizing #{inflight.size} bucket(s): #{sample}"
+              elapsed = [now - triage_start, 0.001].max
+              pct = total_queued > 0 ? (done * 100.0 / total_queued) : 100.0
+              rate = done / elapsed
+              remaining = [total_queued - done, 0].max
+              eta_str = rate > 0.0 && remaining > 0 ? " | ETA #{format_eta.call(remaining / rate)}" : ""
+              rate_str = rate >= 10.0 ? format("%.0f/s", rate) : format("%.1f/s", rate)
+              line = format("[triage] %d / %d (%.1f%%) | %d buckets | %s%s", done, total_queued, pct, buckets_n, rate_str, eta_str)
+              unless inflight.empty?
+                sample = inflight.sort_by { |_, dt| -dt }.first(3).map do |path, dt|
+                  "#{File.basename(File.dirname(File.dirname(path)))}/#{File.basename(path)} (#{format('%.0fs', dt)})"
+                end.join(", ")
+                line = "#{line} | minimizing #{inflight.size}: #{sample}"
+              end
+              puts line
             end
           end
           buffered_occurrences.each do |bdir, recs|

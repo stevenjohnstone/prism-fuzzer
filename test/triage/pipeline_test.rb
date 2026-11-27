@@ -586,7 +586,8 @@ class TriagePipelineTest < Minitest::Test
         )
       end
     end
-    assert_includes hb_log, "[triage] still minimizing 1 bucket(s):"
+    assert_includes hb_log, "[triage] 0 / 1 (0.0%) | 0 buckets |"
+    assert_includes hb_log, "| minimizing 1: w1/id:000000,sig:06"
     verify_bounded_hang_minimization(workdir)
   end
 
