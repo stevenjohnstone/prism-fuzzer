@@ -101,6 +101,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-small", afl_role: :secondary, max_input_size: small_max_input do
       mutator spec[:mutator] if spec[:mutator]
+      no_trim true if spec[:mutator]
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount(spec[:loopcount] || 1000)
@@ -133,6 +134,7 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl-8k", afl_role: :secondary, max_input_size: large_max_input do
       mutator spec[:mutator] if spec[:mutator]
+      no_trim true if spec[:mutator]
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount(spec[:loopcount] || 1000)

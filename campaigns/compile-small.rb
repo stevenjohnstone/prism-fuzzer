@@ -102,6 +102,7 @@ PrismFuzzer.campaign "cruby-compile-small" do
   ].each do |spec|
     worker spec[:id], fuzzer: spec[:fuzzer], sync_group: "afl", afl_role: :secondary, max_input_size: max_input do
       mutator spec[:mutator] if spec[:mutator]
+      no_trim true if spec[:mutator]
       schedule spec[:schedule]
       afl_flags(*spec[:afl_flags]) unless spec[:afl_flags].empty?
       loopcount(spec[:loopcount] || 1000)

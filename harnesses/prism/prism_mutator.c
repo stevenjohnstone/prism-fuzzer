@@ -25,10 +25,9 @@
 #define PM_MUT_MAX_PARSE_LEN 16384u
 #define PM_MUT_MAX_NODES     256u
 #define PM_MUT_MAX_TOKENS    64u
+#define PM_MUT_MAX_SHRINKS   64u
 #define PM_MUT_MAX_DEPTH     128u
 #define PM_MUT_INIT_CAP      32768u
-#define PM_MUT_MAX_TRIM_STEPS 32u
-#define PM_MUT_MAX_TRIM_CANDS 128u
 
 typedef struct {
     uint32_t start;
@@ -76,6 +75,13 @@ typedef struct {
 } mut_delim_pair_t;
 
 typedef struct {
+    uint32_t start;
+    uint32_t length;
+    const char *repl;
+    uint32_t repl_len;
+} mut_shrink_t;
+
+typedef struct {
     const uint8_t *src;
     size_t src_len;
     mut_span_t nodes[PM_MUT_MAX_NODES];
@@ -84,16 +90,10 @@ typedef struct {
     size_t token_count;
     mut_delim_pair_t delim_pairs[PM_MUT_MAX_TOKENS];
     size_t delim_pair_count;
+    mut_shrink_t shrinks[PM_MUT_MAX_SHRINKS];
+    size_t shrink_count;
     unsigned depth;
 } ast_index_t;
-
-typedef struct {
-    uint32_t start;
-    uint32_t length;
-    const char *repl;
-    uint32_t repl_len;
-    uint32_t savings;
-} trim_cand_t;
 
 typedef struct {
     uint64_t rng;
@@ -107,19 +107,6 @@ typedef struct {
     bool cache_valid;
     bool cache_has_nodes;
     ast_index_t cache_idx;
-    /* AST-guided custom trimmer state */
-    uint8_t *trim_cur_buf;
-    size_t trim_cur_len;
-    size_t trim_cur_cap;
-    uint8_t *trim_cand_buf;
-    size_t trim_cand_len;
-    size_t trim_cand_cap;
-    size_t trim_orig_len;
-    trim_cand_t trim_cands[PM_MUT_MAX_TRIM_STEPS];
-    size_t trim_cand_count;
-    size_t trim_cand_idx;
-    int32_t trim_step;
-    int32_t trim_max_steps;
 } prism_mutator_t;
 
 static uint64_t fnv1a_64(const uint8_t *data, size_t len) {
@@ -213,6 +200,72 @@ static void record_tok(ast_index_t *idx, pm_location_t loc, tok_kind_t kind) {
             .kind = kind
         };
     }
+}
+
+static void record_shrink(
+    ast_index_t *idx,
+    uint32_t start,
+    uint32_t length,
+    const char *repl,
+    uint32_t repl_len
+) {
+    if (idx->shrink_count >= PM_MUT_MAX_SHRINKS) {
+        return;
+    }
+    if (start > idx->src_len || length > idx->src_len - start || length <= repl_len) {
+        return;
+    }
+    idx->shrinks[idx->shrink_count++] = (mut_shrink_t) {
+        .start = start,
+        .length = length,
+        .repl = repl,
+        .repl_len = repl_len
+    };
+}
+
+static void record_shrink_list_items(ast_index_t *idx, const pm_node_list_t *list) {
+    for (size_t i = 0; i < list->size && idx->shrink_count < PM_MUT_MAX_SHRINKS; i++) {
+        const pm_node_t *el = list->nodes[i];
+        if (el == NULL || !valid_loc(el->location, idx->src_len)) {
+            continue;
+        }
+        uint32_t s = el->location.start;
+        uint32_t e = s + el->location.length;
+        uint32_t pe = e;
+        while (pe < idx->src_len && (idx->src[pe] == ' ' || idx->src[pe] == '\t')) {
+            pe++;
+        }
+        if (pe < idx->src_len && idx->src[pe] == ',') {
+            pe++;
+            while (pe < idx->src_len && (idx->src[pe] == ' ' || idx->src[pe] == '\t')) {
+                pe++;
+            }
+            record_shrink(idx, s, pe - s, "", 0);
+        } else {
+            uint32_t ps = s;
+            while (ps > 0 && (idx->src[ps - 1] == ' ' || idx->src[ps - 1] == '\t')) {
+                ps--;
+            }
+            if (ps > 0 && idx->src[ps - 1] == ',') {
+                ps--;
+                record_shrink(idx, ps, e - ps, "", 0);
+            } else {
+                record_shrink(idx, s, e - s, "", 0);
+            }
+        }
+    }
+}
+
+static void record_shrink_ident(ast_index_t *idx, pm_location_t loc) {
+    if (!valid_loc(loc, idx->src_len) || loc.length < 4) {
+        return;
+    }
+    uint8_t c = idx->src[loc.start];
+    if (!((c >= 'a' && c <= 'z') || c == '_')) {
+        return;
+    }
+    /* Shrink long identifier to its first character (preserving lowercase/underscore start). */
+    record_shrink(idx, loc.start + 1u, loc.length - 1u, "", 0);
 }
 
 static void record_heredoc_open(ast_index_t *idx, pm_location_t loc) {
@@ -327,6 +380,9 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
                  (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
                 record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
             }
+            if (valid_loc(n->message_loc, idx->src_len) && is_ident_message(idx->src, n->message_loc)) {
+                record_shrink_ident(idx, n->message_loc);
+            }
             if (n->arguments != NULL &&
                 valid_loc(n->message_loc, idx->src_len) && is_ident_message(idx->src, n->message_loc)) {
                 if (valid_loc(n->opening_loc, idx->src_len) && valid_loc(n->closing_loc, idx->src_len) &&
@@ -389,9 +445,13 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             break;
         }
         case PM_STRING_NODE: {
-            pm_location_t oloc = ((const pm_string_node_t *) node)->opening_loc;
+            const pm_string_node_t *sn = (const pm_string_node_t *) node;
+            pm_location_t oloc = sn->opening_loc;
             record_heredoc_open(idx, oloc);
             record_percent_open(idx, oloc);
+            if (valid_loc(sn->content_loc, idx->src_len) && sn->content_loc.length >= 4) {
+                record_shrink(idx, sn->content_loc.start, sn->content_loc.length, "a", 1);
+            }
             break;
         }
         case PM_INTERPOLATED_STRING_NODE: {
@@ -412,14 +472,18 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             record_percent_open(idx, oloc);
             break;
         }
-        case PM_ARRAY_NODE:
-            record_percent_open(idx, ((const pm_array_node_t *) node)->opening_loc);
+        case PM_ARRAY_NODE: {
+            const pm_array_node_t *an = (const pm_array_node_t *) node;
+            record_percent_open(idx, an->opening_loc);
+            record_shrink_list_items(idx, &an->elements);
             break;
+        }
         case PM_HASH_NODE: {
             const pm_hash_node_t *hn = (const pm_hash_node_t *) node;
             if (valid_loc(hn->opening_loc, idx->src_len) && valid_loc(hn->closing_loc, idx->src_len)) {
                 record_tok(idx, node->location, TOK_HASH_TO_PATTERN);
             }
+            record_shrink_list_items(idx, &hn->elements);
             break;
         }
         case PM_HASH_PATTERN_NODE: {
@@ -556,6 +620,9 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         }
         case PM_LOCAL_VARIABLE_READ_NODE:
         case PM_LOCAL_VARIABLE_TARGET_NODE:
+            record_tok(idx, node->location, TOK_VAR_SIGIL);
+            record_shrink_ident(idx, node->location);
+            break;
         case PM_INSTANCE_VARIABLE_READ_NODE:
         case PM_INSTANCE_VARIABLE_TARGET_NODE:
         case PM_CLASS_VARIABLE_READ_NODE:
@@ -693,6 +760,63 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         case PM_INDEX_OPERATOR_WRITE_NODE:
             record_tok(idx, ((const pm_index_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
             break;
+        case PM_STATEMENTS_NODE: {
+            const pm_statements_node_t *sn = (const pm_statements_node_t *) node;
+            if (sn->body.size >= 2) {
+                for (size_t i = 0; i < sn->body.size && idx->shrink_count < PM_MUT_MAX_SHRINKS; i++) {
+                    const pm_node_t *stmt = sn->body.nodes[i];
+                    if (stmt == NULL || !valid_loc(stmt->location, idx->src_len)) {
+                        continue;
+                    }
+                    uint32_t s = stmt->location.start;
+                    uint32_t e = s + stmt->location.length;
+                    while (e < idx->src_len && (idx->src[e] == ' ' || idx->src[e] == '\t')) {
+                        e++;
+                    }
+                    if (e < idx->src_len && (idx->src[e] == ';' || idx->src[e] == '\n')) {
+                        e++;
+                    } else if (e + 1 < idx->src_len && idx->src[e] == '\r' && idx->src[e + 1] == '\n') {
+                        e += 2;
+                    }
+                    record_shrink(idx, s, e - s, "", 0);
+                }
+            }
+            break;
+        }
+        case PM_ELSE_NODE:
+        case PM_RESCUE_NODE:
+        case PM_ENSURE_NODE:
+            if (valid_loc(node->location, idx->src_len)) {
+                record_shrink(idx, node->location.start, node->location.length, "", 0);
+            }
+            break;
+        case PM_CASE_NODE: {
+            const pm_case_node_t *cn = (const pm_case_node_t *) node;
+            if (cn->conditions.size >= 2) {
+                for (size_t i = 0; i < cn->conditions.size; i++) {
+                    const pm_node_t *w = cn->conditions.nodes[i];
+                    if (w != NULL && valid_loc(w->location, idx->src_len)) {
+                        record_shrink(idx, w->location.start, w->location.length, "", 0);
+                    }
+                }
+            }
+            break;
+        }
+        case PM_CASE_MATCH_NODE: {
+            const pm_case_match_node_t *cm = (const pm_case_match_node_t *) node;
+            if (cm->conditions.size >= 2) {
+                for (size_t i = 0; i < cm->conditions.size; i++) {
+                    const pm_node_t *w = cm->conditions.nodes[i];
+                    if (w != NULL && valid_loc(w->location, idx->src_len)) {
+                        record_shrink(idx, w->location.start, w->location.length, "", 0);
+                    }
+                }
+            }
+            break;
+        }
+        case PM_ARGUMENTS_NODE:
+            record_shrink_list_items(idx, &((const pm_arguments_node_t *) node)->arguments);
+            break;
         default:
             break;
     }
@@ -724,6 +848,35 @@ static bool index_ruby_source(const uint8_t *src, size_t src_len, ast_index_t *i
     pm_node_t *root = pm_parse(parser);
     if (root != NULL) {
         pm_visit_node(root, collect_ast_cb, idx);
+    }
+
+    /* Record non-magic comments as shrink candidates (strip dead comment bytes). */
+    for (const pm_comment_t *cm = pm_parser_comments_first(parser);
+         cm != NULL && idx->shrink_count < PM_MUT_MAX_SHRINKS;
+         cm = pm_comment_next(cm)) {
+        pm_location_t cloc = pm_comment_location(cm);
+        if (!valid_loc(cloc, src_len) || cloc.length <= 2) {
+            continue;
+        }
+        if (src[cloc.start] == '#' && src[cloc.start + 1] == '!') {
+            continue;
+        }
+        bool magic = false;
+        for (size_t k = 0; k + 6 <= cloc.length; k++) {
+            uint8_t c = src[cloc.start + k];
+            if ((c == 'c' || c == 'C') &&
+                (memcmp(src + cloc.start + k, "coding", 6) == 0 || memcmp(src + cloc.start + k, "CODING", 6) == 0)) {
+                magic = true;
+                break;
+            }
+            if ((c == 'f' || c == 'F') && k + 6 <= cloc.length && memcmp(src + cloc.start + k, "frozen", 6) == 0) {
+                magic = true;
+                break;
+            }
+        }
+        if (!magic) {
+            record_shrink(idx, cloc.start, cloc.length, "", 0);
+        }
     }
 
     pm_parser_free(parser);
@@ -1514,357 +1667,65 @@ void afl_custom_deinit(void *data) {
     }
     free(m->cache_src);
     free(m->out_buf);
-    free(m->trim_cur_buf);
-    free(m->trim_cand_buf);
     free(m);
 }
 
-typedef struct {
-    const uint8_t *src;
-    size_t src_len;
-    trim_cand_t cands[PM_MUT_MAX_TRIM_CANDS];
-    size_t count;
-    unsigned depth;
-} trim_index_t;
-
-static void add_trim_cand(
-    trim_index_t *ti,
-    uint32_t start,
-    uint32_t length,
-    const char *repl,
-    uint32_t repl_len
+static size_t emit_whitespace_compact(
+    out_writer_t *w,
+    const uint8_t *src,
+    size_t src_len
 ) {
-    if (ti->count >= PM_MUT_MAX_TRIM_CANDS) {
-        return;
-    }
-    if (start > ti->src_len || length > ti->src_len - start || length <= repl_len) {
-        return;
-    }
-    /* Avoid duplicate (start, length, repl_len) candidates */
-    for (size_t i = 0; i < ti->count; i++) {
-        if (ti->cands[i].start == start && ti->cands[i].length == length &&
-            ti->cands[i].repl_len == repl_len) {
-            return;
-        }
-    }
-    ti->cands[ti->count++] = (trim_cand_t) {
-        .start = start,
-        .length = length,
-        .repl = repl,
-        .repl_len = repl_len,
-        .savings = length - repl_len
-    };
-}
-
-static void add_trim_list_items(trim_index_t *ti, const pm_node_list_t *list) {
-    for (size_t i = 0; i < list->size && ti->count < PM_MUT_MAX_TRIM_CANDS; i++) {
-        const pm_node_t *el = list->nodes[i];
-        if (el == NULL || !valid_loc(el->location, ti->src_len)) {
-            continue;
-        }
-        uint32_t s = el->location.start;
-        uint32_t e = s + el->location.length;
-        /* Consume trailing comma + horizontal space if present; else leading comma. */
-        uint32_t pe = e;
-        while (pe < ti->src_len && (ti->src[pe] == ' ' || ti->src[pe] == '\t')) {
-            pe++;
-        }
-        if (pe < ti->src_len && ti->src[pe] == ',') {
-            pe++;
-            while (pe < ti->src_len && (ti->src[pe] == ' ' || ti->src[pe] == '\t')) {
-                pe++;
+    bool changed = false;
+    size_t i = 0;
+    while (i < src_len && w->len < w->cap) {
+        uint8_t c = src[i];
+        if (c == ' ' || c == '\t') {
+            size_t j = i + 1;
+            while (j < src_len && (src[j] == ' ' || src[j] == '\t')) {
+                j++;
             }
-            add_trim_cand(ti, s, pe - s, "", 0);
+            if (j - i >= 2) {
+                changed = true;
+            }
+            ow_put(w, " ", 1);
+            i = j;
+        } else if (c == '\n') {
+            size_t j = i + 1;
+            while (j < src_len && src[j] == '\n') {
+                j++;
+            }
+            if (j - i >= 2) {
+                changed = true;
+            }
+            ow_put(w, "\n", 1);
+            i = j;
         } else {
-            uint32_t ps = s;
-            while (ps > 0 && (ti->src[ps - 1] == ' ' || ti->src[ps - 1] == '\t')) {
-                ps--;
-            }
-            if (ps > 0 && ti->src[ps - 1] == ',') {
-                ps--;
-                add_trim_cand(ti, ps, e - ps, "", 0);
-            } else {
-                add_trim_cand(ti, s, e - s, "", 0);
-            }
+            ow_put(w, &c, 1);
+            i++;
         }
     }
+    return changed ? w->len : 0;
 }
 
-static pm_visit_result_t collect_trim_cb(const pm_node_t *node, void *data) {
-    trim_index_t *ti = (trim_index_t *) data;
-    if (ti->depth >= PM_MUT_MAX_DEPTH || ti->count >= PM_MUT_MAX_TRIM_CANDS) {
-        return PM_VISIT_SKIP;
-    }
-
-    pm_node_type_t type = PM_NODE_TYPE(node);
-    switch (type) {
-        case PM_STATEMENTS_NODE: {
-            const pm_statements_node_t *sn = (const pm_statements_node_t *) node;
-            if (sn->body.size >= 2) {
-                for (size_t i = 0; i < sn->body.size && ti->count < PM_MUT_MAX_TRIM_CANDS; i++) {
-                    const pm_node_t *stmt = sn->body.nodes[i];
-                    if (stmt == NULL || !valid_loc(stmt->location, ti->src_len)) {
-                        continue;
-                    }
-                    uint32_t s = stmt->location.start;
-                    uint32_t e = s + stmt->location.length;
-                    while (e < ti->src_len && (ti->src[e] == ' ' || ti->src[e] == '\t')) {
-                        e++;
-                    }
-                    if (e < ti->src_len && (ti->src[e] == ';' || ti->src[e] == '\n')) {
-                        e++;
-                    } else if (e + 1 < ti->src_len && ti->src[e] == '\r' && ti->src[e + 1] == '\n') {
-                        e += 2;
-                    }
-                    add_trim_cand(ti, s, e - s, "", 0);
-                }
-            }
-            break;
+static size_t emit_ast_shrink(
+    prism_mutator_t *m,
+    out_writer_t *w,
+    const uint8_t *src,
+    size_t src_len,
+    const ast_index_t *idx
+) {
+    if (idx->shrink_count == 0 || rng_below(m, 4) == 0) {
+        size_t ws_n = emit_whitespace_compact(w, src, src_len);
+        if (ws_n > 0) {
+            return ws_n;
         }
-        case PM_ELSE_NODE:
-        case PM_RESCUE_NODE:
-        case PM_ENSURE_NODE:
-            if (valid_loc(node->location, ti->src_len)) {
-                add_trim_cand(ti, node->location.start, node->location.length, "", 0);
-            }
-            break;
-        case PM_CASE_NODE: {
-            const pm_case_node_t *cn = (const pm_case_node_t *) node;
-            if (cn->conditions.size >= 2) {
-                for (size_t i = 0; i < cn->conditions.size; i++) {
-                    const pm_node_t *w = cn->conditions.nodes[i];
-                    if (w != NULL && valid_loc(w->location, ti->src_len)) {
-                        add_trim_cand(ti, w->location.start, w->location.length, "", 0);
-                    }
-                }
-            }
-            break;
-        }
-        case PM_CASE_MATCH_NODE: {
-            const pm_case_match_node_t *cm = (const pm_case_match_node_t *) node;
-            if (cm->conditions.size >= 2) {
-                for (size_t i = 0; i < cm->conditions.size; i++) {
-                    const pm_node_t *w = cm->conditions.nodes[i];
-                    if (w != NULL && valid_loc(w->location, ti->src_len)) {
-                        add_trim_cand(ti, w->location.start, w->location.length, "", 0);
-                    }
-                }
-            }
-            break;
-        }
-        case PM_CLASS_NODE: {
-            const pm_class_node_t *cn = (const pm_class_node_t *) node;
-            if (cn->superclass != NULL &&
-                valid_loc(cn->inheritance_operator_loc, ti->src_len) &&
-                valid_loc(cn->superclass->location, ti->src_len)) {
-                uint32_t s = cn->inheritance_operator_loc.start;
-                uint32_t e = cn->superclass->location.start + cn->superclass->location.length;
-                if (e > s && e <= ti->src_len) {
-                    add_trim_cand(ti, s, e - s, "", 0);
-                }
-            }
-            break;
-        }
-        case PM_ARRAY_NODE:
-            add_trim_list_items(ti, &((const pm_array_node_t *) node)->elements);
-            break;
-        case PM_HASH_NODE:
-            add_trim_list_items(ti, &((const pm_hash_node_t *) node)->elements);
-            break;
-        case PM_HASH_PATTERN_NODE: {
-            const pm_hash_pattern_node_t *hp = (const pm_hash_pattern_node_t *) node;
-            add_trim_list_items(ti, &hp->elements);
-            if (hp->rest != NULL && valid_loc(hp->rest->location, ti->src_len)) {
-                uint32_t s = hp->rest->location.start;
-                uint32_t e = s + hp->rest->location.length;
-                uint32_t ps = s;
-                while (ps > 0 && (ti->src[ps - 1] == ' ' || ti->src[ps - 1] == '\t')) {
-                    ps--;
-                }
-                if (ps > 0 && ti->src[ps - 1] == ',') {
-                    ps--;
-                }
-                add_trim_cand(ti, ps, e - ps, "", 0);
-            }
-            break;
-        }
-        case PM_ARGUMENTS_NODE:
-            add_trim_list_items(ti, &((const pm_arguments_node_t *) node)->arguments);
-            break;
-        default:
-            break;
+        w->len = 0;
     }
-
-    if (is_replaceable_node(type) && valid_loc(node->location, ti->src_len) && node->location.length >= 4) {
-        add_trim_cand(ti, node->location.start, node->location.length, "0", 1);
-    }
-
-    ti->depth++;
-    pm_visit_child_nodes(node, collect_trim_cb, data);
-    ti->depth--;
-    return PM_VISIT_SKIP;
-}
-
-static int cmp_trim_cand_desc(const void *a, const void *b) {
-    const trim_cand_t *ca = (const trim_cand_t *) a;
-    const trim_cand_t *cb = (const trim_cand_t *) b;
-    if (cb->savings != ca->savings) {
-        return (cb->savings > ca->savings) ? 1 : -1;
-    }
-    if (ca->repl_len != cb->repl_len) {
-        return (ca->repl_len < cb->repl_len) ? -1 : 1;
-    }
-    return (ca->start < cb->start) ? -1 : (ca->start > cb->start ? 1 : 0);
-}
-
-static size_t rebuild_trim_cands(prism_mutator_t *m) {
-    m->trim_cand_count = 0;
-    m->trim_cand_idx = 0;
-    if (m->trim_cur_len <= m->header_bytes + 4u) {
+    if (idx->shrink_count == 0) {
         return 0;
     }
-    const uint8_t *src = m->trim_cur_buf + m->header_bytes;
-    size_t src_len = m->trim_cur_len - m->header_bytes;
-    if (src_len > PM_MUT_MAX_PARSE_LEN) {
-        return 0;
-    }
-
-    pm_arena_t *arena = pm_arena_new();
-    if (arena == NULL) {
-        return 0;
-    }
-    pm_parser_t *parser = pm_parser_new(arena, src, src_len, NULL);
-    if (parser == NULL) {
-        pm_arena_free(arena);
-        return 0;
-    }
-    pm_node_t *root = pm_parse(parser);
-    trim_index_t ti;
-    memset(&ti, 0, sizeof(ti));
-    ti.src = src;
-    ti.src_len = src_len;
-    if (root != NULL) {
-        pm_visit_node(root, collect_trim_cb, &ti);
-    }
-    pm_parser_free(parser);
-    pm_arena_free(arena);
-
-    if (ti.count == 0) {
-        return 0;
-    }
-    qsort(ti.cands, ti.count, sizeof(ti.cands[0]), cmp_trim_cand_desc);
-    size_t keep = ti.count < PM_MUT_MAX_TRIM_STEPS ? ti.count : PM_MUT_MAX_TRIM_STEPS;
-    memcpy(m->trim_cands, ti.cands, keep * sizeof(ti.cands[0]));
-    m->trim_cand_count = keep;
-    return keep;
-}
-
-static bool ensure_trim_buf(uint8_t **buf, size_t *cap, size_t needed) {
-    if (needed <= *cap) {
-        return true;
-    }
-    size_t next = *cap ? *cap : 4096u;
-    while (next < needed) {
-        if (next > SIZE_MAX / 2) {
-            return false;
-        }
-        next *= 2;
-    }
-    uint8_t *p = (uint8_t *) realloc(*buf, next);
-    if (p == NULL) {
-        return false;
-    }
-    *buf = p;
-    *cap = next;
-    return true;
-}
-
-int32_t afl_custom_init_trim(void *data, uint8_t *buf, size_t buf_size) {
-    prism_mutator_t *m = (prism_mutator_t *) data;
-    if (m == NULL || buf == NULL || buf_size <= m->header_bytes + 4u) {
-        return 0;
-    }
-    if (!ensure_trim_buf(&m->trim_cur_buf, &m->trim_cur_cap, buf_size) ||
-        !ensure_trim_buf(&m->trim_cand_buf, &m->trim_cand_cap, buf_size)) {
-        return 0;
-    }
-    memcpy(m->trim_cur_buf, buf, buf_size);
-    m->trim_cur_len = buf_size;
-    m->trim_orig_len = buf_size;
-    m->trim_cand_len = buf_size;
-    m->trim_step = 0;
-
-    size_t n = rebuild_trim_cands(m);
-    m->trim_max_steps = (int32_t) n;
-    return m->trim_max_steps;
-}
-
-size_t afl_custom_trim(void *data, uint8_t **out_buf) {
-    prism_mutator_t *m = (prism_mutator_t *) data;
-    if (m == NULL || m->trim_cur_buf == NULL || m->trim_cand_buf == NULL ||
-        m->trim_cand_idx >= m->trim_cand_count) {
-        *out_buf = m ? m->trim_cur_buf : NULL;
-        return m ? m->trim_cur_len : 0;
-    }
-
-    size_t hdr_len = m->header_bytes;
-    const uint8_t *src = m->trim_cur_buf + hdr_len;
-    size_t src_len = m->trim_cur_len - hdr_len;
-    trim_cand_t c = m->trim_cands[m->trim_cand_idx];
-
-    if (c.start > src_len || c.length > src_len - c.start || c.length <= c.repl_len) {
-        *out_buf = m->trim_cur_buf;
-        m->trim_cand_len = m->trim_cur_len;
-        return m->trim_cur_len;
-    }
-
-    size_t tail_off = (size_t) c.start + (size_t) c.length;
-    size_t new_len = hdr_len + (size_t) c.start + (size_t) c.repl_len + (src_len - tail_off);
-    if (new_len > m->trim_orig_len || new_len >= m->trim_cur_len) {
-        *out_buf = m->trim_cur_buf;
-        m->trim_cand_len = m->trim_cur_len;
-        return m->trim_cur_len;
-    }
-
-    uint8_t *dst = m->trim_cand_buf;
-    if (hdr_len > 0) {
-        memcpy(dst, m->trim_cur_buf, hdr_len);
-    }
-    size_t pos = hdr_len;
-    if (c.start > 0) {
-        memcpy(dst + pos, src, c.start);
-        pos += c.start;
-    }
-    if (c.repl_len > 0) {
-        memcpy(dst + pos, c.repl, c.repl_len);
-        pos += c.repl_len;
-    }
-    if (tail_off < src_len) {
-        memcpy(dst + pos, src + tail_off, src_len - tail_off);
-        pos += src_len - tail_off;
-    }
-    m->trim_cand_len = pos;
-    *out_buf = dst;
-    return pos;
-}
-
-int32_t afl_custom_post_trim(void *data, uint8_t success) {
-    prism_mutator_t *m = (prism_mutator_t *) data;
-    if (m == NULL) {
-        return 0;
-    }
-    m->trim_step++;
-    if (success && m->trim_cand_len < m->trim_cur_len && m->trim_cand_len <= m->trim_orig_len) {
-        memcpy(m->trim_cur_buf, m->trim_cand_buf, m->trim_cand_len);
-        m->trim_cur_len = m->trim_cand_len;
-        rebuild_trim_cands(m);
-    } else {
-        m->trim_cand_idx++;
-    }
-    if (m->trim_step >= m->trim_max_steps || m->trim_cand_idx >= m->trim_cand_count) {
-        return m->trim_max_steps;
-    }
-    return m->trim_step;
+    mut_shrink_t sh = idx->shrinks[rng_below(m, idx->shrink_count)];
+    return emit_replace(w, src, src_len, sh.start, sh.length, (const uint8_t *) sh.repl, sh.repl_len, false);
 }
 
 static bool get_or_index_a(prism_mutator_t *m, const uint8_t *src, size_t src_len) {
@@ -1943,7 +1804,7 @@ size_t afl_custom_fuzz(
     ast_index_t idx_b;
     bool has_b = false;
     const uint8_t *src_b = NULL;
-    if ((op < 66 || op >= 90) && add_buf != NULL && add_buf_size > hdr_len) {
+    if ((op < 62 || op >= 94) && add_buf != NULL && add_buf_size > hdr_len) {
         src_b = add_buf + hdr_len;
         has_b = index_ruby_source(src_b, add_buf_size - hdr_len, &idx_b);
     }
@@ -1959,13 +1820,13 @@ size_t afl_custom_fuzz(
 
     size_t written = 0;
 
-    if (op < 26 && has_b) {
+    if (op < 24 && has_b) {
         /* Subtree crossover from donor input B */
         mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         mut_span_t y = idx_b.nodes[rng_below(m, idx_b.node_count)];
         bool parens = rng_below(m, 5) < 2;
         written = emit_replace(&w, src, src_len, x.start, x.length, src_b + y.start, y.length, parens);
-    } else if (op < 56) {
+    } else if (op < 52) {
         /* Compiler-torture wrapper around node X (with Y from A or B) */
         mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         const uint8_t *y_ptr;
@@ -1980,7 +1841,7 @@ size_t afl_custom_fuzz(
             y_len = y.length;
         }
         written = emit_wrapper(m, &w, src, src_len, x, y_ptr, y_len);
-    } else if (op < 66) {
+    } else if (op < 62) {
         /* Inline heredoc injection at expression X with body on next line */
         mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         const uint8_t *y_ptr;
@@ -1995,10 +1856,10 @@ size_t afl_custom_fuzz(
             y_len = y.length;
         }
         written = emit_heredoc_inject(m, &w, src, src_len, x, y_ptr, y_len);
-    } else if (op < 72) {
+    } else if (op < 68) {
         /* Magic comment / encoding / shebang / BOM / __END__ injection */
         written = emit_magic_or_end(m, &w, src, src_len);
-    } else if (op < 80 && idx_a->node_count >= 2) {
+    } else if (op < 75 && idx_a->node_count >= 2) {
         /* Internal subtree copy or swap */
         mut_span_t a = idx_a->nodes[rng_below(m, idx_a->node_count)];
         mut_span_t b = idx_a->nodes[rng_below(m, idx_a->node_count)];
@@ -2010,7 +1871,7 @@ size_t afl_custom_fuzz(
             bool parens = rng_below(m, 3) == 0;
             written = emit_replace(&w, src, src_len, a.start, a.length, src + b.start, b.length, parens);
         }
-    } else if (op < 90 && (idx_a->token_count > 0 || idx_a->delim_pair_count > 0)) {
+    } else if (op < 85 && (idx_a->token_count > 0 || idx_a->delim_pair_count > 0)) {
         /* Surgical keyword/operator flip or delimiter-pair toggle */
         if (idx_a->delim_pair_count > 0 && (idx_a->token_count == 0 || rng_below(m, 2) == 0)) {
             mut_delim_pair_t dp = idx_a->delim_pairs[rng_below(m, idx_a->delim_pair_count)];
@@ -2019,6 +1880,9 @@ size_t afl_custom_fuzz(
             mut_tok_t tok = idx_a->tokens[rng_below(m, idx_a->token_count)];
             written = emit_tok_flip(m, &w, src, src_len, tok);
         }
+    } else if (op < 94) {
+        /* AST & token compaction (shrink dead whitespace, comments, long strings/idents, clauses) */
+        written = emit_ast_shrink(m, &w, src, src_len, idx_a);
     } else {
         /* Replace node with control-flow / literal atom, or insert statement */
         mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
@@ -2106,32 +1970,6 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
                     sink ^= out[j];
                 }
                 (void) sink;
-            }
-        }
-        /* Also exercise AST-guided custom trimming with mixed accept/reject outcomes. */
-        if (buf != NULL && buf_len > 0) {
-            int32_t steps = afl_custom_init_trim(m, buf, buf_len);
-            if (steps < 0) {
-                abort();
-            }
-            int32_t cur = 0;
-            while (cur < steps) {
-                uint8_t *tout = NULL;
-                size_t tlen = afl_custom_trim(m, &tout);
-                if (tlen > buf_len || (tlen > 0 && tout == NULL)) {
-                    abort();
-                }
-                volatile uint8_t sink = 0;
-                for (size_t j = 0; j < tlen; j++) {
-                    sink ^= tout[j];
-                }
-                (void) sink;
-                uint8_t ok = (uint8_t) (((data[1] >> (cur & 7)) & 1u) != 0);
-                int32_t next = afl_custom_post_trim(m, ok);
-                if (next <= cur || next > steps) {
-                    abort();
-                }
-                cur = next;
             }
         }
         afl_custom_deinit(m);

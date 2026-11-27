@@ -140,7 +140,7 @@ PrismFuzzer.campaign "default-prism-fleet" do
     { id: "diff-3",    fuzzer: "fuzz.diff",      schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false },
     { id: "diff-4",    fuzzer: "fuzz.diff",      schedule: "lin",     afl_flags: %w[-P exploit], no_trim: true },
     { id: "diff-ijon", fuzzer: "fuzz.ijon.diff", schedule: "explore", afl_flags: [],             no_trim: false, env: { FUZZ_IJON_MODE: "both" } },
-    { id: "diff-ast",  fuzzer: "fuzz.ijon.diff", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], no_trim: false, env: { FUZZ_IJON_MODE: "both" } }
+    { id: "diff-ast",  fuzzer: "fuzz.ijon.diff", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], no_trim: true, env: { FUZZ_IJON_MODE: "both" } }
   ]
 
   workers diff_variants, kind: :afl, sync_group: :afl, afl_role: :secondary, mem_limit: :none, color: "#fb923c" do |w, cfg|

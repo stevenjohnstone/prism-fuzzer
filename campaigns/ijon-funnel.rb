@@ -145,7 +145,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
 
   small_san_workers = [
     { id: "small-explore-2", fuzzer: "fuzz.ijon",      schedule: "fast",    afl_flags: %w[-L 0],       mem_limit: :none, env: { AFL_CRASH_EXITCODE: "23" }, color: "#22c55e" },
-    { id: "small-ast",       fuzzer: "fuzz.ijon",      mutator: "libprismmutator.so", schedule: "explore", mem_limit: :none, env: { AFL_CRASH_EXITCODE: "23" }, color: "#10b981" },
+    { id: "small-ast",       fuzzer: "fuzz.ijon",      mutator: "libprismmutator.so", schedule: "explore", no_trim: true, mem_limit: :none, env: { AFL_CRASH_EXITCODE: "23" }, color: "#10b981" },
     { id: "small-asan",      fuzzer: "fuzz.ijon.asan", cmplog: "fuzz.cmplog", schedule: "exploit",     loopcount: 2000, keep_open_on_exit: true, color: "#60a5fa" },
     { id: "small-asan-coe",  fuzzer: "fuzz.ijon.asan", schedule: "coe",     afl_flags: %w[-P explore], loopcount: 2000, color: "#38bdf8" },
     { id: "small-asan-text", fuzzer: "fuzz.ijon.asan", schedule: "lin",     afl_flags: %w[-Z -a text], loopcount: 2000, color: "#818cf8" },
@@ -170,7 +170,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
 
   small_diff_workers = [
     { id: "small-diff",       fuzzer: "fuzz.ijon.diff", schedule: "explore", afl_flags: [],             no_trim: false, color: "#f97316" },
-    { id: "small-diff-ast",   fuzzer: "fuzz.ijon.diff", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], no_trim: false, color: "#fb923c" },
+    { id: "small-diff-ast",   fuzzer: "fuzz.ijon.diff", mutator: "libprismmutator.so", schedule: "explore", afl_flags: [], no_trim: true, color: "#fb923c" },
     { id: "small-diff-text",  fuzzer: "fuzz.ijon.diff", schedule: "coe",     afl_flags: %w[-Z -a text], no_trim: false, color: "#fdba74" },
     { id: "small-cfg-diff",   fuzzer: "fuzz.diff",      schedule: "mmopt",   afl_flags: [],             no_trim: true,  color: "#f59e0b" },
     { id: "small-cfg-diff-2", fuzzer: "fuzz.diff",      schedule: "fast",    afl_flags: %w[-L 0],       no_trim: true,  color: "#fbbf24" }
@@ -227,6 +227,7 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   worker :"8k-diff-ast", fuzzer: "fuzz.ijon.diff", sync_group: "afl-8k", afl_role: :secondary, max_input_size: large_max_input do
     mutator "libprismmutator.so"
     schedule "explore"
+    no_trim true
     mem_limit :none
     seeds from: :corpus_8k, filter: :self_pass, cache_key: "large_ijon_diff"
     color "#fb923c"
