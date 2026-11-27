@@ -13,6 +13,7 @@ module FuzzTriage
     PRIME64_5 = 0x27d4eb2f165667c5
 
     INV_PREFIX = "INVARIANT[".b.freeze
+    HANG_PREFIX = "HANG[stack]: ".b.freeze
     EXEC_SUCCESS = "Execution successful.".b.freeze
     RT_ERR_MARKER = ": runtime error: ".b.freeze
     DIFF_HANDLER = "diff_fatal_signal_handler".b.freeze
@@ -153,7 +154,7 @@ module FuzzTriage
       return "".b if raw.empty?
 
       max_lines = siglines.to_i
-      may_have_invariant = raw.include?(INV_PREFIX)
+      may_have_invariant = raw.include?(INV_PREFIX) || raw.include?(HANG_PREFIX)
       kept = []
       nr = 0
 
@@ -162,7 +163,7 @@ module FuzzTriage
         next if norm.nil?
 
         nr += 1
-        if may_have_invariant && norm.start_with?(INV_PREFIX)
+        if may_have_invariant && (norm.start_with?(INV_PREFIX) || norm.start_with?(HANG_PREFIX))
           return "#{norm}\n".b
         end
 

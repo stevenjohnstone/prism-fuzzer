@@ -277,7 +277,38 @@ module FuzzTriage
       Thread.current[:testcase_timeout_sec] = prev
     end
 
-    def spawn_testcase_with_timeout(env, executable, input_file, timeout_sec)
+    def sample_hang_backtrace(pid)
+      return "" if ENV["TRIAGE_HANG_GDB"] == "0"
+
+      bt_out = begin
+        o, _st = Open3.capture2e("timeout", "-k", "1", "5", "gdb", "-batch", "-ex", "bt 10", "-p", pid.to_s)
+        o.to_s
+      rescue StandardError
+        ""
+      end
+      return "" if bt_out.empty?
+
+      frame_lines = bt_out.lines.select { |l| l.start_with?("#") }.map(&:chomp)
+      return "" if frame_lines.empty?
+
+      fns = []
+      frame_lines.each do |fl|
+        fn = if fl =~ /\A#\d+\s+0x[0-9a-fA-F]+\s+in\s+([^\s(]+)/
+               Regexp.last_match(1)
+             elsif fl =~ /\A#\d+\s+([^\s(]+)\s*\(/
+               Regexp.last_match(1)
+             end
+        next if fn.nil? || fn.empty? || fn == "??"
+
+        fns << fn unless fns.include?(fn)
+        break if fns.size >= 3
+      end
+      return "" if fns.empty?
+
+      "HANG[stack]: #{fns.join(' <- ')}\n#{frame_lines.join("\n")}\n"
+    end
+
+    def spawn_testcase_with_timeout(env, executable, input_file, timeout_sec, capture_hang_stack: false)
       r, w = IO.pipe
       r.binmode
       out = +"".b
@@ -290,6 +321,10 @@ module FuzzTriage
         remain = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
         if remain <= 0
           timed_out = true
+          if capture_hang_stack
+            hang_bt = sample_hang_backtrace(pid)
+            out << hang_bt.b unless hang_bt.empty?
+          end
           begin
             Process.kill("TERM", -pid)
           rescue Errno::ESRCH, Errno::EPERM
@@ -351,11 +386,11 @@ module FuzzTriage
       r.close if r && !r.closed?
     end
 
-    def run_testcase(executable, input_file, symbolize: true)
+    def run_testcase(executable, input_file, symbolize: true, capture_hang_stack: false)
       Thread.current[:last_testcase_signal] = nil
       timeout_sec = Thread.current[:testcase_timeout_sec] || env_crash_timeout_seconds
       env = env_sanitizer_env(executable: executable, symbolize: symbolize)
-      o, s, timed_out = spawn_testcase_with_timeout(env, executable, input_file, timeout_sec)
+      o, s, timed_out = spawn_testcase_with_timeout(env, executable, input_file, timeout_sec, capture_hang_stack: capture_hang_stack)
       timed_out ||= (s && (s.exitstatus == 124 || s.exitstatus == 137))
       crashed = !timed_out && (s.nil? || !s.success?)
       sig = if crashed && s
@@ -409,7 +444,7 @@ module FuzzTriage
 
       if reason == "hang"
         executable = replay_exe
-        testcase_output, crashed, timed_out = with_testcase_timeout(env_hang_timeout_seconds) { run_testcase(executable, crash_input, symbolize: false) }
+        testcase_output, crashed, timed_out = with_testcase_timeout(env_hang_timeout_seconds) { run_testcase(executable, crash_input, symbolize: false, capture_hang_stack: true) }
         return { transient_timeout: true } if !crashed && !timed_out
       elsif is_diff_or_oracle
         # Differential and cross-oracle queues overwhelmingly hit differential invariants

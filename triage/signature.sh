@@ -34,7 +34,7 @@ sed -E \
   -e 's/[0-9]+ bytes//g' \
   -e 's/[0-9]+-byte//g' \
   | awk -v n="$SIGLINES" '
-      /^INVARIANT\[/ && !inv { inv = $0 }
+      /^INVARIANT\[|^HANG\[stack\]: / && !inv { inv = $0 }
       !inv && NR <= n { lines[++c] = $0 }
       END {
         if (inv) {
