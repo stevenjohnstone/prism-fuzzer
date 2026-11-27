@@ -40,7 +40,8 @@ typedef enum {
     TOK_AND_OR = 2,
     TOK_DOT2_DOT3 = 3,
     TOK_CALL_OP = 4,
-    TOK_HEREDOC_OPEN = 5
+    TOK_HEREDOC_OPEN = 5,
+    TOK_ASSIGN_OP = 6
 } tok_kind_t;
 
 typedef struct {
@@ -75,7 +76,23 @@ typedef struct {
     size_t header_bytes;
     uint8_t *out_buf;
     size_t out_cap;
+    uint8_t *cache_src;
+    size_t cache_len;
+    size_t cache_cap;
+    uint64_t cache_hash;
+    bool cache_valid;
+    bool cache_has_nodes;
+    ast_index_t cache_idx;
 } prism_mutator_t;
+
+static uint64_t fnv1a_64(const uint8_t *data, size_t len) {
+    uint64_t h = 14695981039346656037ULL;
+    for (size_t i = 0; i < len; i++) {
+        h ^= (uint64_t) data[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
 
 static inline uint64_t rng_next(prism_mutator_t *m) {
     uint64_t x = m->rng;
@@ -343,6 +360,7 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
                  (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
                 record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
             }
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
             break;
         }
         case PM_CALL_OR_WRITE_NODE: {
@@ -352,6 +370,7 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
                  (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
                 record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
             }
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
             break;
         }
         case PM_CALL_OPERATOR_WRITE_NODE: {
@@ -361,8 +380,27 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
                  (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
                 record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
             }
+            record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
             break;
         }
+        case PM_LOCAL_VARIABLE_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_local_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_LOCAL_VARIABLE_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_local_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_local_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INDEX_AND_WRITE_NODE:
+            record_tok(idx, ((const pm_index_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INDEX_OR_WRITE_NODE:
+            record_tok(idx, ((const pm_index_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+            break;
+        case PM_INDEX_OPERATOR_WRITE_NODE:
+            record_tok(idx, ((const pm_index_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+            break;
         default:
             break;
     }
@@ -578,7 +616,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 39)) {
+    switch (rng_below(m, 44)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -712,6 +750,21 @@ static size_t emit_wrapper(
         case 37:
             ow_puts(w, "def _f; "); ow_put(w, x_ptr, x_len); ow_puts(w, "; rescue => _e; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; ensure; "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
             break;
+        case 38:
+            ow_puts(w, "def _f(a = ("); ow_put(w, x_ptr, x_len); ow_puts(w, "), **k) = ("); ow_put(w, y_ptr, y_len); ow_puts(w, ")");
+            break;
+        case 39:
+            ow_puts(w, "def _f(...); _g(...); "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
+            break;
+        case 40:
+            ow_puts(w, "def _f(*, **, &); _g(*, **, &); "); ow_put(w, x_ptr, x_len); ow_puts(w, "; end");
+            break;
+        case 41:
+            ow_puts(w, "tap { _1 &&= ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); _2 || ("); ow_put(w, y_ptr, y_len); ow_puts(w, ") }");
+            break;
+        case 42:
+            ow_puts(w, "tap { it ||= ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); ("); ow_put(w, y_ptr, y_len); ow_puts(w, ") }");
+            break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
             break;
@@ -782,6 +835,11 @@ static size_t emit_tok_flip(
                 ow_put(w, src + tail, src_len - tail);
             }
             return w->len;
+        }
+        case TOK_ASSIGN_OP: {
+            static const char *const ops[] = { "=", "||=", "&&=", "+=", "-=", "*=" };
+            repl = ops[rng_below(m, sizeof(ops) / sizeof(ops[0]))];
+            break;
         }
     }
     if (repl == NULL) {
@@ -855,8 +913,40 @@ void afl_custom_deinit(void *data) {
     if (m == NULL) {
         return;
     }
+    free(m->cache_src);
     free(m->out_buf);
     free(m);
+}
+
+static bool get_or_index_a(prism_mutator_t *m, const uint8_t *src, size_t src_len) {
+    uint64_t h = fnv1a_64(src, src_len);
+    if (m->cache_valid && m->cache_len == src_len && m->cache_hash == h &&
+        (src_len == 0 || memcmp(m->cache_src, src, src_len) == 0)) {
+        m->cache_idx.src = src;
+        return m->cache_has_nodes;
+    }
+
+    m->cache_has_nodes = index_ruby_source(src, src_len, &m->cache_idx);
+    m->cache_valid = false;
+    if (src_len <= PM_MUT_MAX_PARSE_LEN) {
+        if (src_len > m->cache_cap) {
+            size_t next = src_len < 1024 ? 1024 : src_len;
+            uint8_t *p = (uint8_t *) realloc(m->cache_src, next);
+            if (p != NULL) {
+                m->cache_src = p;
+                m->cache_cap = next;
+            }
+        }
+        if (src_len == 0 || (m->cache_src != NULL && src_len <= m->cache_cap)) {
+            if (src_len > 0) {
+                memcpy(m->cache_src, src, src_len);
+            }
+            m->cache_len = src_len;
+            m->cache_hash = h;
+            m->cache_valid = true;
+        }
+    }
+    return m->cache_has_nodes;
 }
 
 size_t afl_custom_fuzz(
@@ -891,19 +981,20 @@ size_t afl_custom_fuzz(
     const uint8_t *src = buf + hdr_len;
     size_t src_len = buf_size - hdr_len;
 
-    ast_index_t idx_a;
-    if (!index_ruby_source(src, src_len, &idx_a)) {
+    if (!get_or_index_a(m, src, src_len)) {
         size_t copy_len = buf_size < cap ? buf_size : cap;
         memcpy(m->out_buf, buf, copy_len);
         maybe_mutate_header(m, m->out_buf, copy_len < hdr_len ? copy_len : hdr_len);
         *out_buf = m->out_buf;
         return copy_len;
     }
+    const ast_index_t *idx_a = &m->cache_idx;
 
+    size_t op = rng_below(m, 100);
     ast_index_t idx_b;
     bool has_b = false;
     const uint8_t *src_b = NULL;
-    if (add_buf != NULL && add_buf_size > hdr_len) {
+    if ((op < 66 || op >= 90) && add_buf != NULL && add_buf_size > hdr_len) {
         src_b = add_buf + hdr_len;
         has_b = index_ruby_source(src_b, add_buf_size - hdr_len, &idx_b);
     }
@@ -917,18 +1008,17 @@ size_t afl_custom_fuzz(
         .cap = cap - hdr_len
     };
 
-    size_t op = rng_below(m, 100);
     size_t written = 0;
 
     if (op < 26 && has_b) {
         /* Subtree crossover from donor input B */
-        mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
+        mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         mut_span_t y = idx_b.nodes[rng_below(m, idx_b.node_count)];
         bool parens = rng_below(m, 5) < 2;
         written = emit_replace(&w, src, src_len, x.start, x.length, src_b + y.start, y.length, parens);
     } else if (op < 56) {
         /* Compiler-torture wrapper around node X (with Y from A or B) */
-        mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
+        mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         const uint8_t *y_ptr;
         size_t y_len;
         if (has_b && rng_below(m, 2) == 0) {
@@ -936,14 +1026,14 @@ size_t afl_custom_fuzz(
             y_ptr = src_b + y.start;
             y_len = y.length;
         } else {
-            mut_span_t y = idx_a.nodes[rng_below(m, idx_a.node_count)];
+            mut_span_t y = idx_a->nodes[rng_below(m, idx_a->node_count)];
             y_ptr = src + y.start;
             y_len = y.length;
         }
         written = emit_wrapper(m, &w, src, src_len, x, y_ptr, y_len);
     } else if (op < 66) {
         /* Inline heredoc injection at expression X with body on next line */
-        mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
+        mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         const uint8_t *y_ptr;
         size_t y_len;
         if (has_b && rng_below(m, 2) == 0) {
@@ -951,7 +1041,7 @@ size_t afl_custom_fuzz(
             y_ptr = src_b + y.start;
             y_len = y.length;
         } else {
-            mut_span_t y = idx_a.nodes[rng_below(m, idx_a.node_count)];
+            mut_span_t y = idx_a->nodes[rng_below(m, idx_a->node_count)];
             y_ptr = src + y.start;
             y_len = y.length;
         }
@@ -959,10 +1049,10 @@ size_t afl_custom_fuzz(
     } else if (op < 72) {
         /* Magic comment / encoding / shebang / BOM / __END__ injection */
         written = emit_magic_or_end(m, &w, src, src_len);
-    } else if (op < 80 && idx_a.node_count >= 2) {
+    } else if (op < 80 && idx_a->node_count >= 2) {
         /* Internal subtree copy or swap */
-        mut_span_t a = idx_a.nodes[rng_below(m, idx_a.node_count)];
-        mut_span_t b = idx_a.nodes[rng_below(m, idx_a.node_count)];
+        mut_span_t a = idx_a->nodes[rng_below(m, idx_a->node_count)];
+        mut_span_t b = idx_a->nodes[rng_below(m, idx_a->node_count)];
         if (rng_below(m, 2) == 0) {
             written = emit_swap(&w, src, src_len, a, b);
         }
@@ -971,18 +1061,18 @@ size_t afl_custom_fuzz(
             bool parens = rng_below(m, 3) == 0;
             written = emit_replace(&w, src, src_len, a.start, a.length, src + b.start, b.length, parens);
         }
-    } else if (op < 90 && (idx_a.token_count > 0 || idx_a.delim_pair_count > 0)) {
+    } else if (op < 90 && (idx_a->token_count > 0 || idx_a->delim_pair_count > 0)) {
         /* Surgical keyword/operator flip or delimiter-pair toggle */
-        if (idx_a.delim_pair_count > 0 && (idx_a.token_count == 0 || rng_below(m, 2) == 0)) {
-            mut_delim_pair_t dp = idx_a.delim_pairs[rng_below(m, idx_a.delim_pair_count)];
+        if (idx_a->delim_pair_count > 0 && (idx_a->token_count == 0 || rng_below(m, 2) == 0)) {
+            mut_delim_pair_t dp = idx_a->delim_pairs[rng_below(m, idx_a->delim_pair_count)];
             written = emit_delim_pair_toggle(&w, src, src_len, dp);
         } else {
-            mut_tok_t tok = idx_a.tokens[rng_below(m, idx_a.token_count)];
+            mut_tok_t tok = idx_a->tokens[rng_below(m, idx_a->token_count)];
             written = emit_tok_flip(m, &w, src, src_len, tok);
         }
     } else {
         /* Replace node with control-flow / literal atom, or insert statement */
-        mut_span_t x = idx_a.nodes[rng_below(m, idx_a.node_count)];
+        mut_span_t x = idx_a->nodes[rng_below(m, idx_a->node_count)];
         if (rng_below(m, 2) == 0) {
             static const char *const atoms[] = {
                 "nil", "0", "true", "false", "yield", "super", "redo", "retry",
