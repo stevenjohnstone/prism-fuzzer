@@ -54,7 +54,8 @@ typedef enum {
     TOK_CLASS_ADD_SUPER = 16,
     TOK_CLASS_STRIP_SUPER = 17,
     TOK_CLASS_MODULE_FLIP = 18,
-    TOK_SCLASS_FLIP = 19
+    TOK_SCLASS_FLIP = 19,
+    TOK_VAR_SIGIL = 20
 } tok_kind_t;
 
 typedef struct {
@@ -530,54 +531,112 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
             record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
             break;
         }
-        case PM_LOCAL_VARIABLE_WRITE_NODE:
-            record_tok(idx, ((const pm_local_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        case PM_LOCAL_VARIABLE_READ_NODE:
+        case PM_LOCAL_VARIABLE_TARGET_NODE:
+        case PM_INSTANCE_VARIABLE_READ_NODE:
+        case PM_INSTANCE_VARIABLE_TARGET_NODE:
+        case PM_CLASS_VARIABLE_READ_NODE:
+        case PM_CLASS_VARIABLE_TARGET_NODE:
+        case PM_GLOBAL_VARIABLE_READ_NODE:
+        case PM_GLOBAL_VARIABLE_TARGET_NODE:
+            record_tok(idx, node->location, TOK_VAR_SIGIL);
             break;
-        case PM_LOCAL_VARIABLE_AND_WRITE_NODE:
-            record_tok(idx, ((const pm_local_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        case PM_LOCAL_VARIABLE_WRITE_NODE: {
+            const pm_local_variable_write_node_t *n = (const pm_local_variable_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_LOCAL_VARIABLE_OR_WRITE_NODE:
-            record_tok(idx, ((const pm_local_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_LOCAL_VARIABLE_AND_WRITE_NODE: {
+            const pm_local_variable_and_write_node_t *n = (const pm_local_variable_and_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE:
-            record_tok(idx, ((const pm_local_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_LOCAL_VARIABLE_OR_WRITE_NODE: {
+            const pm_local_variable_or_write_node_t *n = (const pm_local_variable_or_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_INSTANCE_VARIABLE_WRITE_NODE:
-            record_tok(idx, ((const pm_instance_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_LOCAL_VARIABLE_OPERATOR_WRITE_NODE: {
+            const pm_local_variable_operator_write_node_t *n = (const pm_local_variable_operator_write_node_t *) node;
+            record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_INSTANCE_VARIABLE_AND_WRITE_NODE:
-            record_tok(idx, ((const pm_instance_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_INSTANCE_VARIABLE_WRITE_NODE: {
+            const pm_instance_variable_write_node_t *n = (const pm_instance_variable_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_INSTANCE_VARIABLE_OR_WRITE_NODE:
-            record_tok(idx, ((const pm_instance_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_INSTANCE_VARIABLE_AND_WRITE_NODE: {
+            const pm_instance_variable_and_write_node_t *n = (const pm_instance_variable_and_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_INSTANCE_VARIABLE_OPERATOR_WRITE_NODE:
-            record_tok(idx, ((const pm_instance_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_INSTANCE_VARIABLE_OR_WRITE_NODE: {
+            const pm_instance_variable_or_write_node_t *n = (const pm_instance_variable_or_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_CLASS_VARIABLE_WRITE_NODE:
-            record_tok(idx, ((const pm_class_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_INSTANCE_VARIABLE_OPERATOR_WRITE_NODE: {
+            const pm_instance_variable_operator_write_node_t *n = (const pm_instance_variable_operator_write_node_t *) node;
+            record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_CLASS_VARIABLE_AND_WRITE_NODE:
-            record_tok(idx, ((const pm_class_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_CLASS_VARIABLE_WRITE_NODE: {
+            const pm_class_variable_write_node_t *n = (const pm_class_variable_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_CLASS_VARIABLE_OR_WRITE_NODE:
-            record_tok(idx, ((const pm_class_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_CLASS_VARIABLE_AND_WRITE_NODE: {
+            const pm_class_variable_and_write_node_t *n = (const pm_class_variable_and_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_CLASS_VARIABLE_OPERATOR_WRITE_NODE:
-            record_tok(idx, ((const pm_class_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_CLASS_VARIABLE_OR_WRITE_NODE: {
+            const pm_class_variable_or_write_node_t *n = (const pm_class_variable_or_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_GLOBAL_VARIABLE_WRITE_NODE:
-            record_tok(idx, ((const pm_global_variable_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_CLASS_VARIABLE_OPERATOR_WRITE_NODE: {
+            const pm_class_variable_operator_write_node_t *n = (const pm_class_variable_operator_write_node_t *) node;
+            record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_GLOBAL_VARIABLE_AND_WRITE_NODE:
-            record_tok(idx, ((const pm_global_variable_and_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_GLOBAL_VARIABLE_WRITE_NODE: {
+            const pm_global_variable_write_node_t *n = (const pm_global_variable_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_GLOBAL_VARIABLE_OR_WRITE_NODE:
-            record_tok(idx, ((const pm_global_variable_or_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_GLOBAL_VARIABLE_AND_WRITE_NODE: {
+            const pm_global_variable_and_write_node_t *n = (const pm_global_variable_and_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
-        case PM_GLOBAL_VARIABLE_OPERATOR_WRITE_NODE:
-            record_tok(idx, ((const pm_global_variable_operator_write_node_t *) node)->binary_operator_loc, TOK_ASSIGN_OP);
+        }
+        case PM_GLOBAL_VARIABLE_OR_WRITE_NODE: {
+            const pm_global_variable_or_write_node_t *n = (const pm_global_variable_or_write_node_t *) node;
+            record_tok(idx, n->operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
             break;
+        }
+        case PM_GLOBAL_VARIABLE_OPERATOR_WRITE_NODE: {
+            const pm_global_variable_operator_write_node_t *n = (const pm_global_variable_operator_write_node_t *) node;
+            record_tok(idx, n->binary_operator_loc, TOK_ASSIGN_OP);
+            record_tok(idx, n->name_loc, TOK_VAR_SIGIL);
+            break;
+        }
         case PM_CONSTANT_WRITE_NODE:
             record_tok(idx, ((const pm_constant_write_node_t *) node)->operator_loc, TOK_ASSIGN_OP);
             break;
@@ -1325,6 +1384,38 @@ static size_t emit_tok_flip(
             static const char *const repls[] = { "class _C < ", "class _C; ", "module _M; " };
             repl = repls[rng_below(m, sizeof(repls) / sizeof(repls[0]))];
             break;
+        }
+        case TOK_VAR_SIGIL: {
+            const uint8_t *p = src + tok.start;
+            size_t len = tok.length;
+            size_t cur_idx = 0;
+            if (len >= 2 && p[0] == '@' && p[1] == '@') {
+                cur_idx = 2;
+                p += 2;
+                len -= 2;
+            } else if (len >= 1 && p[0] == '@') {
+                cur_idx = 1;
+                p += 1;
+                len -= 1;
+            } else if (len >= 1 && p[0] == '$') {
+                cur_idx = 3;
+                p += 1;
+                len -= 1;
+            }
+            if (len == 0 || !((p[0] >= 'a' && p[0] <= 'z') || (p[0] >= 'A' && p[0] <= 'Z') || p[0] == '_')) {
+                p = (const uint8_t *) "_v";
+                len = 2;
+            }
+            static const char *const sigils[4] = { "", "@", "@@", "$" };
+            size_t next_idx = (cur_idx + 1u + rng_below(m, 3)) % 4u;
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+            ow_put(w, src, tok.start);
+            ow_puts(w, sigils[next_idx]);
+            ow_put(w, p, len);
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
         }
     }
     if (repl == NULL) {
