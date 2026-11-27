@@ -30,13 +30,6 @@ PrismFuzzer.campaign "cross-arch-endian-gauntlet" do
   coverage source: :prism_a, fuzzer: "fuzz.host"
 
   corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz.host"
-  grammar_generator :grammar,
-                    source: :prism_a,
-                    fuzzer: "fuzz.host",
-                    sync_group: :afl,
-                    seeds_dir: "/tmp/afl-tmpdir/cross_arch_grammar/seeds",
-                    schedule: "lrama",
-                    color: "#34d399"
 
   fuzzer "fuzz.host",       shape: :prism_parse,        source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.host.slow",  shape: :prism_parse,        source: :prism_a, sanitizers: %i[asan ubsan], mode: :slow, afl: :lto
@@ -48,12 +41,9 @@ PrismFuzzer.campaign "cross-arch-endian-gauntlet" do
 
   sync_group :afl, dir: "afl", primary: true
 
-  worker :grammar, kind: :generator, generator: :grammar, color: "#34d399"
-
   worker :host_main, fuzzer: "fuzz.host", sync_group: :afl, afl_role: :main do
     schedule "exploit"
     cmplog "fuzz.cmplog"
-    foreign_sync :grammar
     seeds from: :corpus, shard_group: :cross
     color "#60a5fa"
   end

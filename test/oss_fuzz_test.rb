@@ -54,7 +54,7 @@ class OssFuzzTest < Minitest::Test
                     "docker/Dockerfile must verify post-patch g_close guard in tree.c"
     assert_match(/^RUN gem install .*--no-document/, main_df,
                  "docker/Dockerfile must pass --no-document to gem install")
-    %w[concurrent-ruby lrama lrama-fuzz].each do |gem_name|
+    %w[concurrent-ruby].each do |gem_name|
       assert_match(/#{Regexp.escape(gem_name)}:\d+\.\d+\.\d+/, main_df,
                    "docker/Dockerfile must pin #{gem_name} gem version")
     end

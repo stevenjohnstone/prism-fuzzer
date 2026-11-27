@@ -871,7 +871,7 @@ class LaunchAndStatusTest < Minitest::Test
 
     assert_equal "ijon-prism-fleet", plan_def["name"]
     assert_equal File.join(root_dir, "tmp/fuzz-ijon/afl-ijon"), lp_def["primary_afl_dir"]
-    assert_equal 14, lp_def["worker_names"].size
+    assert_equal 13, lp_def["worker_names"].size
 
     scout_def = lp_def["workers"].find { |w| w["id"] == "ijon-scout" }
     asan_def = lp_def["workers"].find { |w| w["id"] == "ijon-asan" }
@@ -891,7 +891,7 @@ class LaunchAndStatusTest < Minitest::Test
       ir_b, = PrismFuzzer::Topology.load_ir(ijon_camp, fuzz_root: root_dir)
       plan_b = PrismFuzzer::Topology.compile_plan(ir_b, fuzz_root: root_dir)
       assert plan_b.dig("fuzzers", "fuzz.ijon.prism_diff", "ijon")
-      assert_equal 15, plan_b["workers"].size
+      assert_equal 14, plan_b["workers"].size
     end
 
     ijon_small_camp = repo_path("campaigns/ijon-small.rb")
@@ -903,16 +903,14 @@ class LaunchAndStatusTest < Minitest::Test
     assert_equal File.join(root_dir, "tmp/fuzz-ijon-small/afl-ijon"), lp_sm["primary_afl_dir"]
     assert_equal 256, lp_sm.dig("corpus_population", "max_input_size")
     scout_sm = lp_sm["workers"].find { |w| w["id"] == "ijon-scout" }
-    gram_sm = lp_sm["workers"].find { |w| w["id"] == "grammar" }
     assert_includes Shellwords.split(scout_sm["cmd"]).last, "-G 260 "
-    assert_equal "256", gram_sm.dig("env", "FUZZ_MAX_INPUT_SIZE")
 
     funnel_camp = repo_path("campaigns/ijon-funnel.rb")
     ir_fn, = PrismFuzzer::Topology.load_ir(funnel_camp, fuzz_root: root_dir)
     plan_fn = PrismFuzzer::Topology.compile_plan(ir_fn, fuzz_root: root_dir)
     lp_fn = PrismFuzzer::Topology.plan_launch(plan_fn, fuzz_root: root_dir)
     assert_equal "ijon-funnel-prism-fleet", plan_fn["name"]
-    assert_equal 22, plan_fn["workers"].size
+    assert_equal 20, plan_fn["workers"].size
     assert_equal 8192, PrismFuzzer::Topology.effective_compiled_max_input_size(plan_fn)
     assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/afl-8k"), lp_fn["primary_afl_dir"]
     assert_equal File.join(root_dir, "tmp/fuzz-ijon-funnel/corpus-8k"), lp_fn["corpus_dir"]
@@ -924,11 +922,6 @@ class LaunchAndStatusTest < Minitest::Test
       ],
       Array(lp_fn["corpus_populations"]).map { |c| c["output_dir"] }
     )
-
-    gram_256 = lp_fn["workers"].find { |w| w["id"] == "grammar-256" }
-    gram_8k = lp_fn["workers"].find { |w| w["id"] == "grammar-8k" }
-    assert_equal "256", gram_256.dig("env", "FUZZ_MAX_INPUT_SIZE")
-    assert_equal "8192", gram_8k.dig("env", "FUZZ_MAX_INPUT_SIZE")
 
     small_scout = lp_fn["workers"].find { |w| w["id"] == "small-scout" }
     small_lsan = lp_fn["workers"].find { |w| w["id"] == "small-lsan" }
@@ -956,7 +949,7 @@ class LaunchAndStatusTest < Minitest::Test
     with_env("PRISM_B_REF" => "a1d1d96c368d49b752d06e361823a098b54f9a9d") do
       ir_fn_b, = PrismFuzzer::Topology.load_ir(funnel_camp, fuzz_root: root_dir)
       plan_fn_b = PrismFuzzer::Topology.compile_plan(ir_fn_b, fuzz_root: root_dir)
-      assert_equal 24, plan_fn_b["workers"].size
+      assert_equal 22, plan_fn_b["workers"].size
     end
   end
 

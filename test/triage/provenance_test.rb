@@ -67,7 +67,6 @@ class TriageProvenanceTest < Minitest::Test
     dict/prism.dict
     harnesses/prism/parse.c
     harnesses/prism/diff.c
-    runtime/grammar.rb
     runtime/kill.sh
     triage/triage.rb
     triage/signature.sh
@@ -502,7 +501,7 @@ class TriageProvenanceTest < Minitest::Test
         if File.file?("/etc/os-release")
           cont = FuzzProvenance.collect_container_provenance(repo_root: root_dir)
           assert cont, "expected container provenance in Docker"
-          %w[os arch clang aflplusplus afl_patch_sha256 ruby lrama_fuzz].each do |key|
+          %w[os arch clang aflplusplus afl_patch_sha256 ruby].each do |key|
             assert cont[key], "expected container provenance key #{key.inspect} in Docker, got: #{cont.inspect}"
           end
         end

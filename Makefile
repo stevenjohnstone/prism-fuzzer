@@ -308,11 +308,6 @@ publish:
 	$(ECHO) "publishing reports to $(REPORTS_DIR)"
 	$(Q) ruby ./bin/publish.rb --report-dir $(FUZZ_REPORT_DIR) --triage-dir $(FUZZ_TRIAGE_DIR) --coverage-dir $(FUZZ_COVERAGE_DIR) --bin-dir $(FUZZ_BIN_DIR) --out-dir $(REPORTS_DIR) $(PUBLISH_ARGS)
 
-bench: docker-build targets-sync
-	$(ECHO) "benchmarking grammar seed generator"
-	$(Q) $(MAKEDIRS) $(FUZZ_DIR)
-	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ruby ./runtime/grammar_bench.rb --json $(_WS_DIR_REL)/grammar-bench.json $(GRAMMAR_BENCH_ARGS)
-
 fuzzer-bench: docker-build
 	$(ECHO) "benchmarking fuzzer feature matrix"
 	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) ruby ./runtime/fuzzer_bench.rb --json tmp/fuzzer-bench/fuzzer-bench.json $(FUZZER_BENCH_ARGS)
@@ -336,7 +331,7 @@ test:
 	$(ECHO) "running dependency-tracked prism-fuzzer test suite inside container"
 	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" _test-all"
 
-test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-triage:
+test-targets test-prism-diff test-afl-patch test-sanitizers test-sankey test-accel test-oss-fuzz test-triage:
 	$(Q) $(MAKE) docker-build targets-sync
 	$(Q) if [ "$(TEST_FORCE)" = "1" ]; then rm -f build/test/stamps/*.stamp; fi
 	$(Q) docker run --rm $(FUZZ_TMPFS_FLAGS) $(FUZZ_CCACHE_FLAGS) $(TARGETS_DOCKER_ENV) $(_DOCKER_EXTRA_MOUNTS) -v $(CURDIR):/prism-fuzzer $(FUZZ_DOCKER_IMAGE) /bin/bash -c "jobs='$(TEST_JOBS)'; [ -n \"\$$jobs\" ] || jobs=\"\$$(nproc 2>/dev/null || echo 4)\"; make $(FUZZ_AFL_STAMP) && make -j\"\$$jobs\" $@"
@@ -369,4 +364,4 @@ clean:
 	$(Q) ruby -r./runtime/campaign -e 'PrismFuzzer::Campaign.clean_preserving_paths(ARGV[0], ARGV[1..])' "$(FUZZ_DIR)" "$(FUZZ_BUILD_DIR)" "$(FUZZ_TRIAGE_DIR)"
 	$(ECHO) "done"
 
-.PHONY: all docker-force docker-build update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish bench accel test test-clean test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean
+.PHONY: all docker-force docker-build update targets-sync topology-sync ruby-sync targets-status topology-status topology-plan topology-validate _build-all build run daemon attach stop debug retriage verify bisect match explain inspect _report report coverage pages-worktree publish fuzzer-bench accel test test-clean test-targets test-prism-diff test-afl-patch test-sanitizers test-sankey test-accel test-oss-fuzz test-oss-fuzz-docker test-triage lint hooks clean

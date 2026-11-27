@@ -48,13 +48,6 @@ PrismFuzzer.campaign "ab-pr-diff" do
   coverage source: :candidate, fuzzer: "cand.asan"
 
   corpus_generator :corpus, source: :candidate, fuzzer: "cand.asan"
-  grammar_generator :grammar,
-                    source: :candidate,
-                    fuzzer: "cand.native",
-                    sync_group: :afl,
-                    seeds_dir: "/tmp/afl-tmpdir/ab_grammar/seeds",
-                    schedule: "lrama",
-                    color: "#34d399"
 
   fuzzer "base.asan",    shape: :prism_parse, source: :baseline,  sanitizers: %i[asan ubsan], mode: :fast, afl: :lto
   fuzzer "cand.native",  shape: :prism_parse, source: :candidate, sanitizers: [],               mode: :fast, afl: :lto, xallocator: true
@@ -74,12 +67,9 @@ PrismFuzzer.campaign "ab-pr-diff" do
 
   sync_group :afl, dir: "afl", primary: true
 
-  worker :grammar, kind: :generator, generator: :grammar, color: "#34d399"
-
   worker :main, fuzzer: "cand.asan", sync_group: :afl, afl_role: :main do
     schedule "exploit"
     cmplog "cand.cmplog"
-    foreign_sync :grammar
     loopcount 2000
     seeds from: :corpus, shard_group: :ab
     color "#60a5fa"

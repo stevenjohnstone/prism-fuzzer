@@ -6,7 +6,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "f3e180b5ebc835f87c2ff7ccb8474a1bf18b0115"
+DEFAULT_RUBY_REF = "0d399335b733776187e43a783e5f950c18ad881c"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -57,14 +57,6 @@ PrismFuzzer.campaign "default-prism-fleet" do
   coverage source: :prism_a, fuzzer: "fuzz", diff_fuzzer: "fuzz.diff"
 
   corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz"
-  grammar_generator :grammar,
-                    source: :prism_a,
-                    fuzzer: "fuzz.native",
-                    sync_group: :afl,
-                    seeds_dir: "/tmp/afl-tmpdir/grammar/seeds",
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#34d399"
 
   fuzzer "fuzz.msan",     shape: :prism_parse, source: :prism_a, sanitizers: [:msan],          mode: :slow, afl: :lto
   fuzzer "fuzz.lsan",     shape: :prism_parse, source: :prism_a, sanitizers: [:lsan],          mode: :slow, afl: :lto
@@ -102,11 +94,8 @@ PrismFuzzer.campaign "default-prism-fleet" do
     color "#60a5fa"
   end
 
-  worker :grammar, kind: :generator, generator: :grammar, color: "#34d399"
-
   worker :ijon, fuzzer: "fuzz.ijon", sync_group: "afl-ijon", afl_role: :main do
     schedule "explore"
-    foreign_sync :grammar
     seeds from: :corpus, shard_group: :prism
     mem_limit max_allocated_mb * 16
     env AFL_CRASH_EXITCODE: "23"

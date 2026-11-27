@@ -22,7 +22,7 @@ Both targets reuse [`test/fuzz/harness/parse.c`](../harness/parse.c), [`test/fuz
 The local `make fuzz-run` Docker setup uses custom components that are intentionally omitted from OSS-Fuzz:
 
 - **IJON state instrumentation (`PRISM_FUZZ_IJON`)** and **`test/fuzz/patches/aflplusplus.patch`** rely on custom AFL++ compiler passes and forks not present in stock `oss-fuzz-base/base-builder`, and `ijon_set`/`ijon_max`/`ijon_hashstr` do not exist in non-AFL engines (`libfuzzer`, `honggfuzz`, `centipede`).
-- **Grammar seed worker (`test/fuzz/runtime/grammar.rb` / `lrama-fuzz`)**, **`PRISM_XALLOCATOR`** fast leak checks, and the **`tmux` fleet** are local-only; OSS-Fuzz uses its own scheduler across engines (`libfuzzer`, `afl`, `honggfuzz`, `centipede`) and LeakSanitizer/ASan/UBSan/MSan. When `compile_afl` exports `AFL_LLVM_CMPLOG=1`, [`build.sh`](build.sh) swaps `pm_strncasecmp` for libc `strncasecmp` (excluding `src/strncasecmp.c`) so AFL++ CmpLog/Redqueen hooks case-insensitive magic-comment and encoding comparisons just like local `build/fuzz.cmplog`.
+- **`PRISM_XALLOCATOR`** fast leak checks and the **`tmux` fleet** are local-only; OSS-Fuzz uses its own scheduler across engines (`libfuzzer`, `afl`, `honggfuzz`, `centipede`) and LeakSanitizer/ASan/UBSan/MSan. When `compile_afl` exports `AFL_LLVM_CMPLOG=1`, [`build.sh`](build.sh) swaps `pm_strncasecmp` for libc `strncasecmp` (excluding `src/strncasecmp.c`) so AFL++ CmpLog/Redqueen hooks case-insensitive magic-comment and encoding comparisons just like local `build/fuzz.cmplog`.
 
 ## Testing Locally with OSS-Fuzz Tooling
 

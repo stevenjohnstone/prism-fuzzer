@@ -865,7 +865,7 @@ class CampaignDslAndSchemaTest < Minitest::Test
     v = JSON.parse(val_out)
     assert_equal true, v["valid"]
     assert_equal 2, v["schema_version"]
-    assert_equal 14, v.fetch("workers").size
+    assert_equal 13, v.fetch("workers").size
     assert File.file?(v.fetch("schema")), "missing topology.schema.json at #{v['schema'].inspect}"
     assert PrismFuzzer::Campaign.step_enabled?(v.fetch("lifecycle"), :report),
            "expected campaigns/default.rb to enable report by default: #{v['lifecycle'].inspect}"
@@ -891,7 +891,7 @@ class CampaignDslAndSchemaTest < Minitest::Test
     ir = JSON.parse(comp_out)
     schema = JSON.parse(File.read(repo_path("topology.schema.json")))
     PrismFuzzer::JsonSchema.validate!(schema, ir)
-    assert_equal 15, ir.fetch("workers").size
+    assert_equal 14, ir.fetch("workers").size
     refute ir.key?("workers_policy")
     refute ir.fetch("sources").values.any? { |s| s.key?("optional") }
     refute ir.fetch("workers").any? { |w| w.key?("when") || w.key?("when_lt_4_workers") }
@@ -902,7 +902,7 @@ class CampaignDslAndSchemaTest < Minitest::Test
     v = JSON.parse(val_out)
     assert_equal true, v["valid"]
     assert_equal 2, v["schema_version"]
-    assert_equal 22, v.fetch("workers").size
+    assert_equal 20, v.fetch("workers").size
 
     comp_out, = assert_cmd(repo_path("campaigns/compile.rb"), "compile")
     ir = JSON.parse(comp_out)
@@ -948,7 +948,7 @@ class CampaignDslAndSchemaTest < Minitest::Test
     pv = JSON.parse(pval_out)
     assert_equal true, pv["valid"]
     assert_equal 2, pv["schema_version"]
-    assert_equal 10, pv.fetch("workers").size
+    assert_equal 8, pv.fetch("workers").size
 
     pcomp_out, = assert_cmd(repo_path("campaigns/pipeline.rb"), "compile")
     pir = JSON.parse(pcomp_out)

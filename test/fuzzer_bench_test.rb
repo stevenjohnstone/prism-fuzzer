@@ -96,15 +96,10 @@ class FuzzerBenchTest < Minitest::Test
     opts = FuzzerBench.parse_options(%w[
       --shapes prism_parse
       --ijon none
-      --grammar none,lrama,prism,prism_mixed
+      --grammar none,prism,prism_mixed
     ])
     cells = FuzzerBench.expand_matrix(opts)
-    assert_equal 4, cells.length
-
-    lrama = cells.find { |c| c["grammar"] == "lrama" }
-    _, cmd_lrama = FuzzerBench.afl_command_for(lrama, opts: opts, corpus_dir: "/in", out_dir: "/out", trial: 1, foreign_dir: "/tmp/f")
-    assert_includes cmd_lrama, "-F"
-    assert_includes cmd_lrama, "/tmp/f"
+    assert_equal 3, cells.length
   end
 
   def test_prism_mutator_modes_and_header_bytes

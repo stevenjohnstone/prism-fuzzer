@@ -31,7 +31,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "f3e180b5ebc835f87c2ff7ccb8474a1bf18b0115"
+DEFAULT_RUBY_REF = "0d399335b733776187e43a783e5f950c18ad881c"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -97,28 +97,6 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
                    dir: "corpus-8k",
                    max_input_size: large_max_input
 
-  # Two size-specialized grammar generators:
-  # - grammar_small: compact syntax/operator/encoding combinations (<= 256 B)
-  # - grammar_8k:    multi-kilobyte Karatsuba bignums, long floats, and large ASTs (<= 8 KiB)
-  grammar_generator :grammar_small,
-                    source: :prism_a,
-                    fuzzer: "fuzz.ijon",
-                    sync_group: "afl-small",
-                    seeds_dir: "/tmp/afl-tmpdir/funnel-grammar-256/seeds",
-                    max_input_size: small_max_input,
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#34d399"
-  grammar_generator :grammar_8k,
-                    source: :prism_a,
-                    fuzzer: "fuzz.ijon",
-                    sync_group: "afl-8k",
-                    seeds_dir: "/tmp/afl-tmpdir/funnel-grammar-8k/seeds",
-                    max_input_size: large_max_input,
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#10b981"
-
   ijon_stream_defs = { PRISM_FUZZ_ALLOW_STREAM_WITH_IJON: 1 }
   fuzzer "fuzz.ijon",       shape: :prism_parse,        source: :prism_a, sanitizers: [],             mode: :fast, afl: :lto,     ijon: true, xallocator: true
   fuzzer "fuzz.ijon.asan",  shape: :prism_parse,        source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto,     ijon: true
@@ -151,10 +129,6 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   sync_group "afl-8k",    dir: "afl-8k",    primary: true
   sync_group "afl-small", dir: "afl-small"
 
-  # --- Grammar Generator Workers (2) ---
-  worker :"grammar-256", kind: :generator, generator: :grammar_small, max_input_size: small_max_input, color: "#34d399"
-  worker :"grammar-8k",  kind: :generator, generator: :grammar_8k,    max_input_size: large_max_input, color: "#10b981"
-
   # ===========================================================================
   # Island 1: 256 B High-Velocity Factory (`afl-small`, 14 AFL++ workers)
   #   No incoming imports from `afl-8k` so workers never waste cycles on
@@ -163,7 +137,6 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
   worker :"small-scout", fuzzer: "fuzz.ijon", sync_group: "afl-small", afl_role: :main, max_input_size: small_max_input do
     aux_fuzzer "fuzz.sand"
     schedule "explore"
-    foreign_sync :grammar_small
     seeds from: :corpus_small, shard_group: :small_prism
     mem_limit :none
     env AFL_SAN_ABSTRACTION: "coverage_increase", AFL_CRASH_EXITCODE: "23"
@@ -218,7 +191,6 @@ PrismFuzzer.campaign "ijon-funnel-prism-fleet" do
     schedule "explore"
     loopcount 2000
     keep_open_on_exit true
-    foreign_sync :grammar_8k
     peer_import group: "afl-small", worker: :"small-scout", alias: "small_scout_feed"
     peer_import group: "afl-small", worker: :"small-asan",  alias: "small_asan_feed"
     peer_import group: "afl-small", worker: :"small-diff",  alias: "small_diff_feed"

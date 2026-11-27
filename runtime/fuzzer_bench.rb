@@ -16,7 +16,7 @@ require "tmpdir"
 module FuzzerBench
   VALID_SHAPES = %w[prism_parse prism_diff_ruby cruby_compile cruby_pipeline_diff].freeze
   VALID_IJON_MODES = %w[none on].freeze
-  VALID_GRAMMAR_MODES = %w[none lrama prism prism_mixed].freeze
+  VALID_GRAMMAR_MODES = %w[none prism prism_mixed].freeze
   VALID_SCHEDULES = %w[fast explore rare coe lin quad mmopt seek].freeze
 
   DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
@@ -570,21 +570,6 @@ module FuzzerBench
     eff_corpus = corpus_dir
     foreign_dir = nil
     tree_dir = nil
-    lrama_pid = nil
-
-    if cell["grammar"] == "lrama"
-      foreign_dir = File.join("/tmp/fbench-lrama", "#{cell['id']}_t#{trial}", "seeds")
-      FileUtils.rm_rf(File.dirname(foreign_dir))
-      FileUtils.mkdir_p(foreign_dir)
-      lrama_script = File.join(fuzz_root, "runtime", "grammar.rb")
-      lrama_env = {
-        "FUZZ_MAX_INPUT_SIZE" => opts[:max_input_size].to_s,
-        "AFL_SYNC_TIME" => "1"
-      }
-      lrama_pid = Process.spawn(lrama_env, "ruby", lrama_script, out_dir, foreign_dir, out: File::NULL, err: File::NULL)
-      # Wait briefly for initial lrama seeds so -F has inputs early.
-      sleep 1
-    end
 
     env, cmd = afl_command_for(
       cell,
@@ -598,23 +583,8 @@ module FuzzerBench
     log_path = File.join(out_dir, "afl.log")
 
     started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    begin
-      # Hard safety timeout = duration + 30s in case afl-fuzz takes a moment to flush.
-      _, _, _st = Open3.capture3(env, "timeout", "--signal=INT", (opts[:duration] + 30).to_s, *cmd, stdin_data: "")
-    ensure
-      if lrama_pid
-        begin
-          Process.kill("TERM", lrama_pid)
-        rescue SystemCallError
-          nil
-        end
-        begin
-          Process.wait(lrama_pid)
-        rescue SystemCallError
-          nil
-        end
-      end
-    end
+    # Hard safety timeout = duration + 30s in case afl-fuzz takes a moment to flush.
+    _, _, _st = Open3.capture3(env, "timeout", "--signal=INT", (opts[:duration] + 30).to_s, *cmd, stdin_data: "")
     elapsed = (Process.clock_gettime(Process::CLOCK_MONOTONIC) - started).round(2)
 
     default_dir = File.join(out_dir, "default")

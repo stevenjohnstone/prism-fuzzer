@@ -1,12 +1,12 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# CRuby Dual-Compiler Small-Input Campaign (`cruby-compile-small`, 22 workers):
+# CRuby Dual-Compiler Small-Input Campaign (`cruby-compile-small`, 20 workers):
 #   All workers are capped at 256-byte Ruby payloads (260 bytes with 4-byte header)
 #   to maximize exec/s and avoid O(2^N) nested-`ensure` blowups on multi-KB inputs.
 #   Single unified sync group (`afl`) combines PCGUARD, ISeq-guided IJON,
-#   Prism AST mutators (`libprismmutator.so`), `lrama` grammar generation, and
-#   2 ASan + stack-UAR (`FUZZ_DISABLE_GC=1`) workers.
+#   Prism AST mutators (`libprismmutator.so`), and 3 ASan + stack-UAR
+#   (`FUZZ_DISABLE_GC=1`) workers sized to fit 20 P-cores cleanly.
 #
 # Usage:
 #   ./campaigns/compile-small.rb validate
@@ -18,7 +18,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "f3e180b5ebc835f87c2ff7ccb8474a1bf18b0115"
+DEFAULT_RUBY_REF = "0d399335b733776187e43a783e5f950c18ad881c"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -62,16 +62,6 @@ PrismFuzzer.campaign "cruby-compile-small" do
                    dir: "corpus-256",
                    max_input_size: max_input
 
-  grammar_generator :grammar_small,
-                    source: :prism_a,
-                    fuzzer: "fuzz",
-                    sync_group: "afl",
-                    seeds_dir: "/tmp/afl-tmpdir/compile-small-grammar-256/seeds",
-                    max_input_size: max_input,
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#34d399"
-
   fuzzer "fuzz",              shape: :prism_parse,   source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.compile",      shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [], afl: :pcguard, document_ids: true
   fuzzer "fuzz.ijon.compile", shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [], afl: :pcguard, ijon: true, document_ids: true
@@ -79,11 +69,8 @@ PrismFuzzer.campaign "cruby-compile-small" do
 
   sync_group "afl", dir: "afl", primary: true
 
-  worker :"grammar-256", kind: :generator, generator: :grammar_small, max_input_size: max_input, color: "#34d399"
-
   worker :"compile-main", fuzzer: "fuzz.ijon.compile", sync_group: "afl", afl_role: :main, max_input_size: max_input do
     schedule "explore"
-    foreign_sync :grammar_small
     seeds from: :corpus_small, filter: :self_pass, cache_key: "compile_small_pass"
     loopcount 1000
     mem_limit :none
@@ -94,7 +81,6 @@ PrismFuzzer.campaign "cruby-compile-small" do
 
   [
     { id: "compile-fast-1",   fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: %w[-L 0],        color: "#fb923c" },
-    { id: "compile-fast-2",   fuzzer: "fuzz.compile",      schedule: "fast",    afl_flags: [],              color: "#ea580c" },
     { id: "compile-exploit",  fuzzer: "fuzz.ijon.compile", schedule: "exploit", afl_flags: [],              color: "#f59e0b" },
     { id: "compile-coe",      fuzzer: "fuzz.ijon.compile", schedule: "coe",     afl_flags: [],              color: "#eab308" },
     { id: "compile-quad",     fuzzer: "fuzz.ijon.compile", schedule: "quad",    afl_flags: %w[-P exploit],  color: "#ca8a04" },

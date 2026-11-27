@@ -40,8 +40,6 @@ PrismFuzzer.campaign "prism-hybrid-fleet" do
 
   coverage source: :prism_a, fuzzer: "fuzz", diff_fuzzer: "fuzz.diff"
 
-  grammar_generator :grammar, source: :prism_a, fuzzer: "fuzz", sync_group: :afl, seeds_dir: "/tmp/afl-tmpdir/grammar/seeds", schedule: "lrama"
-
   fuzzer "fuzz",      shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.ijon", shape: :prism_parse,     source: :prism_a, sanitizers: [],           mode: :fast, afl: :lto, ijon: true, xallocator: true
   fuzzer "fuzz.diff", shape: :prism_diff_ruby, prism: :prism_a,  ruby: :ruby, sanitizers: [],           afl: :pcguard, document_ids: true
@@ -49,11 +47,10 @@ PrismFuzzer.campaign "prism-hybrid-fleet" do
   sync_group :afl,         dir: "afl", primary: true
   sync_group :ijon_island, dir: "afl-ijon"
 
-  worker :grammar, kind: :generator, generator: :grammar
   worker :main, fuzzer: "fuzz", sync_group: :afl, afl_role: :main, schedule: "exploit" do
     peer_import group: :ijon_island, worker: :ijon, alias: "ijon_peer"
   end
-  worker :ijon, fuzzer: "fuzz.ijon", sync_group: :ijon_island, afl_role: :main, schedule: "explore", foreign_sync: [:grammar]
+  worker :ijon, fuzzer: "fuzz.ijon", sync_group: :ijon_island, afl_role: :main, schedule: "explore"
   worker :diff, fuzzer: "fuzz.diff", sync_group: :afl, afl_role: :secondary, schedule: "coe"
 end
 ```
@@ -68,10 +65,9 @@ Built on **AFL++ v5.03c** and **LLVM 20**, `prism-fuzzer` combines modern greybo
 
 - **Sanitizer-free coverage instrumentation ([`aflplusplus.patch`](patches/afl/aflplusplus.patch))**: Strips compiler-inserted ASan/UBSan/MSan checks and `assert()` traps from AFL++'s coverage CFG, eliminating 40–130% bitmap inflation without disabling runtime sanitizer detection.
 - **LTO, CmpLog (Redqueen), Patchless IJON & Sand**: Combines collision-free link-time coverage, input-to-state comparison solving (CmpLog), patchless post-parse IJON state guidance ([`prism_ijon.h`](harnesses/prism/include/prism_ijon.h) — AST 2-paths, node flags, diagnostics, encodings, arena & constant-pool metrics over an 8 KiB / 128-slot IJON map, also enabled on OSS-Fuzz AFL builds), strict allocation tracking (`PM_XALLOCATOR`), decoupled sanitizer execution (AFL++ Sand), and diverse power schedules.
-- **Dual structure-aware synthesis (`lrama-fuzz` + `libprismmutator.so`)**:
-  - **Live `parse.y` synthesis ([`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz), [`runtime/grammar.rb`](runtime/grammar.rb))**: Evolves structurally valid and near-valid Ruby programs directly from CRuby's `parse.y` grammar with parser feedback, continuously feeding deep syntax, regexp, encoding, comment, and heredoc seeds into the AFL++ fleet.
-  - **Prism AST source-slice mutator ([`prism_mutator.c`](harnesses/prism/prism_mutator.c))**: Native C AFL++ custom mutator (`libprismmutator.so`, linked statically against `libprism.a`) that parses any corpus or synced Ruby input with Prism and performs AST-level subtree crossover, compiler-torture wrappers (`defined?`, `begin/rescue/ensure`, loops, `case..in`, complex `def` params), inline heredoc injection, magic comments/encodings, and keyword/operator flips alongside AFL++ havoc.
-  - **Feature-matrix benchmarking ([`runtime/fuzzer_bench.rb`](runtime/fuzzer_bench.rb), `make fuzzer-bench`)**: Compares shapes, IJON, mutator/grammar modes (`none` / `lrama` / `prism` / `prism_mixed`), CmpLog, and Sand on identical corpora using normalized CFG edges, AST 2-paths (`2Paths` / `Val2P`), valid-syntax %, and unique crash signatures.
+- **Structure-aware AST mutation (`libprismmutator.so`)**:
+  - **Prism AST source-slice mutator ([`prism_mutator.c`](harnesses/prism/prism_mutator.c))**: Native C AFL++ custom mutator (`libprismmutator.so`, linked statically against `libprism.a`) that parses any corpus or synced Ruby input with Prism and performs AST-level subtree crossover, compiler-torture wrappers (`defined?`, `begin/rescue/ensure`, loops, `case..in`, complex `def` params), inline heredoc injection, magic comments/encodings, newline corruption, percent-literal/heredoc/regexp-flag flips, and keyword/operator flips alongside AFL++ havoc.
+  - **Feature-matrix benchmarking ([`runtime/fuzzer_bench.rb`](runtime/fuzzer_bench.rb), `make fuzzer-bench`)**: Compares shapes, IJON, mutator modes (`none` / `prism` / `prism_mixed`), CmpLog, and Sand on identical corpora using normalized CFG edges, AST 2-paths (`2Paths` / `Val2P`), valid-syntax %, and unique crash signatures.
 - **Multi-oracle differential fuzzing**:
   - **Prism vs. CRuby `parse.y` ([`diff.c`](harnesses/prism/diff.c))**: Compares syntax acceptance, AST structure, lexical scope locals, and bytecode/eval behavior against CRuby's legacy parser.
   - **CRuby dual-compiler & full-pipeline differential ([`compile.rb`](campaigns/compile.rb), [`pipeline.rb`](campaigns/pipeline.rb))**: Compiles inputs through both Prism and `parse.y` backends—either gated on parser agreement to concentrate coverage on bytecode compilation and verification, or end-to-end across all four parse/compile stages to catch cross-pipeline syntax and compilation divergences.
@@ -110,20 +106,6 @@ Running `report` (or setting `after_run { report ... }`) compiles a self-contain
 - **Crash Lineage & Interactive Triage Sankey ([`report/sankey.rb`](report/sankey.rb))**: Tracks crash provenance (grammar seeds vs. initial corpus vs. local mutations vs. synced peers) and visualizes fuzzer/origin → crash reason → root-cause cluster → signature bucket flows.
 - **LLVM Source Coverage ([`report/coverage.sh`](report/coverage.sh))**: Writes `<ws>/report/index.html` immediately after triage so fleet and triage tabs are usable right away, then streams progressive per-pair coverage summaries and `llvm-cov` HTML links into open `file://` or `https://` tabs via `coverage/coverage.js` (with incremental `(last_cutoff, cutoff]` `.profdata` caching across mid-run snapshots; see [`docs/architecture.md`](docs/architecture.md#3-decoupled-reporting--incremental-per-pair-llvm-coverage-reportreportrb--reportcoveragesh)).
 - **Searchable Triage Explorer & GitHub Pages Publishing ([`bin/publish.rb`](bin/publish.rb))**: Splits heavy triage and worker payloads into size-bounded lazy-loaded JS chunks (`data/*.js`) so `<ws>/report/index.html` stays fast on large runs; filter buckets, view minimized reproducers, inspect normalized stack traces, open one-click Prism Loupe browser links, and archive complete multi-run report snapshots (including `llvm-cov` HTML and `triage/` bucket artifacts) into a gitignored `reports/` `gh-pages` branch worktree.
-
----
-
-## Grammar-Based Seed Synthesis (`lrama-fuzz`)
-
-Coverage-guided byte mutators alone struggle to synthesize deeply nested Ruby syntax, heredocs, encodings, or complex Onigmo regexps from scratch. To continuously feed structurally rich inputs into the AFL++ fleet, [`runtime/grammar.rb`](runtime/grammar.rb) pairs the [`lrama-fuzz`](https://github.com/kddnewton/lrama-fuzz) grammar fuzzer (built on [`lrama`](https://github.com/ruby/lrama)) with target-specific mutation and Prism parser feedback:
-
-1. **Parsing CRuby's real grammar (`parse.y`)**: At startup, `Lrama::Fuzz.parse_ruby` parses `/opt/ruby/parse.y` and `/opt/ruby/defs/id.def` (or `$RUBY_SRC_DIR`) once in the supervisor process before `fork`, letting worker processes share the prepared LALR(1) `Lrama::Grammar` copy-on-write.
-2. **Dual evolutionary generators**: Each 50-generation epoch alternates two `lrama-fuzz` evolvers:
-   - **`ComposedEvolver` (`PrismComposer < Lrama::Fuzz::Ruby::Composer`)**: Generates variable-scoped Ruby programs enriched with Onigmo named-capture/property regexps (`MatchWriteNode`), static-literal hash key collisions (bignums, rationals, imaginaries, floats, `__LINE__`), and structural comment/embdoc blocks (`src/comments.c`).
-   - **`GuidedGrammarEvolver` (`Lrama::Fuzz::Evolver` + `Lrama::Fuzz::Generator`)**: Evolves codon genomes directly over `parse.y` rules with coverage-guided rule selection (prioritizing uncovered rules and rules not yet seen in valid programs) while permitting controlled invalid terminals (`allow_invalid: true`) to stress Prism error recovery.
-3. **Context-aware terminals & post-generation variants**: `build_ruby_terminals` tracks a delimiter stack (`tSTRING_BEG`, `tREGEXP_BEG`, `%w`/`%W`/`%i`/`%I` word lists) alongside large Karatsuba/schoolbook bignums and boundary floats. Candidates are expanded (`expand_candidate_variants`) with `pm_options_t` 4-byte harness option headers (`OPTION_SEED_HEADERS`), single/nested heredoc rewrites (`inject_heredocs`), multibyte encoding/regexp probes (`inject_encoding_variant`), and magic/shebang/`=begin` comments (`inject_comments_variant`).
-4. **Prism fitness scoring & crash capture**: Candidates are scored in-process against the compiled target C extension (`fuzz-ruby-ext`, via `Prism.parse` and `Prism.parse_success?`) after writing an `in_flight` breadcrumb; if a generated input crashes the worker itself, the supervisor archives it to `<afl_dir>/<worker>/crashes/`, forwards it into AFL++ for ASan/UBSan triage, and respawns the worker.
-5. **AFL++ foreign sync & backpressure**: Seeds are deduplicated by SHA-1 digest, written atomically into the generator's `seeds_dir`, pushed to the configured `foreign_sync` consumer (`-F`) via `SIGUSR2`, and pruned once AFL++ reads them (benchmarkable locally via `./campaigns/default.rb bench` / [`runtime/grammar_bench.rb`](runtime/grammar_bench.rb)).
 
 ---
 
@@ -276,9 +258,7 @@ make update
 │   ├── campaign.rb                 lifecycle timer, Docker container runner, and Campaign::Instance API
 │   ├── campaign_dsl.rb             Ruby topology & campaign DSL compiler frontend
 │   ├── corpus.rb                   seed corpus extractor and generator from Prism fixtures
-│   ├── fuzzer_bench.rb             feature-matrix fuzzer benchmark (IJON, Prism AST mutator vs lrama, CmpLog, Sand)
-│   ├── grammar.rb                  lrama-fuzz parse.y seed synthesizer, mutators, and supervisor
-│   ├── grammar_bench.rb            quantitative benchmark suite for grammar seed synthesis
+│   ├── fuzzer_bench.rb             feature-matrix fuzzer benchmark (IJON, Prism AST mutator, CmpLog, Sand)
 │   ├── lib                         campaign/ and topology/ compiler, builder, and launch planner modules
 │   ├── progress.rb                 BuildKit-style scrolling stage UI and persistent workspace logging
 │   ├── provenance.rb               binary/target snapshot archiver and crash seed origin resolver

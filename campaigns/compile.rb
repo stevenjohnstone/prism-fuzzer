@@ -19,7 +19,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "f3e180b5ebc835f87c2ff7ccb8474a1bf18b0115"
+DEFAULT_RUBY_REF = "0d399335b733776187e43a783e5f950c18ad881c"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -69,25 +69,6 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
                    dir: "corpus-8k",
                    max_input_size: large_max_input
 
-  grammar_generator :grammar_small,
-                    source: :prism_a,
-                    fuzzer: "fuzz",
-                    sync_group: "afl-small",
-                    seeds_dir: "/tmp/afl-tmpdir/compile-grammar-256/seeds",
-                    max_input_size: small_max_input,
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#34d399"
-  grammar_generator :grammar_8k,
-                    source: :prism_a,
-                    fuzzer: "fuzz",
-                    sync_group: "afl-8k",
-                    seeds_dir: "/tmp/afl-tmpdir/compile-grammar-8k/seeds",
-                    max_input_size: large_max_input,
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#10b981"
-
   fuzzer "fuzz",              shape: :prism_parse,   source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.compile",      shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [], afl: :pcguard, document_ids: true
   fuzzer "fuzz.ijon.compile", shape: :cruby_compile, ruby: :ruby, prism: :prism_a, sanitizers: [], afl: :pcguard, ijon: true, document_ids: true
@@ -96,12 +77,8 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
   sync_group "afl-8k",    dir: "afl-8k",    primary: true
   sync_group "afl-small", dir: "afl-small"
 
-  worker :"grammar-256", kind: :generator, generator: :grammar_small, max_input_size: small_max_input, color: "#34d399"
-  worker :"grammar-8k",  kind: :generator, generator: :grammar_8k,    max_input_size: large_max_input, color: "#10b981"
-
   worker :"small-compile-main", fuzzer: "fuzz.ijon.compile", sync_group: "afl-small", afl_role: :main, max_input_size: small_max_input do
     schedule "explore"
-    foreign_sync :grammar_small
     seeds from: :corpus_small, filter: :self_pass, cache_key: "compile_small_pass"
     loopcount 1000
     mem_limit :none
@@ -136,7 +113,6 @@ PrismFuzzer.campaign "cruby-compile-fleet" do
 
   worker :"8k-compile-main", fuzzer: "fuzz.ijon.compile", sync_group: "afl-8k", afl_role: :main, max_input_size: large_max_input do
     schedule "explore"
-    foreign_sync :grammar_8k
     seeds from: :corpus_8k, filter: :self_pass, cache_key: "compile_8k_pass"
     peer_import group: "afl-small", worker: :"small-compile-main", alias: "small_compile"
     loopcount 1000

@@ -37,24 +37,6 @@ PrismFuzzer.campaign "ijon-state-factory" do
 
   corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz.asan"
 
-  grammar_generator :grammar_hub,
-                    source: :prism_a,
-                    fuzzer: "fuzz.native",
-                    sync_group: :san_hub,
-                    seeds_dir: "/tmp/afl-tmpdir/factory_hub/seeds",
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#34d399"
-
-  grammar_generator :grammar_ijon,
-                    source: :prism_a,
-                    fuzzer: "fuzz.ijon",
-                    sync_group: :ijon_island,
-                    seeds_dir: "/tmp/afl-tmpdir/factory_ijon/seeds",
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#4ade80"
-
   fuzzer "fuzz.native",  shape: :prism_parse,     source: :prism_a, sanitizers: [],               mode: :fast, afl: :lto,     xallocator: true
   fuzzer "fuzz.sand",    shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :sand
   fuzzer "fuzz.ijon",    shape: :prism_parse,     source: :prism_a, sanitizers: [],               mode: :fast, afl: :lto,     ijon: true, xallocator: true
@@ -68,13 +50,9 @@ PrismFuzzer.campaign "ijon-state-factory" do
   sync_group :ijon_island, dir: "afl-ijon"
   sync_group :sand_island, dir: "afl-sand"
 
-  worker :gen_hub,  kind: :generator, generator: :grammar_hub,  color: "#34d399"
-  worker :gen_ijon, kind: :generator, generator: :grammar_ijon, color: "#4ade80"
-
   # Island 1: Dedicated high-throughput IJON state explorers
   worker :ijon_scout, fuzzer: "fuzz.ijon", sync_group: :ijon_island, afl_role: :main do
     schedule "explore"
-    foreign_sync :grammar_ijon
     seeds from: :corpus, shard_group: :ijon
     mem_limit 2048
     env AFL_SYNC_TIME: "1", AFL_CRASH_EXITCODE: "23"
@@ -103,7 +81,6 @@ PrismFuzzer.campaign "ijon-state-factory" do
   worker :hub_main, fuzzer: "fuzz.asan", sync_group: :san_hub, afl_role: :main do
     schedule "exploit"
     cmplog "fuzz.cmplog"
-    foreign_sync :grammar_hub
     peer_import group: :ijon_island, worker: :ijon_scout,  alias: "ijon_feed"
     peer_import group: :sand_island, worker: :sand_runner, alias: "sand_feed"
     seeds from: :corpus, shard_group: :hub

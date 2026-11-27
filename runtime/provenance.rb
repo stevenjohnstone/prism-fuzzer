@@ -381,14 +381,6 @@ module FuzzProvenance
       afl_patch_sha256 = binary_sha256(patch_path) if File.file?(patch_path)
     end
 
-    lrama_ver = if defined?(Gem::Specification)
-                  begin
-                    Gem::Specification.find_by_name("lrama-fuzz").version.to_s
-                  rescue Gem::LoadError
-                    nil
-                  end
-                end
-
     qemu_vers = %w[qemu-arm qemu-ppc].each_with_object({}) do |cmd, acc|
       next unless find_in_path(cmd)
 
@@ -408,8 +400,7 @@ module FuzzProvenance
       "afl_patch_sha256" => afl_patch_sha256,
       "qemu_arm" => qemu_vers["qemu_arm"],
       "qemu_ppc" => qemu_vers["qemu_ppc"],
-      "ruby" => defined?(RUBY_DESCRIPTION) ? RUBY_DESCRIPTION : nil,
-      "lrama_fuzz" => lrama_ver
+      "ruby" => defined?(RUBY_DESCRIPTION) ? RUBY_DESCRIPTION : nil
     }.compact
 
     result = info.empty? ? nil : info

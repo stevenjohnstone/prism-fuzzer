@@ -199,9 +199,6 @@ $(TEST_STAMPS_DIR)/afl_patch.stamp: test/test_afl_patch.sh $(FUZZ_AFL_STAMP) $(F
 $(TEST_STAMPS_DIR)/sanitizers.stamp: test/sanitizers_test.rb $(TEST_RUNNER_DEPS) $(FUZZ_AFL_STAMP) $(PRISM_A_SOURCES) $(PRISM_A_HEADERS) $(PRISM_A_STATE_DEP) harnesses/prism/fuzz.c harnesses/prism/parse.c harnesses/prism/include/fuzz_arena_unslab.h harnesses/prism/include/prism_xallocator.h harnesses/prism/gen_node_locations.rb harnesses/prism/gen_api_compat.rb $(TRIAGE_COMMON_DEPS)
 	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/sanitizers_test.rb)
 
-$(TEST_STAMPS_DIR)/grammar.stamp: test/grammar_test.rb $(TEST_RUNNER_DEPS) runtime/grammar.rb runtime/grammar_bench.rb $(RUNTIME_TOPOLOGY_DEPS) $(shell find lib/lrama -type f 2>/dev/null) $(PRISM_A_STATE_DEP)
-	$(call RUN_TEST_STAGE,$(TEST_TARGET_ENV) ruby test/run.rb test/grammar_test.rb)
-
 $(TEST_STAMPS_DIR)/sankey.stamp: test/sankey_test.rb $(TEST_RUNNER_DEPS) $(REPORT_LIB_DEPS) triage/cluster.rb $(RUNTIME_TOPOLOGY_DEPS)
 	$(call RUN_TEST_STAGE,ruby test/run.rb test/sankey_test.rb)
 
@@ -271,7 +268,6 @@ TEST_ALL_STAMPS := \
 	$(TEST_STAMPS_DIR)/prism_diff.stamp \
 	$(TEST_STAMPS_DIR)/afl_patch.stamp \
 	$(TEST_STAMPS_DIR)/sanitizers.stamp \
-	$(TEST_STAMPS_DIR)/grammar.stamp \
 	$(TEST_STAMPS_DIR)/sankey.stamp \
 	$(TEST_STAMPS_DIR)/accel_smoke.stamp \
 	$(TEST_STAMPS_DIR)/oss_fuzz.stamp \
@@ -285,11 +281,10 @@ test-targets-%: $(TEST_STAMPS_DIR)/targets_%.stamp ;
 test-prism-diff: $(TEST_STAMPS_DIR)/prism_diff.stamp
 test-afl-patch: $(TEST_STAMPS_DIR)/afl_patch.stamp
 test-sanitizers: $(TEST_STAMPS_DIR)/sanitizers.stamp
-test-grammar: $(TEST_STAMPS_DIR)/grammar.stamp
 test-sankey: $(TEST_STAMPS_DIR)/sankey.stamp
 test-accel: $(TEST_STAMPS_DIR)/accel_smoke.stamp
 test-oss-fuzz: $(TEST_STAMPS_DIR)/oss_fuzz.stamp
 test-triage: $(TEST_TRIAGE_STAMPS)
 test-triage-%: $(TEST_STAMPS_DIR)/triage_%.stamp ;
 
-.PHONY: _test-all test-targets test-prism-diff test-afl-patch test-sanitizers test-grammar test-sankey test-accel test-oss-fuzz test-triage
+.PHONY: _test-all test-targets test-prism-diff test-afl-patch test-sanitizers test-sankey test-accel test-oss-fuzz test-triage

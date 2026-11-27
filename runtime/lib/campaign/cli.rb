@@ -10,7 +10,7 @@ module PrismFuzzer
         run validate compile plan paths sync sync-ruby build docker-build
         ensure-afl-passes invalidate-docker-caches
         attach stop logs ps status stats clean shell
-        report coverage retriage verify bisect match explain inspect publish bench accel
+        report coverage retriage verify bisect match explain inspect publish accel
         env docker-args plan-launch
       ].freeze
 
@@ -81,7 +81,7 @@ module PrismFuzzer
               verify         Sync targets and verify fixed inputs across triage buckets
               bisect         Bisect regression/fix commit across Prism history
               match / inspect / explain / publish
-              bench / accel / shell / clean
+              accel / shell / clean
               validate / compile / plan / paths / sync / sync-ruby / build / docker-build
           BANNER
           op.on("-c", "--campaign PATH", "--topology PATH", "Campaign DSL (.rb) or topology IR (.json) (default: campaigns/default.rb)") { |v| opts[:campaign] = v }
@@ -325,11 +325,6 @@ module PrismFuzzer
           camp_env = File.file?(ir_host) ? ir_host : ctx[:campaign_path]
           ok = system({ "CAMPAIGN" => camp_env, "TOPOLOGY" => camp_env }, RbConfig.ruby, File.join(fuzz_root, "triage", "inspect.rb"), "--triage-dir", ws[:triage_dir], *extra_args, chdir: fuzz_root)
           ok ? 0 : 1
-        when "bench"
-          PrismFuzzer::Campaign.ensure_docker_image!(fuzz_root: fuzz_root, dry_run: opts[:dry_run])
-          json_out = File.join(PrismFuzzer::Campaign.guest_path_for(ws[:fuzz_dir], ctx, ws_key: "dir"), "grammar-bench.json")
-          PrismFuzzer::Campaign.run_in_container!(ctx, ["ruby", "./runtime/grammar_bench.rb", "--json", json_out, *extra_args], dry_run: opts[:dry_run])
-          0
         when "accel"
           PrismFuzzer::Campaign.ensure_docker_image!(fuzz_root: fuzz_root, dry_run: opts[:dry_run])
           PrismFuzzer::Campaign.run_in_container!(ctx, ["./test/test_accel.sh", *extra_args], dry_run: opts[:dry_run])

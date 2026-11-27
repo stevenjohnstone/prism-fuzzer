@@ -18,7 +18,7 @@ $LOAD_PATH.unshift(fuzz_lib) unless $LOAD_PATH.include?(fuzz_lib)
 require "prism_fuzzer"
 
 DEFAULT_PRISM_REF = "a5e01d818fa45f2cea9232754251a6855f82ab98"
-DEFAULT_RUBY_REF = "f3e180b5ebc835f87c2ff7ccb8474a1bf18b0115"
+DEFAULT_RUBY_REF = "0d399335b733776187e43a783e5f950c18ad881c"
 
 non_empty_env = ->(key) do
   val = ENV[key].to_s.strip
@@ -70,14 +70,6 @@ PrismFuzzer.campaign "ijon-small-prism-fleet" do
   coverage source: :prism_a, fuzzer: "fuzz", diff_fuzzer: "fuzz.diff"
 
   corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz"
-  grammar_generator :grammar,
-                    source: :prism_a,
-                    fuzzer: "fuzz.ijon",
-                    sync_group: "afl-ijon",
-                    seeds_dir: "/tmp/afl-tmpdir/ijon-small-grammar/seeds",
-                    schedule: "lrama",
-                    ulimit_v_kb: 4_194_304,
-                    color: "#34d399"
 
   # IJON-instrumented binaries (share 8 KiB ijon_set bitmap & 128-slot ijon_max hills).
   # Slow / MSan / LSan builds enable PRISM_FUZZ_ALLOW_STREAM_WITH_IJON so stream_mode
@@ -113,13 +105,10 @@ PrismFuzzer.campaign "ijon-small-prism-fleet" do
   sync_group "afl-ijon", dir: "afl-ijon", primary: true
   sync_group :afl,       dir: "afl"
 
-  worker :grammar, kind: :generator, generator: :grammar, color: "#34d399"
-
   # Fast native IJON scout paired with ASan+UBSan SAND (-w); CmpLog (-c) runs on ijon-asan & main
   worker :"ijon-scout", fuzzer: "fuzz.ijon", sync_group: "afl-ijon", afl_role: :main do
     aux_fuzzer "fuzz.sand"
     schedule "explore"
-    foreign_sync :grammar
     peer_import group: :afl, worker: :main, alias: "cfg_peer"
     peer_import group: :afl, worker: :diff, alias: "cfg_diff_peer"
     seeds from: :corpus, shard_group: :ijon_prism

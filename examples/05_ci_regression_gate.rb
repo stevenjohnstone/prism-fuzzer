@@ -38,13 +38,6 @@ PrismFuzzer.campaign "ci-regression-gate" do
   coverage source: :prism_a, fuzzer: "fuzz.asan", diff_fuzzer: "fuzz.diff"
 
   corpus_generator :corpus, source: :prism_a, fuzzer: "fuzz.asan"
-  grammar_generator :grammar,
-                    source: :prism_a,
-                    fuzzer: "fuzz.asan",
-                    sync_group: :afl,
-                    seeds_dir: "/tmp/afl-tmpdir/ci_grammar/seeds",
-                    schedule: "lrama",
-                    color: "#34d399"
 
   fuzzer "fuzz.asan",   shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :fast, afl: :lto, document_ids: true
   fuzzer "fuzz.slow",   shape: :prism_parse,     source: :prism_a, sanitizers: %i[asan ubsan], mode: :slow, afl: :lto
@@ -54,12 +47,9 @@ PrismFuzzer.campaign "ci-regression-gate" do
 
   sync_group :afl, dir: "afl", primary: true
 
-  worker :grammar, kind: :generator, generator: :grammar, color: "#34d399"
-
   worker :main, fuzzer: "fuzz.asan", sync_group: :afl, afl_role: :main do
     schedule "exploit"
     cmplog "fuzz.cmplog"
-    foreign_sync :grammar
     seeds from: :corpus, shard_group: :ci
     color "#60a5fa"
   end
