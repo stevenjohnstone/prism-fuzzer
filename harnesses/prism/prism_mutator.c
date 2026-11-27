@@ -43,7 +43,14 @@ typedef enum {
     TOK_HEREDOC_OPEN = 5,
     TOK_ASSIGN_OP = 6,
     TOK_REGEXP_FLAGS = 7,
-    TOK_PERCENT_OPEN = 8
+    TOK_PERCENT_OPEN = 8,
+    TOK_MATCH_OP = 9,
+    TOK_HASH_PATTERN_CLOSE = 10,
+    TOK_HASH_PATTERN_REST = 11,
+    TOK_PATTERN_VAL = 12,
+    TOK_PATTERN_KEY = 13,
+    TOK_HASH_TO_PATTERN = 14,
+    TOK_PATTERN_TO_HASH = 15
 } tok_kind_t;
 
 typedef struct {
@@ -380,6 +387,65 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         case PM_ARRAY_NODE:
             record_percent_open(idx, ((const pm_array_node_t *) node)->opening_loc);
             break;
+        case PM_HASH_NODE: {
+            const pm_hash_node_t *hn = (const pm_hash_node_t *) node;
+            if (valid_loc(hn->opening_loc, idx->src_len) && valid_loc(hn->closing_loc, idx->src_len)) {
+                record_tok(idx, node->location, TOK_HASH_TO_PATTERN);
+            }
+            break;
+        }
+        case PM_HASH_PATTERN_NODE: {
+            const pm_hash_pattern_node_t *hp = (const pm_hash_pattern_node_t *) node;
+            if (valid_loc(hp->opening_loc, idx->src_len) && valid_loc(hp->closing_loc, idx->src_len)) {
+                record_tok(idx, hp->closing_loc, TOK_HASH_PATTERN_CLOSE);
+                record_tok(idx, node->location, TOK_PATTERN_TO_HASH);
+                if (hp->constant == NULL && hp->opening_loc.length == 1 && idx->src[hp->opening_loc.start] == '{' &&
+                    hp->closing_loc.length == 1 && idx->src[hp->closing_loc.start] == '}') {
+                    record_delim_pair(idx, hp->opening_loc.start, 1, hp->closing_loc.start, 1, "Hash[", "]");
+                } else if (hp->constant != NULL && hp->opening_loc.length == 1 && hp->closing_loc.length == 1) {
+                    if (idx->src[hp->opening_loc.start] == '[' && idx->src[hp->closing_loc.start] == ']') {
+                        record_delim_pair(idx, hp->opening_loc.start, 1, hp->closing_loc.start, 1, "(", ")");
+                    } else if (idx->src[hp->opening_loc.start] == '(' && idx->src[hp->closing_loc.start] == ')') {
+                        record_delim_pair(idx, hp->opening_loc.start, 1, hp->closing_loc.start, 1, "[", "]");
+                    }
+                }
+            }
+            if (hp->rest != NULL) {
+                record_tok(idx, hp->rest->location, TOK_HASH_PATTERN_REST);
+            }
+            for (size_t i = 0; i < hp->elements.size && idx->token_count < PM_MUT_MAX_TOKENS; i++) {
+                const pm_node_t *el = hp->elements.nodes[i];
+                if (el != NULL && PM_NODE_TYPE(el) == PM_ASSOC_NODE) {
+                    const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) el;
+                    if (assoc->key != NULL && PM_NODE_TYPE(assoc->key) == PM_SYMBOL_NODE &&
+                        valid_loc(assoc->key->location, idx->src_len) &&
+                        idx->src[assoc->key->location.start + assoc->key->location.length - 1] == ':') {
+                        record_tok(idx, assoc->key->location, TOK_PATTERN_KEY);
+                    }
+                    if (assoc->value != NULL && PM_NODE_TYPE(assoc->value) != PM_IMPLICIT_NODE) {
+                        record_tok(idx, assoc->value->location, TOK_PATTERN_VAL);
+                    }
+                }
+            }
+            break;
+        }
+        case PM_ARRAY_PATTERN_NODE: {
+            const pm_array_pattern_node_t *ap = (const pm_array_pattern_node_t *) node;
+            if (ap->constant == NULL &&
+                valid_loc(ap->opening_loc, idx->src_len) && valid_loc(ap->closing_loc, idx->src_len) &&
+                ap->opening_loc.length == 1 && idx->src[ap->opening_loc.start] == '[' &&
+                ap->closing_loc.length == 1 && idx->src[ap->closing_loc.start] == ']') {
+                record_delim_pair(idx, ap->opening_loc.start, 1, ap->closing_loc.start, 1, "Array[", "]");
+                record_delim_pair(idx, ap->opening_loc.start, 1, ap->closing_loc.start, 1, "[*, ", ", *]");
+            }
+            break;
+        }
+        case PM_MATCH_PREDICATE_NODE:
+            record_tok(idx, ((const pm_match_predicate_node_t *) node)->keyword_loc, TOK_MATCH_OP);
+            break;
+        case PM_MATCH_REQUIRED_NODE:
+            record_tok(idx, ((const pm_match_required_node_t *) node)->operator_loc, TOK_MATCH_OP);
+            break;
         case PM_SYMBOL_NODE:
             record_percent_open(idx, ((const pm_symbol_node_t *) node)->opening_loc);
             break;
@@ -687,7 +753,7 @@ static size_t emit_wrapper(
 
     ow_put(w, src, x.start);
 
-    switch (rng_below(m, 49)) {
+    switch (rng_below(m, 58)) {
         case 0:
             ow_puts(w, "defined?("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
@@ -851,6 +917,33 @@ static size_t emit_wrapper(
         case 47:
             ow_puts(w, "alias :_a :_b until ("); ow_put(w, x_ptr, x_len); ow_puts(w, ")");
             break;
+        case 48:
+            ow_puts(w, "case ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); in {a:, b: Integer, **nil}; a; in {a: ^("); ow_put(w, y_ptr, y_len); ow_puts(w, "), **rest}; rest; end");
+            break;
+        case 49:
+            ow_puts(w, "case ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); in {\"a\":, \"\\d\":, **}; [a, d]; in Hash[a: String => _s, **nil]; _s; end");
+            break;
+        case 50:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") in {a:, b: ^@a | ^@@b | ^$c})");
+            break;
+        case 51:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") => {a: Integer => _v, b: ^("); ow_put(w, y_ptr, y_len); ow_puts(w, "), **rest})");
+            break;
+        case 52:
+            ow_puts(w, "case ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); in [*, Integer => _i, *]; _i; in [a, *b] if ("); ow_put(w, y_ptr, y_len); ow_puts(w, "); a; end");
+            break;
+        case 53:
+            ow_puts(w, "case ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); in {a: ^("); ow_put(w, y_ptr, y_len); ow_puts(w, ")} | {b: ^("); ow_put(w, y_ptr, y_len); ow_puts(w, ")}; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
+        case 54:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") in Object[a:, b: Integer, **nil])");
+            break;
+        case 55:
+            ow_puts(w, "(("); ow_put(w, x_ptr, x_len); ow_puts(w, ") => [Integer, String => _s, {k:, **nil}])");
+            break;
+        case 56:
+            ow_puts(w, "case ("); ow_put(w, x_ptr, x_len); ow_puts(w, "); in {k: [*, ^("); ow_put(w, y_ptr, y_len); ow_puts(w, "), *], **nil}; "); ow_put(w, y_ptr, y_len); ow_puts(w, "; end");
+            break;
         default:
             ow_puts(w, "[*("); ow_put(w, x_ptr, x_len); ow_puts(w, "), "); ow_put(w, y_ptr, y_len); ow_puts(w, "]");
             break;
@@ -955,6 +1048,142 @@ static size_t emit_tok_flip(
             }
             uint8_t rep_buf[3] = { '%', (uint8_t) next_k, delim };
             return emit_replace(w, src, src_len, tok.start, tok.length, rep_buf, 3, false);
+        }
+        case TOK_MATCH_OP:
+            repl = (tok.length == 2 && memcmp(src + tok.start, "in", 2) == 0) ? "=>" : "in";
+            break;
+        case TOK_HASH_PATTERN_CLOSE: {
+            static const char *const extras[] = {
+                "**nil", "**rest", "**", "k:", "\"\\d\":", "\"k\":",
+                "k: Integer", "k: String => _v", "k: ^_a", "k: ^@a", "k: ^(0)",
+                "k: Integer | String"
+            };
+            const char *extra = extras[rng_below(m, sizeof(extras) / sizeof(extras[0]))];
+            size_t scan = tok.start;
+            while (scan > 0 && (src[scan - 1] == ' ' || src[scan - 1] == '\t' || src[scan - 1] == '\n' || src[scan - 1] == '\r')) {
+                scan--;
+            }
+            bool need_comma = (scan > 0 && src[scan - 1] != '{' && src[scan - 1] != '[' && src[scan - 1] != '(' && src[scan - 1] != ',');
+            ow_put(w, src, tok.start);
+            if (need_comma) {
+                ow_puts(w, ", ");
+            }
+            ow_puts(w, extra);
+            ow_put(w, src + tok.start, src_len - tok.start);
+            return w->len;
+        }
+        case TOK_HASH_PATTERN_REST: {
+            static const char *const rests[] = { "**nil", "**", "**_rest", "" };
+            repl = rests[rng_below(m, sizeof(rests) / sizeof(rests[0]))];
+            break;
+        }
+        case TOK_PATTERN_VAL: {
+            static const char *const vals[] = {
+                "", "Integer", "String", "Hash", "Array", "nil", "1..5",
+                "^_a", "^@a", "^@@a", "^$a", "^(0)", "Integer => _x", "Integer | String"
+            };
+            repl = vals[rng_below(m, sizeof(vals) / sizeof(vals[0]))];
+            break;
+        }
+        case TOK_PATTERN_KEY: {
+            /* tok is a label ending in ':' (e.g. a: or "a":). Toggle bare <-> quoted / escaped. */
+            if (tok.length < 2) {
+                return 0;
+            }
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+            uint8_t first = src[tok.start];
+            ow_put(w, src, tok.start);
+            if (first == '"' || first == '\'') {
+                /* Unquote if inner looks like a bare identifier, otherwise inject a backslash escape. */
+                if (tok.length >= 4 && src[tok.start + tok.length - 2] == first) {
+                    const uint8_t *inner = src + tok.start + 1;
+                    size_t inner_len = tok.length - 3;
+                    if (rng_below(m, 2) == 0 && inner_len > 0 && inner[0] >= 'a' && inner[0] <= 'z') {
+                        ow_put(w, inner, inner_len);
+                        ow_puts(w, ":");
+                    } else {
+                        ow_puts(w, "\"\\");
+                        ow_put(w, inner, inner_len);
+                        ow_puts(w, "\":");
+                    }
+                } else {
+                    ow_puts(w, "k:");
+                }
+            } else {
+                const uint8_t *inner = src + tok.start;
+                size_t inner_len = tok.length - 1;
+                switch (rng_below(m, 3)) {
+                    case 0:
+                        ow_puts(w, "\"");
+                        ow_put(w, inner, inner_len);
+                        ow_puts(w, "\":");
+                        break;
+                    case 1:
+                        ow_puts(w, "\"\\");
+                        ow_put(w, inner, inner_len);
+                        ow_puts(w, "\":");
+                        break;
+                    default:
+                        ow_puts(w, "'");
+                        ow_put(w, inner, inner_len);
+                        ow_puts(w, "':");
+                        break;
+                }
+            }
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
+        }
+        case TOK_HASH_TO_PATTERN: {
+            /* Turn a HashNode {...} into a pattern match expression */
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+            ow_put(w, src, tok.start);
+            switch (rng_below(m, 3)) {
+                case 0:
+                    ow_puts(w, "({} in ");
+                    ow_put(w, src + tok.start, tok.length);
+                    ow_puts(w, ")");
+                    break;
+                case 1:
+                    ow_puts(w, "({} => ");
+                    ow_put(w, src + tok.start, tok.length);
+                    ow_puts(w, ")");
+                    break;
+                default:
+                    ow_puts(w, "(case {}; in ");
+                    ow_put(w, src + tok.start, tok.length);
+                    ow_puts(w, "; end)");
+                    break;
+            }
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
+        }
+        case TOK_PATTERN_TO_HASH: {
+            /* Extract a HashPatternNode into a plain Hash literal (inside a matching expression or standalone) */
+            const uint8_t *p = src + tok.start;
+            size_t len = tok.length;
+            /* Strip optional leading Constant[...] or Constant(...) to get inner body */
+            size_t open_off = 0;
+            while (open_off < len && p[open_off] != '{' && p[open_off] != '[' && p[open_off] != '(') {
+                open_off++;
+            }
+            if (open_off + 1 >= len) {
+                return 0;
+            }
+            const uint8_t *inner = p + open_off + 1;
+            size_t inner_len = len - open_off - 2;
+            size_t tail = (size_t) tok.start + (size_t) tok.length;
+            ow_put(w, src, tok.start);
+            ow_puts(w, "{");
+            ow_put(w, inner, inner_len);
+            ow_puts(w, "}");
+            if (tail < src_len) {
+                ow_put(w, src + tail, src_len - tail);
+            }
+            return w->len;
         }
     }
     if (repl == NULL) {
