@@ -374,7 +374,12 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         bool has_bom = (source_size >= 3 && source[0] == 0xEF && source[1] == 0xBB && source[2] == 0xBF);
         if (cruby_has_lines && !has_bom) {
             bool cruby_has_data = (cruby_total_bytes < source_size && cruby_last_line_is_end);
-            bool prism_has_trailing_data = (prism_has_data && (size_t) prism_data_start + 8 < source_size);
+            size_t end_marker_len = 8;
+            if (prism_has_data && (size_t) prism_data_start + 9 <= source_size &&
+                source[prism_data_start + 7] == '\r' && source[prism_data_start + 8] == '\n') {
+                end_marker_len = 9;
+            }
+            bool prism_has_trailing_data = (prism_has_data && (size_t) prism_data_start + end_marker_len < source_size);
             if (cruby_has_data != prism_has_trailing_data) {
                 if (cruby_has_data || prism_has_trailing_data) {
                     size_t cruby_start = cruby_has_data ? (cruby_total_bytes - cruby_last_line_bytes) : 0;

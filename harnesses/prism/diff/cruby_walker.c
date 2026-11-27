@@ -1412,8 +1412,8 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         if (ctx.in_pattern && tid == diff_ids.block_n) {
             bsub.in_pattern = false;
             bsub.in_target = false;
-        }
-        if (len == 1 && (tid == diff_ids.block_n || tid == diff_ids.begin_n)) {
+            bsub.in_container = false;
+        } else if (len == 1 && (tid == diff_ids.block_n || tid == diff_ids.begin_n)) {
             bsub.in_container = ctx.in_container;
         }
         for (long i = 0; i < len; i++) {
@@ -1428,8 +1428,10 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         branch_ctx.in_container = false;
         diff_tree_open_cstr(ctx.out, DIFF_TOK_IF, NULL);
         diff_cruby_visit_slot("cond", RARRAY_AREF(ch, 0), sub);
-        diff_cruby_visit_slot("then", RARRAY_AREF(ch, 1), branch_ctx);
-        diff_cruby_visit_slot("else", RARRAY_AREF(ch, 2), branch_ctx);
+        VALUE then_v = RARRAY_AREF(ch, 1);
+        VALUE else_v = RARRAY_AREF(ch, 2);
+        diff_cruby_visit_slot("then", diff_cruby_node_tid(then_v) == diff_ids.nil_n ? Qnil : then_v, branch_ctx);
+        diff_cruby_visit_slot("else", diff_cruby_node_tid(else_v) == diff_ids.nil_n ? Qnil : else_v, branch_ctx);
         diff_tree_close(ctx.out);
     } else if (tid == diff_ids.unless_n && len >= 3) {
         ctx.out->counts[DIFF_CNT_UNLESS]++;
@@ -1438,8 +1440,10 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         branch_ctx.in_container = false;
         diff_tree_open_cstr(ctx.out, DIFF_TOK_UNLESS, NULL);
         diff_cruby_visit_slot("cond", RARRAY_AREF(ch, 0), sub);
-        diff_cruby_visit_slot("then", RARRAY_AREF(ch, 1), branch_ctx);
-        diff_cruby_visit_slot("else", RARRAY_AREF(ch, 2), branch_ctx);
+        VALUE then_v = RARRAY_AREF(ch, 1);
+        VALUE else_v = RARRAY_AREF(ch, 2);
+        diff_cruby_visit_slot("then", diff_cruby_node_tid(then_v) == diff_ids.nil_n ? Qnil : then_v, branch_ctx);
+        diff_cruby_visit_slot("else", diff_cruby_node_tid(else_v) == diff_ids.nil_n ? Qnil : else_v, branch_ctx);
         diff_tree_close(ctx.out);
     } else if ((tid == diff_ids.while_n || tid == diff_ids.until_n) && len >= 3) {
         ctx.out->counts[tid == diff_ids.while_n ? DIFF_CNT_WHILE : DIFF_CNT_UNTIL]++;
@@ -1508,7 +1512,8 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         diff_tree_close(ctx.out);
     } else if (tid == diff_ids.rescue_n && len >= 3) {
         diff_tree_open_cstr(ctx.out, DIFF_TOK_RESCUE, NULL);
-        diff_cruby_visit_slot("body", RARRAY_AREF(ch, 0), sub);
+        VALUE rbody = RARRAY_AREF(ch, 0);
+        diff_cruby_visit_slot("body", diff_cruby_node_tid(rbody) == diff_ids.nil_n ? Qnil : rbody, sub);
         diff_tree_open_slot(ctx.out, "resq");
         volatile VALUE cur = RARRAY_AREF(ch, 1);
         while (diff_cruby_is_ast_node(cur) && diff_cruby_node_tid(cur) == diff_ids.resbody) {
