@@ -429,9 +429,18 @@ static void diff_prism_visit_interpolated(
         size_t total_len = 0;
         diff_prism_hash_static_parts(parts, &h, &total_len, ctx->depth);
         if (leaf_tag == DIFF_TOK_REGX) {
-            /* RubyVM::AST NODE_DREGX does not expose regexp option flags, so
-             * cruby_walker emits 0 when folding static-interpolated regexps. */
-            diff_prism_emit_regexp_leaf(ctx->out, 0, h, total_len);
+            /* If all parts are pure PM_STRING_NODEs (e.g. static %r{...} split across a
+             * heredoc newline), parse.y emits static NODE_REGX with real option flags.
+             * Otherwise parse.y emits NODE_DREGX whose RubyVM::AST hides option flags. */
+            bool has_embed = false;
+            for (size_t i = 0; i < parts->size; i++) {
+                if (parts->nodes[i] != NULL && !PM_NODE_TYPE_P(parts->nodes[i], PM_STRING_NODE)) {
+                    has_embed = true;
+                    break;
+                }
+            }
+            unsigned int regx_opts = has_embed ? 0u : diff_prism_regexp_opts(node->flags);
+            diff_prism_emit_regexp_leaf(ctx->out, regx_opts, h, total_len);
         } else {
             char buf[48];
             snprintf(buf, sizeof(buf), "%zu:%016llx", total_len, (unsigned long long) h);
@@ -549,8 +558,14 @@ static void diff_prism_visit_begin_parts(
                     const pm_splat_node_t *sp = (const pm_splat_node_t *) ex;
                     if (sp->expression != NULL && PM_NODE_TYPE_P(sp->expression, PM_ARRAY_NODE)) {
                         const pm_array_node_t *inner = (const pm_array_node_t *) sp->expression;
-                        if (inner->elements.size > 0 &&
-                            !(inner->elements.size == 1 && PM_NODE_TYPE_P(inner->elements.nodes[0], PM_SPLAT_NODE))) {
+                        bool has_inner_splat = false;
+                        for (size_t j = 0; j < inner->elements.size; j++) {
+                            if (inner->elements.nodes[j] != NULL && PM_NODE_TYPE_P(inner->elements.nodes[j], PM_SPLAT_NODE)) {
+                                has_inner_splat = true;
+                                break;
+                            }
+                        }
+                        if (inner->elements.size > 0 && !has_inner_splat) {
                             for (size_t j = 0; j < inner->elements.size; j++) {
                                 diff_prism_emit_seq_elem(inner->elements.nodes[j], j, "elem", ctx);
                             }
@@ -1010,16 +1025,24 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
                 diff_prism_visit_params_node(&def_n->parameters->base, ctx);
             }
             const pm_node_t *def_body = def_n->body;
-            if (def_body != NULL) {
-                if (PM_NODE_TYPE_P(def_body, PM_NIL_NODE)) {
-                    def_body = NULL;
+            for (int unwrap = 0; unwrap < 8 && def_body != NULL; unwrap++) {
+                if (PM_NODE_TYPE_P(def_body, PM_PARENTHESES_NODE)) {
+                    def_body = ((const pm_parentheses_node_t *) def_body)->body;
                 } else if (PM_NODE_TYPE_P(def_body, PM_STATEMENTS_NODE)) {
                     const pm_statements_node_t *stmts = (const pm_statements_node_t *) def_body;
-                    if (stmts->body.size == 1 && stmts->body.nodes[0] != NULL &&
-                        PM_NODE_TYPE_P(stmts->body.nodes[0], PM_NIL_NODE)) {
-                        def_body = NULL;
+                    if (stmts->body.size == 1) {
+                        def_body = stmts->body.nodes[0];
+                    } else {
+                        break;
                     }
+                } else {
+                    break;
                 }
+            }
+            if (def_body != NULL && PM_NODE_TYPE_P(def_body, PM_NIL_NODE)) {
+                def_body = NULL;
+            } else {
+                def_body = def_n->body;
             }
             diff_prism_visit_slot("body", def_body, ctx);
             diff_tree_close(ctx->out);

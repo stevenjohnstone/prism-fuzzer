@@ -830,7 +830,7 @@ static bool diff_cruby_dstr_val_has_dynamic(VALUE val, int depth) {
         RB_GC_GUARD(ch);
         return dyn;
     }
-    if (tid == diff_ids.dstr || tid == diff_ids.dregx || tid == diff_ids.dsym || tid == diff_ids.dxstr) {
+    if (tid == diff_ids.dstr) {
         volatile VALUE ch = rb_funcall(val, id_children, 0);
         bool dyn = false;
         if (RB_TYPE_P(ch, T_ARRAY)) {
@@ -875,7 +875,7 @@ static void diff_cruby_emit_dstr_dyn_parts(VALUE val, diff_cruby_ctx_t ctx) {
         RB_GC_GUARD(ch);
         return;
     }
-    if (tid == diff_ids.dstr || tid == diff_ids.dregx || tid == diff_ids.dsym || tid == diff_ids.dxstr) {
+    if (tid == diff_ids.dstr) {
         volatile VALUE ch = rb_funcall(val, id_children, 0);
         if (RB_TYPE_P(ch, T_ARRAY)) {
             diff_cruby_ctx_t sub = ctx;
@@ -1392,6 +1392,10 @@ static void diff_cruby_visit_node_ctx(VALUE node, diff_cruby_ctx_t ctx) {
         diff_cruby_emit_args_node(node, ctx);
     } else if (tid == diff_ids.block_n || tid == diff_ids.begin_n || tid == diff_ids.once_n) {
         diff_cruby_ctx_t bsub = sub;
+        if (tid == diff_ids.block_n) {
+            bsub.in_pattern = false;
+            bsub.in_target = false;
+        }
         if (len == 1 && (tid == diff_ids.block_n || tid == diff_ids.begin_n)) {
             bsub.in_container = ctx.in_container;
         }
