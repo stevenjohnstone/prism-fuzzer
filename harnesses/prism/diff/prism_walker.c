@@ -519,6 +519,37 @@ static void diff_prism_emit_seq_elem(
     diff_prism_emit_seq_elem_ex(elem, idx, 1, slot_name, ctx);
 }
 
+static bool diff_prism_is_nil_expr(const pm_node_t *node) {
+    for (int unwrap = 0; unwrap < 8 && node != NULL; unwrap++) {
+        if (PM_NODE_TYPE_P(node, PM_NIL_NODE)) {
+            return true;
+        }
+        if (PM_NODE_TYPE_P(node, PM_PARENTHESES_NODE)) {
+            node = ((const pm_parentheses_node_t *) node)->body;
+        } else if (PM_NODE_TYPE_P(node, PM_STATEMENTS_NODE)) {
+            const pm_statements_node_t *stmts = (const pm_statements_node_t *) node;
+            if (stmts->body.size == 1) {
+                node = stmts->body.nodes[0];
+            } else {
+                return false;
+            }
+        } else if (PM_NODE_TYPE_P(node, PM_BEGIN_NODE)) {
+            const pm_begin_node_t *bn = (const pm_begin_node_t *) node;
+            if (bn->rescue_clause == NULL && bn->ensure_clause == NULL && bn->else_clause == NULL) {
+                node = bn->statements != NULL ? &bn->statements->base : NULL;
+            } else {
+                return false;
+            }
+        } else if (PM_NODE_TYPE_P(node, PM_ELSE_NODE)) {
+            const pm_else_node_t *en = (const pm_else_node_t *) node;
+            node = en->statements != NULL ? &en->statements->base : NULL;
+        } else {
+            return false;
+        }
+    }
+    return false;
+}
+
 static void diff_prism_emit_arguments(
     const pm_arguments_node_t *args,
     const pm_node_t *block,
@@ -528,13 +559,20 @@ static void diff_prism_emit_arguments(
     diff_tree_open_slot(ctx->out, "args");
     bool has_fwd = false;
     if (args != NULL) {
+        size_t pos_count = 0;
+        for (size_t i = 0; i < args->arguments.size; i++) {
+            const pm_node_t *a = args->arguments.nodes[i];
+            if (a != NULL && !PM_NODE_TYPE_P(a, PM_KEYWORD_HASH_NODE)) {
+                pos_count++;
+            }
+        }
         for (size_t i = 0; i < args->arguments.size; i++) {
             const pm_node_t *arg = args->arguments.nodes[i];
             if (arg != NULL && PM_NODE_TYPE_P(arg, PM_FORWARDING_ARGUMENTS_NODE)) {
                 has_fwd = true;
                 diff_prism_emit_forwarding_args(ctx);
             } else {
-                diff_prism_emit_seq_elem_ex(arg, i, args->arguments.size, "arg", ctx);
+                diff_prism_emit_seq_elem_ex(arg, i, pos_count, "arg", ctx);
             }
         }
     }
@@ -993,7 +1031,7 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
             const pm_rescue_modifier_node_t *rm = (const pm_rescue_modifier_node_t *) node;
             ctx->out->counts[DIFF_CNT_RESCUE]++;
             diff_tree_open_cstr(ctx->out, DIFF_TOK_RESCUE, NULL);
-            const pm_node_t *rm_expr = (rm->expression != NULL && PM_NODE_TYPE_P(rm->expression, PM_NIL_NODE)) ? NULL : rm->expression;
+            const pm_node_t *rm_expr = diff_prism_is_nil_expr(rm->expression) ? NULL : rm->expression;
             diff_prism_visit_slot("body", rm_expr, ctx);
             diff_tree_open_slot(ctx->out, "resq");
             diff_tree_open_cstr(ctx->out, DIFF_TOK_RESBODY, NULL);
@@ -1531,8 +1569,8 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
             const pm_range_node_t *rn = (const pm_range_node_t *) node;
             bool excl = PM_NODE_FLAG_P(rn, PM_RANGE_FLAGS_EXCLUDE_END);
             diff_tree_open_cstr(ctx->out, DIFF_TOK_RANGE, excl ? "..." : "..");
-            const pm_node_t *left = (rn->left != NULL && PM_NODE_TYPE_P(rn->left, PM_NIL_NODE)) ? NULL : rn->left;
-            const pm_node_t *right = (rn->right != NULL && PM_NODE_TYPE_P(rn->right, PM_NIL_NODE)) ? NULL : rn->right;
+            const pm_node_t *left = diff_prism_is_nil_expr(rn->left) ? NULL : rn->left;
+            const pm_node_t *right = diff_prism_is_nil_expr(rn->right) ? NULL : rn->right;
             diff_prism_visit_slot("beg", left, ctx);
             diff_prism_visit_slot("end", right, ctx);
             diff_tree_close(ctx->out);
@@ -1542,8 +1580,8 @@ static void diff_prism_visit_expr(const pm_node_t *node, diff_prism_ctx_t *ctx, 
             const pm_flip_flop_node_t *fn = (const pm_flip_flop_node_t *) node;
             bool excl = PM_NODE_FLAG_P(fn, PM_RANGE_FLAGS_EXCLUDE_END);
             diff_tree_open_cstr(ctx->out, DIFF_TOK_FLIP, excl ? "..." : "..");
-            const pm_node_t *left = (fn->left != NULL && PM_NODE_TYPE_P(fn->left, PM_NIL_NODE)) ? NULL : fn->left;
-            const pm_node_t *right = (fn->right != NULL && PM_NODE_TYPE_P(fn->right, PM_NIL_NODE)) ? NULL : fn->right;
+            const pm_node_t *left = diff_prism_is_nil_expr(fn->left) ? NULL : fn->left;
+            const pm_node_t *right = diff_prism_is_nil_expr(fn->right) ? NULL : fn->right;
             diff_prism_visit_slot("beg", left, ctx);
             diff_prism_visit_slot("end", right, ctx);
             diff_tree_close(ctx->out);

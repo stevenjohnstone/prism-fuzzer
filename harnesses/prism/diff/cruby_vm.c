@@ -289,7 +289,8 @@ void diff_cruby_extract_script_meta(
         const char *lptr = RSTRING_PTR(last);
         *out_last_line_bytes = llen;
         if (llen >= 7 && memcmp(lptr, "__END__", 7) == 0 &&
-            (llen == 7 || lptr[7] == '\n' || lptr[7] == '\r')) {
+            (llen == 7 || (llen == 8 && lptr[7] == '\n') ||
+             (llen == 9 && lptr[7] == '\r' && lptr[8] == '\n'))) {
             *out_last_line_is_end = true;
         }
     }
