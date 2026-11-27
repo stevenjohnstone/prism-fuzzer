@@ -38,7 +38,8 @@ typedef enum {
     TOK_IF_UNLESS = 0,
     TOK_WHILE_UNTIL = 1,
     TOK_AND_OR = 2,
-    TOK_DOT2_DOT3 = 3
+    TOK_DOT2_DOT3 = 3,
+    TOK_CALL_OP = 4
 } tok_kind_t;
 
 typedef struct {
@@ -197,6 +198,42 @@ static pm_visit_result_t collect_ast_cb(const pm_node_t *node, void *data) {
         case PM_FLIP_FLOP_NODE: {
             const pm_flip_flop_node_t *n = (const pm_flip_flop_node_t *) node;
             record_tok(idx, n->operator_loc, TOK_DOT2_DOT3);
+            break;
+        }
+        case PM_CALL_NODE: {
+            const pm_call_node_t *n = (const pm_call_node_t *) node;
+            if (valid_loc(n->call_operator_loc, idx->src_len) &&
+                ((n->call_operator_loc.length == 1 && idx->src[n->call_operator_loc.start] == '.') ||
+                 (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
+                record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
+            }
+            break;
+        }
+        case PM_CALL_AND_WRITE_NODE: {
+            const pm_call_and_write_node_t *n = (const pm_call_and_write_node_t *) node;
+            if (valid_loc(n->call_operator_loc, idx->src_len) &&
+                ((n->call_operator_loc.length == 1 && idx->src[n->call_operator_loc.start] == '.') ||
+                 (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
+                record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
+            }
+            break;
+        }
+        case PM_CALL_OR_WRITE_NODE: {
+            const pm_call_or_write_node_t *n = (const pm_call_or_write_node_t *) node;
+            if (valid_loc(n->call_operator_loc, idx->src_len) &&
+                ((n->call_operator_loc.length == 1 && idx->src[n->call_operator_loc.start] == '.') ||
+                 (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
+                record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
+            }
+            break;
+        }
+        case PM_CALL_OPERATOR_WRITE_NODE: {
+            const pm_call_operator_write_node_t *n = (const pm_call_operator_write_node_t *) node;
+            if (valid_loc(n->call_operator_loc, idx->src_len) &&
+                ((n->call_operator_loc.length == 1 && idx->src[n->call_operator_loc.start] == '.') ||
+                 (n->call_operator_loc.length == 2 && memcmp(idx->src + n->call_operator_loc.start, "&.", 2) == 0))) {
+                record_tok(idx, n->call_operator_loc, TOK_CALL_OP);
+            }
             break;
         }
         default:
@@ -582,6 +619,9 @@ static size_t emit_tok_flip(
         case TOK_DOT2_DOT3:
             repl = (tok.length == 2) ? "..." : "..";
             break;
+        case TOK_CALL_OP:
+            repl = (tok.length == 1) ? "&." : ".";
+            break;
     }
     if (repl == NULL) {
         return 0;
@@ -737,7 +777,7 @@ size_t afl_custom_fuzz(
     } else if (op < 72) {
         /* Magic comment / encoding / shebang / BOM / __END__ injection */
         written = emit_magic_or_end(m, &w, src, src_len);
-    } else if (op < 84 && idx_a.node_count >= 2) {
+    } else if (op < 80 && idx_a.node_count >= 2) {
         /* Internal subtree copy or swap */
         mut_span_t a = idx_a.nodes[rng_below(m, idx_a.node_count)];
         mut_span_t b = idx_a.nodes[rng_below(m, idx_a.node_count)];
