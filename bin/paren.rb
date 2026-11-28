@@ -15,6 +15,13 @@ require "optparse"
 require "prism"
 
 module ParenPrinter
+  def self.version_summary
+    ruby_ver = RUBY_DESCRIPTION[/\Aruby\s+(\S+)/, 1] || RUBY_VERSION
+    rev = defined?(RUBY_REVISION) && RUBY_REVISION ? RUBY_REVISION[0, 10] : nil
+    ruby_label = rev ? "ruby #{ruby_ver} (#{rev})" : "ruby #{ruby_ver}"
+    "parse.y=#{ruby_label} | prism=#{Prism::VERSION}"
+  end
+
   BINARY_OPS = %i[
     + - * / % ** << >> & | ^ == != === <=> < <= > >= =~ !~
   ].freeze
@@ -709,6 +716,7 @@ if __FILE__ == $PROGRAM_NAME
     prism_out = ParenPrinter::PrismRenderer.render(source, recovered: options[:recovered])
   end
 
+  puts "version: #{ParenPrinter.version_summary}"
   puts "source : #{source.inspect}"
   puts "parse.y: #{parse_y_out[1]}" if parse_y_out
   if prism_out

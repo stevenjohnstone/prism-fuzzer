@@ -34,6 +34,13 @@ class ParenPrinterTest < Minitest::Test
     assert_match_both("a = 1 + 2", "(a = (1 + 2))")
   end
 
+  def test_version_summary
+    summary = ParenPrinter.version_summary
+
+    assert_includes summary, "parse.y=ruby "
+    assert_includes summary, "prism=#{Prism::VERSION}"
+  end
+
   def test_prism_error_reporting_and_recovery
     status, msg = ParenPrinter::PrismRenderer.render("1 +")
 

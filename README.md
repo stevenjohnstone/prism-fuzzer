@@ -208,6 +208,7 @@ When triaging `diff_parse_y` AST or syntax mismatches, [`bin/paren.rb`](bin/pare
 Example output (`--docker`):
 
 ```text
+version: parse.y=ruby 4.1.0dev (f3e180b5eb) | prism=2.1.0
 source : "3 + A::A!{} / []"
 parse.y: (3 + ((A.A! {}) / []))
 prism  : ((3 + (A.A! {})) / [])
