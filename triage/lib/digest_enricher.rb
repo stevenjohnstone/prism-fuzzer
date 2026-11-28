@@ -67,12 +67,49 @@ module FuzzTriage
       nil
     end
 
+    PAREN_SCRIPT_PATH = File.expand_path("../../bin/paren.rb", __dir__)
+    PAREN_MAX_LEN = 240
+
+    def truncate_paren_text(text, max_len = PAREN_MAX_LEN)
+      s = text.to_s.strip
+      return nil if s.empty?
+
+      s.length > max_len ? "#{s[0, max_len - 3]}..." : s
+    end
+
+    def build_paren_diff(y_ok:, p_ok:, y_paren:, p_paren:, y_err: nil, p_err: nil, version: nil)
+      return nil if !y_ok && !p_ok
+
+      if y_ok && p_ok
+        return nil if y_paren.nil? || p_paren.nil? || y_paren == p_paren
+
+        y_text = truncate_paren_text(y_paren)
+        p_text = truncate_paren_text(p_paren)
+      elsif y_ok
+        return nil if y_paren.nil?
+
+        y_text = truncate_paren_text(y_paren)
+        p_text = truncate_paren_text(p_err ? "SyntaxError: #{p_err}" : "SyntaxError")
+      else
+        return nil if p_paren.nil?
+
+        y_text = truncate_paren_text(y_err || "SyntaxError")
+        p_text = truncate_paren_text(p_paren)
+      end
+      return nil unless y_text && p_text
+
+      out = { "parse_y" => y_text, "prism" => p_text }
+      out["version"] = version.to_s if version && !version.to_s.empty?
+      out
+    end
+
     BATCH_DIFF_WORKER_SCRIPT = <<~'RUBY'.freeze
       require "base64"
       require "json"
       require "timeout"
 
       include_prism = ARGV[0] == "prism"
+      paren_path = ARGV[1].to_s
       if include_prism
         begin
           require "prism"
@@ -81,10 +118,23 @@ module FuzzTriage
         end
       end
 
+      paren_loaded = false
+      if !paren_path.empty? && File.file?(paren_path)
+        begin
+          require paren_path
+          paren_loaded = defined?(ParenPrinter)
+        rescue LoadError, StandardError
+          paren_loaded = false
+        end
+      end
+
+      paren_version = paren_loaded ? (ParenPrinter.version_summary rescue nil) : nil
+
       items = JSON.parse($stdin.read)
       items.each do |key, b64|
         code = Base64.strict_decode64(b64)
         rec = { "key" => key }
+        rec["paren_version"] = paren_version if paren_version
         begin
           Timeout.timeout(2.5) do
             if include_prism
@@ -94,6 +144,12 @@ module FuzzTriage
               if !errs.empty?
                 e0 = errs.first
                 rec["prism_first_error"] = { "type" => e0.type.to_s, "message" => e0.message.to_s }
+              elsif paren_loaded
+                begin
+                  rec["paren"] = ParenPrinter::PrismRenderer.new.visit(pr.value)
+                rescue StandardError, SystemStackError
+                  # best-effort only
+                end
               end
             end
 
@@ -101,6 +157,13 @@ module FuzzTriage
               iseq = RubyVM::InstructionSequence.compile(code, "(compare)", "(compare)", 1)
               rec["ok"] = true
               rec["disasm"] = iseq.disasm
+              if !include_prism && paren_loaded
+                begin
+                  rec["paren"] = ParenPrinter::ParseYRenderer.render(code)
+                rescue StandardError, SyntaxError, SystemStackError
+                  # best-effort only
+                end
+              end
             rescue SyntaxError => e
               rec["ok"] = false
               rec["error_class"] = e.class.name
@@ -148,10 +211,10 @@ module FuzzTriage
       batch_timeout = [payload_items.size * 2.5 + 10.0, 15.0].max
 
       y_thr = Thread.new do
-        FuzzExplain.run_with_timeout([ruby_bin, "--parser=parse.y", "-e", BATCH_DIFF_WORKER_SCRIPT, "parse.y"], timeout_sec: batch_timeout, stdin_data: stdin_json)
+        FuzzExplain.run_with_timeout([ruby_bin, "--parser=parse.y", "-e", BATCH_DIFF_WORKER_SCRIPT, "parse.y", PAREN_SCRIPT_PATH], timeout_sec: batch_timeout, stdin_data: stdin_json)
       end
       p_thr = Thread.new do
-        FuzzExplain.run_with_timeout([ruby_bin, "--parser=prism", "-e", BATCH_DIFF_WORKER_SCRIPT, "prism"], timeout_sec: batch_timeout, stdin_data: stdin_json)
+        FuzzExplain.run_with_timeout([ruby_bin, "--parser=prism", "-e", BATCH_DIFF_WORKER_SCRIPT, "prism", PAREN_SCRIPT_PATH], timeout_sec: batch_timeout, stdin_data: stdin_json)
       end
       y_res = y_thr.value
       p_res = p_thr.value
@@ -219,6 +282,17 @@ module FuzzTriage
           preview = summarize_first_disasm_diff(diff_txt)
           entry_out["disasm_diff_preview"] = preview if preview
         end
+
+        paren_diff = build_paren_diff(
+          y_ok: y_ok,
+          p_ok: p_ok,
+          y_paren: yr["paren"],
+          p_paren: pr["paren"],
+          y_err: entry_out["parse_y_error"],
+          p_err: entry_out["prism_error"],
+          version: pr["paren_version"] || yr["paren_version"]
+        )
+        entry_out["paren_diff"] = paren_diff if paren_diff
 
         results[dir] = entry_out
       end
@@ -331,7 +405,7 @@ module FuzzTriage
               (force || !meta.dig("digest", "iseq_status"))
           end
 
-          if diff_targets.size >= 2
+          if !diff_targets.empty?
             batch_results = run_diff_digest_batch(diff_ruby, diff_targets.to_a)
             batch_results.each do |dir, res|
               next unless res.is_a?(Hash) && !res.empty?

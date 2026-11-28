@@ -1033,3 +1033,29 @@ td.num, th.num {
 }
 .triage-search-input:focus { outline: none; border-color: var(--accent); }
 .triage-snippet { font-size: 0.76rem; color: #e2e8f0; word-break: break-word; }
+.paren-diff {
+  margin-top: 6px;
+  padding: 5px 8px;
+  background: #060911;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 5px;
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.paren-diff-compact { margin-top: 4px; padding: 4px 7px; font-size: 0.7rem; }
+.paren-row { display: flex; align-items: baseline; gap: 6px; overflow-wrap: anywhere; word-break: break-word; }
+.paren-label {
+  flex: 0 0 auto;
+  min-width: 44px;
+  font-weight: 600;
+  font-size: 0.67rem;
+  text-transform: lowercase;
+  padding: 0 4px;
+  border-radius: 3px;
+  text-align: center;
+}
+.paren-y { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+.paren-p { background: rgba(251, 191, 36, 0.16); color: #fcd34d; }
+.paren-code { color: #e2e8f0; }
+.paren-err { color: #fca5a5; }

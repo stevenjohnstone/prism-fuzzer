@@ -2,6 +2,8 @@
 
 require_relative "lib/autorun"
 require_relative "../bin/paren"
+require_relative "../triage/triage"
+require_relative "../report/lib/triage_view"
 
 class ParenPrinterTest < Minitest::Test
   def assert_match_both(source, expected)
@@ -51,5 +53,53 @@ class ParenPrinterTest < Minitest::Test
 
     assert_equal :recovered, rec_status
     assert_kind_of String, rec_tree
+  end
+
+  def test_digest_enricher_build_paren_diff
+    # Identical grouping is omitted
+    assert_nil FuzzTriage::DigestEnricher.build_paren_diff(
+      y_ok: true, p_ok: true, y_paren: "(1 + 2)", p_paren: "(1 + 2)"
+    )
+
+    # Precedence divergence is emitted
+    pd = FuzzTriage::DigestEnricher.build_paren_diff(
+      y_ok: true, p_ok: true,
+      y_paren: "(3 + ((A.A! {}) / []))",
+      p_paren: "((3 + (A.A! {})) / [])",
+      version: "parse.y=ruby 4.1.0dev | prism=2.1.0"
+    )
+    assert_equal "(3 + ((A.A! {}) / []))", pd["parse_y"]
+    assert_equal "((3 + (A.A! {})) / [])", pd["prism"]
+    assert_equal "parse.y=ruby 4.1.0dev | prism=2.1.0", pd["version"]
+
+    # One-sided syntax error includes accepting parser's tree
+    one_sided = FuzzTriage::DigestEnricher.build_paren_diff(
+      y_ok: false, p_ok: true,
+      y_paren: nil, p_paren: "(case ((A.A! {})); (in 2; nil); end)",
+      y_err: "SyntaxError: unexpected 'end'"
+    )
+    assert_equal "SyntaxError: unexpected 'end'", one_sided["parse_y"]
+    assert_equal "(case ((A.A! {})); (in 2; nil); end)", one_sided["prism"]
+  end
+
+  def test_triage_view_render_paren_diff_html
+    assert_equal "", PrismFuzzerReport::TriageView.render_paren_diff_html({})
+
+    html = PrismFuzzerReport::TriageView.render_paren_diff_html(
+      {
+        "paren_diff" => {
+          "parse_y" => "SyntaxError: unexpected '<'",
+          "prism" => "(case ((A.A! {})); (in 2; nil); end)",
+          "version" => "parse.y=ruby 4.1.0dev | prism=2.1.0"
+        }
+      },
+      compact: true
+    )
+
+    assert_includes html, "paren-diff-compact"
+    assert_includes html, "paren-err"
+    assert_includes html, "SyntaxError: unexpected &#39;&lt;&#39;"
+    assert_includes html, "(case ((A.A! {})); (in 2; nil); end)"
+    assert_includes html, 'title="parse.y=ruby 4.1.0dev | prism=2.1.0"'
   end
 end

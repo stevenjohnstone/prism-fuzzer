@@ -9,6 +9,30 @@ module PrismFuzzerReport
   module TriageView
     module_function
 
+    def render_paren_diff_html(digest, compact: false)
+      return "" unless digest.is_a?(Hash)
+
+      pd = digest["paren_diff"]
+      return "" unless pd.is_a?(Hash)
+
+      y_str = pd["parse_y"].to_s
+      p_str = pd["prism"].to_s
+      return "" if y_str.empty? || p_str.empty?
+
+      ver = pd["version"].to_s
+      title_attr = ver.empty? ? "" : %( title="#{CGI.escapeHTML(ver)}")
+      cls = compact ? "paren-diff paren-diff-compact" : "paren-diff"
+      y_cls = y_str.match?(/\ASyntaxError|syntax error/i) ? "paren-code paren-err" : "paren-code"
+      p_cls = p_str.match?(/\ASyntaxError|syntax error/i) ? "paren-code paren-err" : "paren-code"
+
+      <<~HTML.chomp
+        <div class="#{cls}"#{title_attr}>
+          <div class="paren-row"><span class="paren-label paren-y">parse.y</span><code class="#{y_cls}">#{CGI.escapeHTML(y_str)}</code></div>
+          <div class="paren-row"><span class="paren-label paren-p">prism</span><code class="#{p_cls}">#{CGI.escapeHTML(p_str)}</code></div>
+        </div>
+      HTML
+    end
+
     def triage_group_badge_class(group)
       case group.to_s
       when "prism_flaw" then "badge-danger"
@@ -221,6 +245,7 @@ module PrismFuzzerReport
                         b_opts = b["options_label"].to_s
                         b_hex = b["header_hex"].to_s
                         b_tags = defined?(FuzzInspect) ? FuzzInspect.format_bucket_digest_tags(b["digest"]) : ""
+                        b_paren_html = render_paren_diff_html(b["digest"], compact: true)
                         links = []
                         unless bid.empty?
                           links << %(<a class="cov-link" href="#{CGI.escapeHTML("#{trel}/#{bid}/input.min")}" target="_blank" rel="noopener">input.min</a>) if File.file?(File.join(triage_dir, bid, "input.min"))
@@ -237,7 +262,10 @@ module PrismFuzzerReport
                             <td><code>#{CGI.escapeHTML(b_repro.empty? ? "-" : File.basename(b_repro))}</code></td>
                             <td class="num">#{b_size ? "#{b_size}B" : "&mdash;"}</td>
                             <td class="muted">#{opt_cell.empty? ? "&mdash;" : CGI.escapeHTML(opt_cell)}</td>
-                            <td><code class="triage-snippet">#{CGI.escapeHTML(b_prev.empty? ? "-" : b_prev)}</code></td>
+                            <td>
+                              <code class="triage-snippet">#{CGI.escapeHTML(b_prev.empty? ? "-" : b_prev)}</code>
+                              #{b_paren_html}
+                            </td>
                             <td style="white-space:nowrap;">#{links.empty? ? "<span class=\"muted\">&mdash;</span>" : links.join(" &middot; ")}</td>
                           </tr>
                         BROW
@@ -293,6 +321,7 @@ module PrismFuzzerReport
                             #{top_frame.empty? ? "" : "<div class=\"muted\">in <code>#{CGI.escapeHTML(top_frame)}</code></div>"}
                             #{digest_line.empty? ? "" : "<div class=\"muted\" style=\"margin-top:2px;\">#{CGI.escapeHTML(digest_line)}</div>"}
                             #{preview.empty? ? "" : "<pre class=\"evo-preview\" style=\"max-height:54px;margin-top:5px;\">#{CGI.escapeHTML(preview)}</pre>"}
+                            #{render_paren_diff_html(rep["digest"])}
                           </td>
                           <td>#{reason_badges.empty? ? "<span class=\"muted\">&mdash;</span>" : reason_badges}</td>
                           <td>#{worker_pills.empty? ? "<span class=\"muted\">&mdash;</span>" : worker_pills}</td>
