@@ -193,6 +193,27 @@ Common CLI flags:
 
 Relevant environment overrides: `CAMPAIGN`, `PRISM_REF`/`PRISM_REPO`/`PRISM_DIR`/`PRISM_PATCHES`/`PRISM_TEMPLATES`, `PRISM_B_*`, `RUBY_REF`/`RUBY_REPO`/`RUBY_DIR`, `TARGETS_OFFLINE=1`, `FUZZ_DIR`, `FUZZ_BUILD_DIR`, `FUZZ_LOGS_DIR`, `FUZZ_CONTAINER_NAME`, `FUZZ_DOCKER_IMAGE`, `FUZZ_MAX_INPUT_SIZE`, `FUZZ_MAX_ALLOCATED`, `FUZZ_FLAGS`, `FUZZ_PROGRESS`, `FUZZ_PROGRESS_LINES`, `FUZZ_COVERAGE_NO_CACHE=1`, `FUZZ_COVERAGE_FINAL=0|1`, and `FUZZ_SKIP_COVERAGE=1`.
 
+## Precedence & Grouping Diff Tool (`bin/paren.rb`)
+
+When triaging `diff_parse_y` AST or syntax mismatches, [`bin/paren.rb`](bin/paren.rb) parses a Ruby snippet with both CRuby's `parse.y` (`RubyVM::AbstractSyntaxTree`) and `Prism` and renders both ASTs with explicit (intentionally redundant) parentheses around every compound expression:
+
+```bash
+./bin/paren.rb -e '1 + 2 * 3'
+./bin/paren.rb --docker -e '3 + A::A!{} / []'          # run inside prism-fuzzer:ruby-latest
+./bin/paren.rb --docker -e 'case A::A!{} in 2; end'    # show accepting tree next to SyntaxError
+./bin/paren.rb --recovered -e '1 +'                    # include Prism's error-recovered tree
+./bin/paren.rb --only-diff path/to/snippet.rb          # exit 1 when parse.y and prism differ
+```
+
+Example output (`--docker`):
+
+```text
+source : "3 + A::A!{} / []"
+parse.y: (3 + ((A.A! {}) / []))
+prism  : ((3 + (A.A! {})) / [])
+status : DIFF
+```
+
 ## Update Ruby and Prism Default Versions
 
 ```
@@ -210,6 +231,7 @@ make update
 ├── bin
 │   ├── campaign.rb                 CLI dispatcher for campaign scripts
 │   ├── lint.rb                     shared static-analysis runner used by `make lint`, pre-commit, and CI
+│   ├── paren.rb                    side-by-side parse.y vs. Prism fully-parenthesized expression diff tool
 │   ├── publish.rb                  packages report, coverage HTML, and triage artifacts into the gh-pages worktree (`reports/`)
 │   └── topology.rb                 CLI for validating, syncing, building, and planning topologies
 ├── campaigns

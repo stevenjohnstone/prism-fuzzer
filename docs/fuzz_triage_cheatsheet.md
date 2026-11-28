@@ -8,6 +8,7 @@ Triage stores minimized raw inputs (`input.min`), raw crash archives (`inputs.ta
 - [`triage/match.rb`](../triage/match.rb) (`./campaigns/default.rb match -- ...` / `make match`)
 - [`triage/verify.rb`](../triage/verify.rb) (`./campaigns/default.rb verify -- ...` / `make verify`)
 - [`triage/bisect.rb`](../triage/bisect.rb) (`./campaigns/default.rb bisect -- ...` / `make bisect`)
+- [`bin/paren.rb`](../bin/paren.rb) (`./bin/paren.rb --docker -e '...'` — side-by-side `parse.y` vs. `prism` fully-parenthesized expression renderer for precedence, block-ownership, and one-sided `SyntaxError` diffs)
 
 Examples A–F below are verbatim transcripts captured from an earlier `tmp/fuzz/triage/` crop (`46` clusters in the refreshed Step 0 `inspect` snapshot after digest backfill, where `cluster-12/24/26` correspond to `cluster-13/25/27` in Examples E–F).
 
