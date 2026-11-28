@@ -7,9 +7,13 @@
 #
 # Usage:
 #   bin/paren.rb -e '3 + A::A!{} / []'
-#   bin/paren.rb --docker -e 'case A::A!{} in 2; end'
+#   bin/paren.rb --docker -e $'1 and 2\r\r\nor 3\n'   # literal newlines/bytes via $'...'
+#   printf 'a = 1\nb = 2\n' | bin/paren.rb           # or piped via stdin / heredoc
 #   bin/paren.rb path/to/file.rb
-#   echo '1 + 2 * 3' | bin/paren.rb
+#
+# Input is read verbatim (like `ruby -e`): escape sequences such as `\n` inside
+# plain single quotes are NOT unescaped. Use shell `$'...'` quoting, `printf`,
+# a heredoc, or a file when passing newlines or control bytes.
 
 require "cgi/escape"
 require "optparse"
@@ -741,7 +745,8 @@ if __FILE__ == $PROGRAM_NAME
   }
 
   OptionParser.new do |opts|
-    opts.banner = "Usage: #{$PROGRAM_NAME} [options] [file]"
+    opts.banner = "Usage: #{$PROGRAM_NAME} [options] [file]\n" \
+                  "Input is taken verbatim (like `ruby -e`). For newlines/control bytes, use $'...' with -e, pipe via printf/heredoc, or pass a file."
     opts.on("-e CODE", "Ruby expression/snippet to parenthesize") { |v| options[:expr] = v }
     opts.on("--parser=MODE", %w[both parse.y prism], "Which parser(s) to run (default: both)") { |v| options[:parser] = v }
     opts.on("--docker [IMAGE]", "Run inside Docker image (default: prism-fuzzer:ruby-latest)") do |v|

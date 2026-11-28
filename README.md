@@ -200,10 +200,13 @@ When triaging `diff_parse_y` AST or syntax mismatches, [`bin/paren.rb`](bin/pare
 ```bash
 ./bin/paren.rb -e '1 + 2 * 3'
 ./bin/paren.rb --docker -e '3 + A::A!{} / []'          # run inside prism-fuzzer:ruby-latest
-./bin/paren.rb --docker -e 'case A::A!{} in 2; end'    # show accepting tree next to SyntaxError
+./bin/paren.rb --docker -e $'1 and 2\r\r\nor 3\n'      # literal newlines/bytes via shell $'...'
+printf 'a = 1\nb = 2\n' | ./bin/paren.rb --docker      # or piped via printf / heredoc / file
 ./bin/paren.rb --recovered -e '1 +'                    # include Prism's error-recovered tree
 ./bin/paren.rb --only-diff path/to/snippet.rb          # exit 1 when parse.y and prism differ
 ```
+
+Input is taken verbatim (like `ruby -e`)—plain `-e 'a\nb'` passes a literal backslash and `n`, so use `$'...'`, `printf`, a heredoc, or a file for newlines and raw bytes. Matching brackets (`()`, `[]`, `{}`) are depth-colored on TTYs (`--color=auto|always|never`, `--no-color`) and in the HTML triage report cards.
 
 Example output (`--docker`):
 
