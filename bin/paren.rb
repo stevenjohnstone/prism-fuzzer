@@ -11,15 +11,83 @@
 #   bin/paren.rb path/to/file.rb
 #   echo '1 + 2 * 3' | bin/paren.rb
 
+require "cgi/escape"
 require "optparse"
 require "prism"
 
 module ParenPrinter
+  ANSI_PALETTE = [
+    "\e[33m", # yellow
+    "\e[36m", # cyan
+    "\e[35m", # magenta
+    "\e[32m", # green
+    "\e[34m", # blue
+    "\e[31m"  # red
+  ].freeze
+  ANSI_RESET = "\e[0m"
+  OPEN_BRACKETS = { "(" => true, "[" => true, "{" => true }.freeze
+  CLOSE_BRACKETS = { ")" => true, "]" => true, "}" => true }.freeze
+
   def self.version_summary
     ruby_ver = RUBY_DESCRIPTION[/\Aruby\s+(\S+)/, 1] || RUBY_VERSION
     rev = defined?(RUBY_REVISION) && RUBY_REVISION ? RUBY_REVISION[0, 10] : nil
     ruby_label = rev ? "ruby #{ruby_ver} (#{rev})" : "ruby #{ruby_ver}"
     "parse.y=#{ruby_label} | prism=#{Prism::VERSION}"
+  end
+
+  # Walks a parenthesized expression string, yielding each character along with
+  # its bracket depth (nil for non-brackets or brackets inside quoted literals).
+  def self.each_bracket_token(str)
+    depth = 0
+    in_quote = nil
+    escaped = false
+    str.each_char do |ch|
+      if in_quote
+        if escaped
+          escaped = false
+        elsif ch == "\\"
+          escaped = true
+        elsif ch == in_quote
+          in_quote = nil
+        end
+        yield ch, nil
+      elsif ch == '"' || ch == "'"
+        in_quote = ch
+        yield ch, nil
+      elsif OPEN_BRACKETS[ch]
+        yield ch, depth
+        depth += 1
+      elsif CLOSE_BRACKETS[ch]
+        depth -= 1 if depth > 0
+        yield ch, depth
+      else
+        yield ch, nil
+      end
+    end
+  end
+
+  def self.colorize_ansi(str)
+    out = +""
+    each_bracket_token(str) do |ch, depth|
+      if depth
+        out << ANSI_PALETTE[depth % ANSI_PALETTE.size] << ch << ANSI_RESET
+      else
+        out << ch
+      end
+    end
+    out
+  end
+
+  def self.colorize_html(str)
+    out = +""
+    each_bracket_token(str) do |ch, depth|
+      if depth
+        out << %(<span class="paren-d#{depth % ANSI_PALETTE.size}">#{ch}</span>)
+      else
+        out << CGI.escapeHTML(ch)
+      end
+    end
+    out
   end
 
   BINARY_OPS = %i[
@@ -668,6 +736,7 @@ if __FILE__ == $PROGRAM_NAME
     docker: nil,
     recovered: false,
     only_diff: false,
+    color: "auto",
     expr: nil
   }
 
@@ -680,7 +749,17 @@ if __FILE__ == $PROGRAM_NAME
     end
     opts.on("--recovered", "Also show Prism's error-recovered tree on syntax errors") { options[:recovered] = true }
     opts.on("--only-diff", "Exit with status 1 if parse.y and prism differ") { options[:only_diff] = true }
+    opts.on("--color[=WHEN]", %w[auto always never], "Colorize matching brackets (auto, always, never)") do |v|
+      options[:color] = v || "always"
+    end
+    opts.on("--no-color", "Disable colored brackets") { options[:color] = "never" }
   end.parse!
+
+  use_color = case options[:color]
+              when "always" then true
+              when "never" then false
+              else $stdout.tty? && ENV["NO_COLOR"].nil?
+              end
 
   source =
     if options[:expr]
@@ -693,7 +772,7 @@ if __FILE__ == $PROGRAM_NAME
 
   if options[:docker]
     # Re-exec this exact script inside the target Docker image via stdin
-    forwarded = ["--parser=#{options[:parser]}"]
+    forwarded = ["--parser=#{options[:parser]}", "--color=#{use_color ? "always" : "never"}"]
     forwarded << "--recovered" if options[:recovered]
     forwarded << "--only-diff" if options[:only_diff]
     cmd = ["docker", "run", "--rm", "-i", options[:docker], "ruby", "-e", File.read(__FILE__), "--", *forwarded, "-e", source]
@@ -716,12 +795,17 @@ if __FILE__ == $PROGRAM_NAME
     prism_out = ParenPrinter::PrismRenderer.render(source, recovered: options[:recovered])
   end
 
+  format_line = lambda do |entry|
+    status, text = entry
+    (use_color && status != :error) ? ParenPrinter.colorize_ansi(text) : text
+  end
+
   puts "version: #{ParenPrinter.version_summary}"
   puts "source : #{source.inspect}"
-  puts "parse.y: #{parse_y_out[1]}" if parse_y_out
+  puts "parse.y: #{format_line.call(parse_y_out)}" if parse_y_out
   if prism_out
     tag = prism_out[0] == :recovered ? "prism* " : "prism  "
-    puts "#{tag}: #{prism_out[1]}"
+    puts "#{tag}: #{format_line.call(prism_out)}"
   end
 
   if parse_y_out && prism_out

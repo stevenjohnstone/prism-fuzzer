@@ -1059,3 +1059,9 @@ td.num, th.num {
 .paren-p { background: rgba(251, 191, 36, 0.16); color: #fcd34d; }
 .paren-code { color: #e2e8f0; }
 .paren-err { color: #fca5a5; }
+.paren-d0 { color: #fcd34d; font-weight: 600; }
+.paren-d1 { color: #67e8f9; font-weight: 600; }
+.paren-d2 { color: #f0abfc; font-weight: 600; }
+.paren-d3 { color: #86efac; font-weight: 600; }
+.paren-d4 { color: #93c5fd; font-weight: 600; }
+.paren-d5 { color: #fda4af; font-weight: 600; }

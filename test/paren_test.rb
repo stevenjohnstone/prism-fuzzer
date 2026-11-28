@@ -99,7 +99,18 @@ class ParenPrinterTest < Minitest::Test
     assert_includes html, "paren-diff-compact"
     assert_includes html, "paren-err"
     assert_includes html, "SyntaxError: unexpected &#39;&lt;&#39;"
-    assert_includes html, "(case ((A.A! {})); (in 2; nil); end)"
+    assert_includes html, '<span class="paren-d0">(</span>case <span class="paren-d1">(</span>'
     assert_includes html, 'title="parse.y=ruby 4.1.0dev | prism=2.1.0"'
+  end
+
+  def test_rainbow_bracket_colorization
+    ansi = ParenPrinter.colorize_ansi("(1 + (2 * \"(x)\"))")
+
+    assert_includes ansi, "\e[33m(\e[0m1 + \e[36m(\e[0m2 * \"(x)\"\e[36m)\e[0m\e[33m)\e[0m"
+
+    html = ParenPrinter.colorize_html("(a + (b * c))")
+    expected = '<span class="paren-d0">(</span>a + <span class="paren-d1">(</span>b * c' \
+               '<span class="paren-d1">)</span><span class="paren-d0">)</span>'
+    assert_equal expected, html
   end
 end

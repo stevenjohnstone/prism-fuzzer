@@ -4,6 +4,11 @@ require "cgi/escape"
 require "json"
 require "pathname"
 require_relative "helpers"
+begin
+  require_relative "../../bin/paren"
+rescue LoadError
+  # optional rainbow bracket colorization
+end
 
 module PrismFuzzerReport
   module TriageView
@@ -22,13 +27,17 @@ module PrismFuzzerReport
       ver = pd["version"].to_s
       title_attr = ver.empty? ? "" : %( title="#{CGI.escapeHTML(ver)}")
       cls = compact ? "paren-diff paren-diff-compact" : "paren-diff"
-      y_cls = y_str.match?(/\ASyntaxError|syntax error/i) ? "paren-code paren-err" : "paren-code"
-      p_cls = p_str.match?(/\ASyntaxError|syntax error/i) ? "paren-code paren-err" : "paren-code"
+      y_is_err = y_str.match?(/\ASyntaxError|syntax error/i)
+      p_is_err = p_str.match?(/\ASyntaxError|syntax error/i)
+      y_cls = y_is_err ? "paren-code paren-err" : "paren-code"
+      p_cls = p_is_err ? "paren-code paren-err" : "paren-code"
+      y_html = (!y_is_err && defined?(ParenPrinter)) ? ParenPrinter.colorize_html(y_str) : CGI.escapeHTML(y_str)
+      p_html = (!p_is_err && defined?(ParenPrinter)) ? ParenPrinter.colorize_html(p_str) : CGI.escapeHTML(p_str)
 
       <<~HTML.chomp
         <div class="#{cls}"#{title_attr}>
-          <div class="paren-row"><span class="paren-label paren-y">parse.y</span><code class="#{y_cls}">#{CGI.escapeHTML(y_str)}</code></div>
-          <div class="paren-row"><span class="paren-label paren-p">prism</span><code class="#{p_cls}">#{CGI.escapeHTML(p_str)}</code></div>
+          <div class="paren-row"><span class="paren-label paren-y">parse.y</span><code class="#{y_cls}">#{y_html}</code></div>
+          <div class="paren-row"><span class="paren-label paren-p">prism</span><code class="#{p_cls}">#{p_html}</code></div>
         </div>
       HTML
     end
